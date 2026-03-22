@@ -35,6 +35,9 @@ Slop Jockey transforms the Foundation-1 text-to-sample model into a continuous D
 
 - **Professional DJ Interface**: Dark-themed UI with audio visualizer, transport controls, and real-time feedback
 - **AI Conductor**: LLM-driven track selection and arrangement
+- **Stem Mixer**: Real-time control over individual stem volumes, muting, soloing, and individual stem downloads
+- **Loop Counter**: Persistent tracking of generation cycles
+- **Generation Config**: Adjustable `CFG Scale` and `Steps` to fine-tune the Foundation-1 model performance
 - **Instrument Rack**: Categorized instrument selection with custom additions
 - **BPM/Key Control**: Override AI decisions with manual BPM and musical key settings
 - **Vibe Context**: Natural language prompts to guide the music mood
@@ -47,12 +50,12 @@ Slop Jockey transforms the Foundation-1 text-to-sample model into a continuous D
 | Component | Description |
 |-----------|-------------|
 | `app_ui.py` | FastAPI server with Gradio UI and DJ interface |
-| `api_routes.py` | REST API endpoints for DJ UI state management |
+| `api_routes.py` | REST API endpoints for DJ UI and Stem Mixer |
 | `framework_main.py` | Core generation loop and audio mixing |
 | `framework_conductor.py` | LLM-powered track arrangement logic |
 | `framework_generator.py` | Foundation-1 audio generation |
-| `framework_mixer.py` | Multi-track audio mixing engine |
-| `framework_state.py` | Shared global state |
+| `framework_mixer.py` | Multi-track audio mixing engine with Stem support |
+| `framework_state.py` | Shared global state and process management |
 
 ## Requirements
 
@@ -131,8 +134,14 @@ The Gradio UI at `http://localhost:7860` provides the same functionality through
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/state` | GET | Get current state (BPM, key, stems, etc.) |
+| `/api/state` | GET | Get current state (BPM, key, stems, loops, etc.) |
 | `/api/state` | POST | Update state (start/stop, overrides) |
+| `/api/stems` | GET | Get list of active stems and their mixer states |
+| `/api/stems/{idx}/volume` | POST | Set volume for a specific stem |
+| `/api/stems/{idx}/mute` | POST | Toggle mute for a specific stem |
+| `/api/stems/{idx}/solo` | POST | Toggle solo for a specific stem |
+| `/api/stems/{idx}/download` | GET | Download a single stem as WAV |
+| `/api/generation-config` | GET/POST | Get/set CFG Scale and Steps |
 | `/api/instruments` | GET | Get instrument categories |
 | `/api/llm-config` | GET/POST | Get/set LLM configuration |
 | `/api/export/start` | POST | Start recording session |
