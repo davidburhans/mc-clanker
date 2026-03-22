@@ -87,22 +87,60 @@ def run_framework_loop():
                 
             # 1. Get next section from LLM
             next_state = conductor.get_next_state(
-                current_bpm, current_key, active_stems, 
+                current_bpm, current_key, active_stems,
                 user_override, available_instruments, stem_history, llm_config
             )
-            
-            # 2. Deduplicate tracks
+
+            # 2. Process Actions to form the new deduped tracklist
+            new_tracks = []
+
+            with state.lock:
+                for action in next_state.get("actions", []):
+                    a_type = action.get("action_type")
+                    idx = action.get("stem_index")
+
+                    if a_type == "retain" and idx is not None and 0 <= idx < len(active_stems):
+                        # Use the original generated details or reconstruct a partial object
+                        s = active_stems[idx]
+                        new_tracks.append(s.get('_original_details', {}))
+
+                    elif a_type == "add":
+                        new_tracks.append({
+                            "major_family": action.get("major_family", "Synth"),
+                            "sub_family": action.get("sub_family", "Synth Lead"),
+                            "timbre_tags": action.get("timbre_tags", ["Warm"]),
+                            "notation_tag": action.get("notation_tag", "melody"),
+                            "fx_tag": action.get("fx_tag", "Medium Reverb"),
+                            "bars": action.get("bars", 4)
+                        })
+
+                    elif a_type == "mix" and idx is not None and 0 <= idx < len(active_stems):
+                        # Update mixer state directly
+                        vol = action.get("target_volume")
+                        if vol is not None:
+                            state.stem_volumes[idx] = max(0.0, min(2.0, vol))
+                        muted = action.get("is_muted")
+                        if muted is True:
+                            state.muted_stems.add(idx)
+                        elif muted is False and idx in state.muted_stems:
+                            state.muted_stems.remove(idx)
+
+                        # And retain it in the tracklist
+                        s = active_stems[idx]
+                        new_tracks.append(s.get('_original_details', {}))
+
+            # 2.5 Deduplicate tracks
             unique_tracks = {}
-            for t in next_state.get("tracks", []):
+            for t in new_tracks:
+                if not t: continue
                 t_key = f"{t.get('major_family')}_{t.get('sub_family')}_{'_'.join(t.get('timbre_tags', []))}_{t.get('notation_tag')}_{t.get('fx_tag')}"
                 if t_key not in unique_tracks:
                     unique_tracks[t_key] = t
             deduped_tracks = list(unique_tracks.values())
-            
+
             with state.lock:
                 # Handle first loop mixer clear
-                if loop_idx == 1: mixer.clear()
-                
+                if loop_idx == 1: mixer.clear()                
                 # Apply overrides again in case they were set during LLM call
                 if bpm_override:
                     state.current_bpm = bpm_override
@@ -126,14 +164,14 @@ def run_framework_loop():
                     notation = t.get("notation_tag", "melody")
                     fx = t.get("fx_tag", "Medium Reverb")
                     constructed_prompt = f"{major}, {sub}, {timbres}, {notation}, {fx}, {state.current_key}"
-                    
-                    state.next_stems.append({
-                        "prompt": constructed_prompt, 
-                        "bpm": state.current_bpm, 
-                        "key": state.current_key, 
-                        "bars": t.get("bars", 8)
-                    })
 
+                    state.next_stems.append({
+                        "prompt": constructed_prompt,
+                        "bpm": state.current_bpm,
+                        "key": state.current_key,
+                        "bars": t.get("bars", 8),
+                        "_original_details": t # Save for retain actions
+                    })
             print(f"Target Master BPM: {state.current_bpm} | Master Key: {state.current_key}")
             
             # 3. Preparation for generation
