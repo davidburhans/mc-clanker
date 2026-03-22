@@ -65,6 +65,9 @@ class DJSlopApp {
 
         // Info
         this.reasoningBox = document.getElementById('reasoning-box');
+        this.actionLog = document.getElementById('action-log');
+        this.energyMeterBar = document.getElementById('energy-meter-bar');
+        this.energyMeterValue = document.getElementById('energy-meter-value');
         this.currentTrackName = document.getElementById('current-track-name');
         this.prevStemsEl = document.getElementById('prev-stems');
         this.currStemsEl = document.getElementById('curr-stems');
@@ -330,6 +333,32 @@ class DJSlopApp {
         // Update loop counter
         if (this.loopCounter && data.loop_count !== undefined) {
             this.loopCounter.textContent = `LOOP: ${data.loop_count}`;
+        }
+
+        // Energy Meter
+        if (this.energyMeterBar && data.energy_level !== undefined) {
+            const level = data.energy_level;
+            this.energyMeterBar.style.width = `${level * 10}%`;
+            this.energyMeterValue.textContent = level;
+            
+            // Change color based on energy
+            if (level >= 8) {
+                this.energyMeterBar.style.background = 'var(--led-red)';
+                this.energyMeterBar.style.boxShadow = '0 0 15px var(--led-red)';
+            } else if (level >= 5) {
+                this.energyMeterBar.style.background = 'var(--amber-glow)';
+                this.energyMeterBar.style.boxShadow = '0 0 10px var(--amber-glow)';
+            } else {
+                this.energyMeterBar.style.background = 'var(--cyan-glow)';
+                this.energyMeterBar.style.boxShadow = '0 0 10px var(--cyan-glow)';
+            }
+        }
+
+        // Action Log
+        if (this.actionLog && data.last_actions) {
+            this.actionLog.innerHTML = data.last_actions.map(action => 
+                `<div class="action-entry">${action}</div>`
+            ).join('');
         }
     }
 

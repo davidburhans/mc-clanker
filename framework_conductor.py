@@ -29,6 +29,7 @@ Output a valid JSON object matching the requested schema EXACTLY. Do not output 
         self.user_message_template = """Current State:
 Master BPM: {bpm}
 Master Key: {key}
+Current Energy Level: {energy} (1-10)
 Active Stems (Currently Playing):
 {stems}
 
@@ -39,7 +40,7 @@ Available Instrument Types:
 {instruments}
 
 YOUR TASK:
-Provide the next set of DJ actions.
+Provide the next set of DJ actions and determine the new energy level.
 Instead of generating a full tracklist, you must define an array of `actions`:
 - `retain`: Keep an active stem playing exactly as it is (REQUIRED for flow). You must provide its exact `stem_index`.
 - `add`: Introduce a NEW stem. Provide the full instrument parameters (major_family, sub_family, etc.).
@@ -49,12 +50,13 @@ Instead of generating a full tracklist, you must define an array of `actions`:
 To keep the groove flowing, you SHOULD `retain` most of the 'Active Stems'.
 To evolve the track, you MAY `add` 1 to 2 new stems, `remove` an existing one to drop the energy, or `mix` an existing one to fade it in/out.
 
+Provide a `next_energy_level` (1-10) to track the intensity progression of the set.
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
 """
         self._cached_client = None
         self._cached_config = None
 
-    def get_next_state(self, current_bpm, current_key, active_stems, user_override="", available_instruments=None, stem_history=None, llm_config=None):
+    def get_next_state(self, current_bpm, current_key, active_stems, user_override="", available_instruments=None, stem_history=None, llm_config=None, energy_level=5):
         if available_instruments is None:
             available_instruments = ["Any"]
         if stem_history is None:
@@ -88,6 +90,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         user_prompt = self.user_message_template.format(
             bpm=current_bpm,
             key=current_key,
+            energy=energy_level,
             stems="\n".join(simple_stems) if simple_stems else "None",
             history=history_str if history_str else "None",
             instruments=", ".join(available_instruments)
@@ -118,6 +121,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                 "reasoning": { "type": "string", "description": "Brief 1-sentence musical rationale." },
                                 "master_bpm": { "type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150] },
                                 "master_key": { "type": "string" },
+                                "next_energy_level": { "type": "integer", "description": "1-10 energy level." },
                                 "actions": {
                                     "type": "array",
                                     "items": {
@@ -143,7 +147,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                     }
                                 }
                             },
-                            "required": ["name", "reasoning", "master_bpm", "master_key", "actions"],
+                            "required": ["name", "reasoning", "master_bpm", "master_key", "actions", "next_energy_level"],
                             "additionalProperties": False
                         }
                     }
@@ -167,6 +171,8 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                 "name": "Fallback Recovery State",
                 "master_bpm": current_bpm,
                 "master_key": current_key,
+                "next_energy_level": energy_level,
                 "actions": fallback_actions,
                 "reasoning": f"LLM FAILED ({e}). Automatically retaining current groove."
             }
+

@@ -1493,6 +1493,72 @@ select:hover {
     transform: translateX(4px);
 }
 
+/* --- Energy Meter --- */
+.energy-meter-container {
+    height: 44px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.energy-meter-bar {
+    height: 100%;
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1), background 0.5s ease;
+    background: var(--amber-glow);
+    box-shadow: 0 0 10px var(--amber-glow);
+}
+
+.energy-meter-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    color: var(--text-bright);
+    text-shadow: 0 0 10px rgba(0,0,0,1);
+    font-size: 1.1rem;
+    pointer-events: none;
+}
+
+/* --- Action Log --- */
+.action-log {
+    margin-top: 10px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    max-height: 140px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.action-entry {
+    font-size: 0.7rem;
+    color: var(--cyan-glow);
+    font-family: 'JetBrains Mono', monospace;
+    padding-left: 12px;
+    position: relative;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.action-entry::before {
+    content: '>';
+    position: absolute;
+    left: 0;
+    opacity: 0.6;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateX(-5px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
 /* --- Loop Counter --- */
 .loop-counter {
     font-size: 0.75rem;

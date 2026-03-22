@@ -66,6 +66,8 @@ async def get_state():
             "target_bpm_override": state.target_bpm_override,
             "target_key_override": state.target_key_override,
             "loop_count": state.loop_count,
+            "energy_level": state.energy_level,
+            "last_actions": state.last_actions,
         }
 
 

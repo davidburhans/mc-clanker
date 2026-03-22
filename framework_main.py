@@ -88,13 +88,17 @@ def run_framework_loop():
             # 1. Get next section from LLM
             next_state = conductor.get_next_state(
                 current_bpm, current_key, active_stems,
-                user_override, available_instruments, stem_history, llm_config
+                user_override, available_instruments, stem_history, llm_config,
+                energy_level=state.energy_level
             )
 
             # 2. Process Actions to form the new deduped tracklist
             new_tracks = []
+            current_actions_log = []
 
             with state.lock:
+                state.energy_level = next_state.get("next_energy_level", state.energy_level)
+
                 for action in next_state.get("actions", []):
                     a_type = action.get("action_type")
                     idx = action.get("stem_index")
@@ -103,32 +107,46 @@ def run_framework_loop():
                         # Use the original generated details or reconstruct a partial object
                         s = active_stems[idx]
                         new_tracks.append(s.get('_original_details', {}))
+                        current_actions_log.append(f"Retained {s.get('prompt', '').split(',')[1].strip()}")
 
                     elif a_type == "add":
+                        major = action.get("major_family", "Synth")
+                        sub = action.get("sub_family", "Synth Lead")
                         new_tracks.append({
-                            "major_family": action.get("major_family", "Synth"),
-                            "sub_family": action.get("sub_family", "Synth Lead"),
+                            "major_family": major,
+                            "sub_family": sub,
                             "timbre_tags": action.get("timbre_tags", ["Warm"]),
                             "notation_tag": action.get("notation_tag", "melody"),
                             "fx_tag": action.get("fx_tag", "Medium Reverb"),
                             "bars": action.get("bars", 4)
                         })
+                        current_actions_log.append(f"Added {sub}")
 
                     elif a_type == "mix" and idx is not None and 0 <= idx < len(active_stems):
-                        # Update mixer state directly
+                        s = active_stems[idx]
                         vol = action.get("target_volume")
+                        log_msg = f"Mixed {s.get('prompt', '').split(',')[1].strip()}"
+
                         if vol is not None:
                             state.stem_volumes[idx] = max(0.0, min(2.0, vol))
+                            log_msg += f" to {int(vol*100)}%"
+
                         muted = action.get("is_muted")
                         if muted is True:
                             state.muted_stems.add(idx)
+                            log_msg += " (Muted)"
                         elif muted is False and idx in state.muted_stems:
                             state.muted_stems.remove(idx)
+                            log_msg += " (Unmuted)"
 
-                        # And retain it in the tracklist
-                        s = active_stems[idx]
+                        current_actions_log.append(log_msg)
                         new_tracks.append(s.get('_original_details', {}))
 
+                    elif a_type == "remove" and idx is not None and 0 <= idx < len(active_stems):
+                        s = active_stems[idx]
+                        current_actions_log.append(f"Removed {s.get('prompt', '').split(',')[1].strip()}")
+
+                state.last_actions = current_actions_log
             # 2.5 Deduplicate tracks
             unique_tracks = {}
             for t in new_tracks:
