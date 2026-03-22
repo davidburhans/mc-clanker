@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.eggs/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+app.log
+
+# Media/Exports
+/exports/
+*.wav
+*.mp3
+*.flac
+
+# Gradio
+.gradio/
+
+# Cache
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Docker
+.dockerignore

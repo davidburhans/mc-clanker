@@ -1,0 +1,11 @@
+stable-audio-tools
+gradio>=5.0.0
+scipy
+huggingface_hub
+safetensors
+numpy
+sounddevice
+openai
+fastapi
+uvicorn
+pydantic

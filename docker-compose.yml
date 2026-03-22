@@ -1,0 +1,34 @@
+services:
+  slop-jockey:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "7860:7860"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_DISABLE_REQUIRE=1
+      - LLM_BASE_URL=http://192.168.0.203:1234/v1
+      - LLM_API_KEY=not-needed
+      - LLM_MODEL=local-model
+      - ICECAST_ENABLED=false
+      - EXPORT_DIR=/exports
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface:rw
+      - ./exports:/exports:rw
+    devices:
+      - nvidia.com/gpu=all
+      - /dev/snd:/dev/snd
+    restart: unless-stopped
+
+  # Optional Icecast server for streaming output
+  # Uncomment to enable web streaming
+  # icecast:
+  #   image: insomniaicecast/icecast
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - ICECAST_SOURCE_PASSWORD=sourcepass
+  #     - ICECAST_ADMIN_PASSWORD=adminpass
+  #     - ICECAST_MAX_SOURCES=10
