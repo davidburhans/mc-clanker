@@ -26,6 +26,10 @@ CRITICAL DJ & MUSIC THEORY RULES:
    - Breakdown (Energy 3-5): Drop the Lows (Remove/Mute Kick and Bass) and let strings/pads/vocals breathe without the drum beat.
 6. Provide a 1-sentence 'reasoning' explaining your DJ choice based on these music theory principles.
 
+DJ ACTION RULES:
+- For 'add' actions: You MUST provide a valid musical selection for EVERY instrument field (major_family, sub_family, timbre_tags, etc.). You are strictly FORBIDDEN from using `null` or empty values for these fields when adding a stem.
+- For 'retain', 'remove', or 'mix' actions: You only need to provide the `stem_index` and the specific parameters being changed (like volume). Other instrument fields should be `null`.
+
 Output a valid JSON object matching the requested schema EXACTLY. Do not output any thinking or extra text outside the JSON.
 """
         self.user_message_template = """Current State:
@@ -126,25 +130,59 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                 "actions": {
                                     "type": "array",
                                     "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "action_type": { "type": "string", "enum": ["retain", "add", "remove", "mix"] },
-                                            "stem_index": { "type": ["integer", "null"] },
-                                            "target_volume": { "type": ["number", "null"] },
-                                            "is_muted": { "type": ["boolean", "null"] },
-                                            "major_family": { "type": ["string", "null"], "enum": ["Drums", "Percussion", "Synth", "Keys", "Bass", "Bowed Strings", "Mallet", "Wind", "Guitar", "Brass", "Vocal", "Plucked Strings", None] },
-                                            "sub_family": { "type": ["string", "null"], "enum": ["Drum Kit", "Electronic Drums", "Acoustic Drums", "Kick Drum", "Snare Drum", "Hi-Hats", "Cymbals", "Percussion", "Claps", "Shaker", "Tambourine", "808 Drums", "Synth Lead", "Synth Bass", "Digital Piano", "Pluck", "Grand Piano", "Bell", "Pad", "Atmosphere", "Digital Strings", "FM Synth", "Violin", "Digital Organ", "Supersaw", "Wavetable Bass", "Rhodes Piano", "Cello", "Texture", "Flute", "Reese Bass", "Wavetable Synth", "Electric Bass", "Marimba", "Synthetic", "Electric Guitar", "Sub Bass", "Trumpet", "Pan Flute", "Picked Bass", "Digital Bass", "Brass", "Saxophone", "Choir", "Harp", "Woodwinds", "Church Organ", "Pipe Organ", "Church Bell", "Koto", "Felt Piano", "Harpsichord", "Steel Drums", "Tubular Bells", "Organ", "Analog Bass", "Sitar", "Fiddle", "Piccolo", "World Winds", "Nylon Guitar", "Alto Sax", "Acoustic Guitar", "Soprano Sax", "FM Bass", "Celesta", "Clavinet", "Celtic Harp", "Concert Harp", "CP Piano", "Guitar", "Hammond Organ", "Tack Piano", "Wurlitzer Piano", "Music Box", "Analog Synth", "Kalimba", "Glockenspiel", "Vibraphone", "Ocarina", "Xylophone", "Viola", "Bass Trombone", "Tenor Trombone", "Tenor Sax", "Bassoon", "Irish Flute", "French Horn", "Synth", "Piano", "Clarinet", "Flugelhorn", "Baritone Sax", "Tuba", "Oboe", None] },
-                                            "timbre_tags": { 
-                                                "type": ["array", "null"], 
-                                                "items": { "type": "string", "enum": ["Acoustic", "Electronic", "Groovy", "Driving", "Upper Mids", "Mids", "Highs", "Warm", "Wide", "Bright", "Low Mids", "Thick", "Airy", "Rich", "Tight", "Full", "Bass", "Gritty", "Clean", "Retro", "Saw", "Snappy", "Pluck", "Crisp", "Focused", "Metallic", "Chiptune", "Dark", "Shiny", "Analog", "Square", "Present", "Silky", "Sparkly", "Ambient", "Near", "Thin", "Soft", "Spacey", "Smooth", "Cold", "Buzzy", "Big", "Subdued", "Plucked", "Far", "Overdriven", "Sub Bass", "Deep", "Woody", "Dubstep", "Round", "Biting", "Sine", "Hollow", "Fat", "Punchy", "Staccato", "Nasal", "Vintage", "Growl", "Intimate", "Pulse", "Harsh", "Pitch Bend", "Knock", "Triangle", "Bitcrush", "Atmosphere", "Formant Vocal", "Ensemble", "Acid", "Muddy", "Glassy", "Breathy", "Muffled", "Laser", "White Noise", "Steel", "Veiled", "Rubbery", "Mono", "Reese", "Synthetic Vox", "Sub", "Rumble", "Noisy", "Distant", "Spiccato", "Small", "Bell", "Boomy", "Crispy", "Bitcrushed", "808", "Lead", "Filter", "Digital", "Synthetic Choir", "Nylon", "Organ", "Supersaw", "Pizzicato", "Armosphere", "Pad", "Choir", "Siren", "FX", "Heavy", "Electric Guitar", "Dreamy", "Tiny"] },
-                                                "maxItems": 3
+                                        "anyOf": [
+                                            {
+                                                "type": "object",
+                                                "description": "Retain an existing stem to keep the groove flowing.",
+                                                "properties": {
+                                                    "action_type": { "type": "string", "const": "retain" },
+                                                    "stem_index": { "type": "integer", "description": "Index of the active stem to keep." }
+                                                },
+                                                "required": ["action_type", "stem_index"],
+                                                "additionalProperties": False
                                             },
-                                            "notation_tag": { "type": ["string", "null"], "enum": ["chord progression", "melody", "top melody", "arp", "triplets", "simple", "complex", "rising", "falling", "strummed", "sustained", "catchy", "epic", "slow", "fast", None] },
-                                            "fx_tag": { "type": ["string", "null"], "enum": ["Low Reverb", "Medium Reverb", "High Reverb", "Plate Reverb", "Low Delay", "Medium Delay", "High Delay", "Ping Pong Delay", "Stereo Delay", "Cross Delay", "Mono Delay", "Low Distortion", "Medium Distortion", "High Distortion", "Phaser", "Low Phaser", "Medium Phaser", "High Phaser", "Bitcrush", "High Bitcrush", "Dry", "Wet", None] },
-                                            "bars": { "type": "integer", "enum": [4, 8] }
-                                        },
-                                        "required": ["action_type"],
-                                        "additionalProperties": False
+                                            {
+                                                "type": "object",
+                                                "description": "Add a new musical element to the mix.",
+                                                "properties": {
+                                                    "action_type": { "type": "string", "const": "add" },
+                                                    "major_family": { "type": "string", "enum": ["Drums", "Percussion", "Synth", "Keys", "Bass", "Bowed Strings", "Mallet", "Wind", "Guitar", "Brass", "Vocal", "Plucked Strings"] },
+                                                    "sub_family": { "type": "string", "enum": ["Drum Kit", "Electronic Drums", "Acoustic Drums", "Kick Drum", "Snare Drum", "Hi-Hats", "Cymbals", "Percussion", "Claps", "Shaker", "Tambourine", "808 Drums", "Synth Lead", "Synth Bass", "Digital Piano", "Pluck", "Grand Piano", "Bell", "Pad", "Atmosphere", "Digital Strings", "FM Synth", "Violin", "Digital Organ", "Supersaw", "Wavetable Bass", "Rhodes Piano", "Cello", "Texture", "Flute", "Reese Bass", "Wavetable Synth", "Electric Bass", "Marimba", "Synthetic", "Electric Guitar", "Sub Bass", "Trumpet", "Pan Flute", "Picked Bass", "Digital Bass", "Brass", "Saxophone", "Choir", "Harp", "Woodwinds", "Church Organ", "Pipe Organ", "Church Bell", "Koto", "Felt Piano", "Harpsichord", "Steel Drums", "Tubular Bells", "Organ", "Analog Bass", "Sitar", "Fiddle", "Piccolo", "World Winds", "Nylon Guitar", "Alto Sax", "Acoustic Guitar", "Soprano Sax", "FM Bass", "Celesta", "Clavinet", "Celtic Harp", "Concert Harp", "CP Piano", "Guitar", "Hammond Organ", "Tack Piano", "Wurlitzer Piano", "Music Box", "Analog Synth", "Kalimba", "Glockenspiel", "Vibraphone", "Ocarina", "Xylophone", "Viola", "Bass Trombone", "Tenor Trombone", "Tenor Sax", "Bassoon", "Irish Flute", "French Horn", "Synth", "Piano", "Clarinet", "Flugelhorn", "Baritone Sax", "Tuba", "Oboe"] },
+                                                    "timbre_tags": { 
+                                                        "type": "array", 
+                                                        "items": { "type": "string", "enum": ["Acoustic", "Electronic", "Groovy", "Driving", "Upper Mids", "Mids", "Highs", "Warm", "Wide", "Bright", "Low Mids", "Thick", "Airy", "Rich", "Tight", "Full", "Bass", "Gritty", "Clean", "Retro", "Saw", "Snappy", "Pluck", "Crisp", "Focused", "Metallic", "Chiptune", "Dark", "Shiny", "Analog", "Square", "Present", "Silky", "Sparkly", "Ambient", "Near", "Thin", "Soft", "Spacey", "Smooth", "Cold", "Buzzy", "Big", "Subdued", "Plucked", "Far", "Overdriven", "Sub Bass", "Deep", "Woody", "Dubstep", "Round", "Biting", "Sine", "Hollow", "Fat", "Punchy", "Staccato", "Nasal", "Vintage", "Growl", "Intimate", "Pulse", "Harsh", "Pitch Bend", "Knock", "Triangle", "Bitcrush", "Atmosphere", "Formant Vocal", "Ensemble", "Acid", "Muddy", "Glassy", "Breathy", "Muffled", "Laser", "White Noise", "Steel", "Veiled", "Rubbery", "Mono", "Reese", "Synthetic Vox", "Sub", "Rumble", "Noisy", "Distant", "Spiccato", "Small", "Bell", "Boomy", "Crispy", "Bitcrushed", "808", "Lead", "Filter", "Digital", "Synthetic Choir", "Nylon", "Organ", "Supersaw", "Pizzicato", "Armosphere", "Pad", "Choir", "Siren", "FX", "Heavy", "Electric Guitar", "Dreamy", "Tiny"] },
+                                                        "maxItems": 3
+                                                    },
+                                                    "notation_tag": { "type": "string", "enum": ["chord progression", "melody", "top melody", "arp", "triplets", "simple", "complex", "rising", "falling", "strummed", "sustained", "catchy", "epic", "slow", "fast"] },
+                                                    "fx_tag": { "type": "string", "enum": ["Low Reverb", "Medium Reverb", "High Reverb", "Plate Reverb", "Low Delay", "Medium Delay", "High Delay", "Ping Pong Delay", "Stereo Delay", "Cross Delay", "Mono Delay", "Low Distortion", "Medium Distortion", "High Distortion", "Phaser", "Low Phaser", "Medium Phaser", "High Phaser", "Bitcrush", "High Bitcrush", "Dry", "Wet"] },
+                                                    "bars": { "type": "integer", "enum": [4, 8] }
+                                                },
+                                                "required": ["action_type", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
+                                                "additionalProperties": False
+                                            },
+                                            {
+                                                "type": "object",
+                                                "description": "Remove a stem to drop energy or change the arrangement.",
+                                                "properties": {
+                                                    "action_type": { "type": "string", "const": "remove" },
+                                                    "stem_index": { "type": "integer" }
+                                                },
+                                                "required": ["action_type", "stem_index"],
+                                                "additionalProperties": False
+                                            },
+                                            {
+                                                "type": "object",
+                                                "description": "Adjust the volume or mute state of an active stem.",
+                                                "properties": {
+                                                    "action_type": { "type": "string", "const": "mix" },
+                                                    "stem_index": { "type": "integer" },
+                                                    "target_volume": { "type": "number", "minimum": 0.0, "maximum": 2.0 },
+                                                    "is_muted": { "type": "boolean" }
+                                                },
+                                                "required": ["action_type", "stem_index", "target_volume", "is_muted"],
+                                                "additionalProperties": False
+                                            }
+                                        ]
                                     }
                                 },
                                 "reasoning": { "type": "string", "description": "Brief 1-sentence musical rationale." },
