@@ -394,4 +394,12 @@ def stream_mp3():
 app = gr.mount_gradio_app(app, demo, path="/")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    class CustomServer(uvicorn.Server):
+        def handle_exit(self, sig: int, frame) -> None:
+            print(f"CustomServer: Caught signal {sig}. Triggering state shutdown.")
+            state.trigger_shutdown()
+            super().handle_exit(sig, frame)
+
+    config = uvicorn.Config(app, host="0.0.0.0", port=7860)
+    server = CustomServer(config)
+    server.run()

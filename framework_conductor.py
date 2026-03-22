@@ -11,19 +11,39 @@ class Conductor:
         # Initialize the OpenAI client pointing to the local LM Studio server
         self.client = OpenAI(base_url=self.api_base, api_key=self.api_key)
         
-        self.system_instruction = """You are a professional AI DJ and Music Producer. Your goal is to guide the Automated DJ system by deciding which musical elements should be generated next based on the current state.
-Analyze the current BPM, Key, and active stems to create a coherent transition or evolution.
-Maintain a cohesive groove. You should keep core elements (like the primary bassline or main beat) the same across consecutive loops for stability, while slowly evolving or introducing new elements (like leads, pads, or fx) to keep the track interesting.
-Output a valid JSON object matching the requested schema.
+        self.system_instruction = """You are an expert AI DJ and Electronic Music Producer. Your sole purpose is to guide an Automated DJ system by deciding the absolute best musical elements to generate next.
+You are in control of a live dance floor. The music MUST flow seamlessly and maintain a strong groove.
+
+CRITICAL DJ & MUSIC THEORY RULES:
+1. FLOW & RETENTION: NEVER change everything at once. Keep transitions smooth by retaining most of the currently playing stems. Core rhythmic elements (Kick, Bass, Main Beat) MUST stay consistent across most consecutive loops.
+2. HARMONIC MIXING: The backend automatically forces all instruments into the `master_key`. Your ONLY job regarding harmony is to decide if the overall `master_key` should change. Keep it the same for stability, or change it along compatible intervals (like relative major/minor) when doing a large transition.
+3. FREQUENCY BALANCING: Prevent a muddy mix by avoiding frequency overlaps. DO NOT use multiple competing sub-basses or heavy low-end instruments simultaneously. Ensure a spread across Lows (Kick/Bass), Mids (Synths/Vocals/Pads), and Highs (Hats/Plucks).
+4. ARRANGEMENT & ENERGY: 
+   - Build up: Introduce new high-frequency percussion or rising synths.
+   - Breakdown: Drop the Lows (Kick and Bass), leaving atmospheric Mid/High elements.
+   - The Drop: Bring back the Kick, Bass, and Main Lead simultaneously for maximum impact.
+5. Provide a 1-sentence 'reasoning' explaining your DJ choice based on these music theory principles.
+
+Output a valid JSON object matching the requested schema EXACTLY. Do not output any thinking or extra text outside the JSON.
 """
         self.user_message_template = """Current State:
-BPM: {bpm}
-Key: {key}
-Active Stems: {stems}
-History: {history}
-Available Instruments: {instruments}
+Master BPM: {bpm}
+Master Key: {key}
+Active Stems (Currently Playing):
+{stems}
 
-Provide the next set of stems to maintain the vibe or evolve the sound.
+Recent Track History:
+{history}
+
+Available Instrument Types:
+{instruments}
+
+YOUR TASK:
+Provide the next set of stems to play (typically 4-6 stems).
+- RETAIN stems: To keep the groove flowing, you SHOULD include most of the 'Active Stems' in your output tracks.
+- EVOLVE the track: You MAY change 1 to 3 stems (e.g., add a new one from 'Available Instrument Types', or remove an existing one to drop the energy).
+
+Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
 """
         self._cached_client = None
         self._cached_config = None
