@@ -120,7 +120,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                 "name": { "type": "string", "description": "A creative title for this set of actions/tracks." },
                                 "reasoning": { "type": "string", "description": "Brief 1-sentence musical rationale." },
                                 "master_bpm": { "type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150] },
-                                "master_key": { "type": "string" },
+                                "master_key": { "type": "string", "enum": ["C major", "C minor", "C# major", "C# minor", "D major", "D minor", "D# major", "D# minor", "E major", "E minor", "F major", "F minor", "F# major", "F# minor", "G major", "G minor", "G# major", "G# minor", "A major", "A minor", "A# major", "A# minor", "B major", "B minor"] },
                                 "next_energy_level": { "type": "integer", "description": "1-10 energy level." },
                                 "actions": {
                                     "type": "array",
