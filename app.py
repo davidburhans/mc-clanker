@@ -179,7 +179,7 @@ with gr.Blocks(css=css, title="Foundation-1 Player") as demo:
                     label="CFG Scale", minimum=1.0, maximum=10.0, value=7.0, step=0.5
                 )
                 steps = gr.Slider(
-                    label="Steps", minimum=10, maximum=100, value=50, step=1
+                    label="Steps", minimum=10, maximum=150, value=50, step=1
                 )
 
             generate_btn = gr.Button("Generate", variant="primary")

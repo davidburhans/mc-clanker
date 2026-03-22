@@ -52,7 +52,7 @@ class GlobalState:
         self.energy_level = 5 # 1-10 intensity
         self.last_actions = [] # List of descriptive action strings
         self.generation_cfg_scale = 7.0
-        self.generation_steps = 15
+        self.generation_steps = 50
         self.last_generated_stems = {} # prompt -> bytes (wav) for download
 
         # Recording state

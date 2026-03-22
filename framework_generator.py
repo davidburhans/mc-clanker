@@ -62,7 +62,7 @@ class Generator:
         self.sample_rate = self.model.sample_rate
         print("Generator loaded successfully.")
 
-    def generate_batch(self, requests, bpm, cfg_scale=7.0, steps=15):
+    def generate_batch(self, requests, bpm, cfg_scale=7.0, steps=50):
         """
         requests: list of { "prompt": str, "bars": int, "duration": float }
         """

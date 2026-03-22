@@ -19,14 +19,13 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
+    print("FASTAPI LIFESPAN: Starting framework loop...")
+    framework_thread = threading.Thread(target=run_framework_loop, daemon=True)
+    framework_thread.start()
     yield
     # Shutdown logic
     print("FASTAPI LIFESPAN: Shutting down resources...")
     state.trigger_shutdown()
-
-# 1. Start the generator loop in a background thread
-framework_thread = threading.Thread(target=run_framework_loop, daemon=True)
-framework_thread.start()
 
 def cleanup():
     print("Application exiting, cleaning up...")

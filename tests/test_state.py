@@ -8,7 +8,7 @@ def test_initial_state():
     assert state.is_generating is False
     assert state.loop_count == 0
     assert state.generation_cfg_scale == 7.0
-    assert state.generation_steps == 15
+    assert state.generation_steps == 50
 
 def test_state_reset():
     state = GlobalState()

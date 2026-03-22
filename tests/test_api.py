@@ -37,7 +37,7 @@ def test_generation_config(client):
     # Get initial
     response = client.get("/api/generation-config")
     assert response.status_code == 200
-    assert response.json()["cfg_scale"] == 7.0
+    assert response.json()["steps"] == 50
     
     # Update
     response = client.post("/api/generation-config", json={"cfg_scale": 8.5, "steps": 20})
