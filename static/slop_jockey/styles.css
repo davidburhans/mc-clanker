@@ -1463,34 +1463,235 @@ select:hover {
     50% { opacity: 1; }
 }
 
-/* ========== TIMELINE ========== */
-.timeline-section {
+/* ========== STEM DECK (combined timeline + mixer) ========== */
+.stem-deck-section {
     flex: 1;
     min-height: 0;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
-.timeline {
+.stem-deck {
+    padding: 14px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding: 14px;
-    overflow-y: auto;
-    max-height: 100%;
 }
 
-.timeline-item {
-    padding: 12px 14px;
+.stem-row {
     background: var(--bg-deep);
     border-radius: 10px;
     border-left: 3px solid var(--border-subtle);
+    padding: 12px 14px;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     flex-shrink: 0;
 }
 
-.timeline-item:hover {
+.stem-row:hover {
     background: var(--bg-raised);
     transform: translateX(4px);
+}
+
+.stem-row.previous {
+    border-left-color: var(--text-ghost);
+    opacity: 0.7;
+}
+
+.stem-row.current {
+    border-left-color: var(--amber-glow);
+    background: rgba(255, 170, 0, 0.1);
+    box-shadow:
+        0 0 20px rgba(255, 170, 0, 0.15),
+        inset 0 0 30px rgba(255, 170, 0, 0.05);
+}
+
+.stem-row.next {
+    border-left-color: var(--cyan-dim);
+    opacity: 0.8;
+}
+
+.stem-row-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.stem-position-label {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.55rem;
+    letter-spacing: 3px;
+    color: var(--text-dim);
+}
+
+.stem-row.previous .stem-position-label { color: var(--text-ghost); }
+.stem-row.current .stem-position-label { color: var(--amber-glow); }
+.stem-row.next .stem-position-label { color: var(--cyan-dim); }
+
+.stem-time {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text-dim);
+}
+
+.stem-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.stem-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.stem-vol-slider {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    outline: none;
+}
+
+.stem-vol-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--accent-color);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 10px var(--accent-color);
+}
+
+.stem-btns {
+    display: flex;
+    gap: 5px;
+}
+
+.stem-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-dim);
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.stem-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.stem-btn.active-mute {
+    background: rgba(255, 68, 0, 0.2);
+    border-color: #ff4400;
+    color: #ff4400;
+    box-shadow: 0 0 10px rgba(255, 68, 0, 0.3);
+}
+
+.stem-btn.active-solo {
+    background: rgba(0, 240, 255, 0.2);
+    border-color: var(--cyan-glow);
+    color: var(--cyan-glow);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.3);
+}
+
+.stem-btn-dl {
+    background: rgba(0, 255, 136, 0.1);
+    border-color: rgba(0, 255, 136, 0.3);
+    color: #00ff88;
+}
+
+.stem-btn-dl:hover {
+    background: rgba(0, 255, 136, 0.2);
+    box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+}
+
+/* Stem preview tags */
+.stem-preview-tag {
+    padding: 5px 10px;
+    background: var(--bg-panel);
+    border-radius: 6px;
+    font-size: 0.65rem;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-normal);
+    transition: all 0.2s;
+    cursor: default;
+    position: relative;
+}
+
+.stem-preview-tag::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 6px;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.5;
+}
+
+.stem-preview-tag {
+    padding-left: 18px;
+}
+
+.stem-preview-tag:hover {
+    border-color: var(--amber-dim);
+    color: var(--amber-glow);
+    box-shadow: 0 0 8px rgba(255, 170, 0, 0.2);
+    transform: translateY(-1px);
+}
+
+/* Color-coded stem tags by instrument type */
+.stem-preview-tag[data-type="drums"] {
+    border-color: rgba(255, 68, 68, 0.4);
+    color: #ff4466;
+}
+
+.stem-preview-tag[data-type="drums"]:hover {
+    box-shadow: 0 0 12px rgba(255, 68, 68, 0.5);
+    border-color: rgba(255, 68, 68, 0.8);
+}
+
+.stem-preview-tag[data-type="bass"] {
+    border-color: rgba(0, 240, 255, 0.4);
+    color: var(--cyan-glow);
+}
+
+.stem-preview-tag[data-type="bass"]:hover {
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.5);
+    border-color: rgba(0, 240, 255, 0.8);
+}
+
+.stem-preview-tag[data-type="synth"] {
+    border-color: rgba(255, 0, 170, 0.4);
+    color: var(--magenta-pulse);
+}
+
+.stem-preview-tag[data-type="synth"]:hover {
+    box-shadow: 0 0 12px rgba(255, 0, 170, 0.5);
+    border-color: rgba(255, 0, 170, 0.8);
+}
+
+.stem-preview-tag[data-type="vocals"] {
+    border-color: rgba(255, 170, 0, 0.4);
+    color: var(--amber-glow);
+}
+
+.stem-preview-tag[data-type="vocals"]:hover {
+    box-shadow: 0 0 12px rgba(255, 170, 0, 0.5);
+    border-color: rgba(255, 170, 0, 0.8);
 }
 
 /* --- Energy Meter --- */
@@ -1571,309 +1772,6 @@ select:hover {
     text-shadow: 0 0 10px rgba(255, 170, 0, 0.5);
 }
 
-/* --- Stem Mixer --- */
-.mixer-section {
-    margin-top: 20px;
-    flex: 1;
-    min-height: 200px;
-    display: flex;
-    flex-direction: column;
-}
-
-.stem-mixer {
-    padding: 14px;
-    overflow-y: auto;
-    flex: 1;
-}
-
-.stem-row {
-    background: var(--bg-deep);
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-    padding: 10px;
-    margin-bottom: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    transition: all 0.2s;
-}
-
-.stem-row:hover {
-    border-color: var(--border-active);
-}
-
-.stem-info {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--text-normal);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    opacity: 0.9;
-}
-
-.stem-controls {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.stem-vol-slider {
-    flex: 1;
-    height: 4px;
-    -webkit-appearance: none;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 2px;
-    outline: none;
-}
-
-.stem-vol-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 12px;
-    height: 12px;
-    background: var(--accent-color);
-    border-radius: 50%;
-    cursor: pointer;
-    box-shadow: 0 0 10px var(--accent-color);
-}
-
-.stem-btns {
-    display: flex;
-    gap: 5px;
-}
-
-.stem-btn {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--border-subtle);
-    color: var(--text-dim);
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 4px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.stem-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-}
-
-.stem-btn.active-mute {
-    background: rgba(255, 68, 0, 0.2);
-    border-color: #ff4400;
-    color: #ff4400;
-    box-shadow: 0 0 10px rgba(255, 68, 0, 0.3);
-}
-
-.stem-btn.active-solo {
-    background: rgba(0, 240, 255, 0.2);
-    border-color: var(--cyan-glow);
-    color: var(--cyan-glow);
-    box-shadow: 0 0 10px rgba(0, 240, 255, 0.3);
-}
-
-.stem-btn-dl {
-    background: rgba(0, 255, 136, 0.1);
-    border-color: rgba(0, 255, 136, 0.3);
-    color: #00ff88;
-}
-
-.stem-btn-dl:hover {
-    background: rgba(0, 255, 136, 0.2);
-    box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
-}
-
-@keyframes timelineSlideIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.timeline-item.previous {
-    border-left-color: var(--text-ghost);
-}
-
-.timeline-item.current {
-    border-left-color: var(--amber-glow);
-    background: rgba(255, 170, 0, 0.1);
-    box-shadow:
-        0 0 20px rgba(255, 170, 0, 0.15),
-        inset 0 0 30px rgba(255, 170, 0, 0.05);
-}
-
-.timeline-item.next {
-    border-left-color: var(--cyan-dim);
-}
-
-.timeline-label {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 0.55rem;
-    letter-spacing: 3px;
-    color: var(--text-dim);
-    display: block;
-    margin-bottom: 8px;
-}
-
-.timeline-content {
-    font-size: 0.8rem;
-    color: var(--text-normal);
-}
-
-.timeline-content .placeholder {
-    color: var(--text-ghost);
-}
-
-.stem-preview {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 6px;
-}
-
-/* Stem group - a set of stems that play together */
-.stem-group {
-    padding: 8px 10px;
-    background: var(--bg-surface);
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    margin-bottom: 8px;
-    position: relative;
-    animation: stemGroupEnter 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.stem-group-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 6px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border-subtle);
-}
-
-.stem-group-label {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 0.5rem;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-}
-
-.stem-group.previous .stem-group-label { color: var(--text-ghost); }
-.stem-group.current .stem-group-label { color: var(--amber-glow); }
-.stem-group.next .stem-group-label { color: var(--cyan-dim); }
-
-.stem-group-time {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.6rem;
-    color: var(--text-dim);
-}
-
-.stem-group-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    align-items: center;
-}
-
-.stem-separator {
-    color: var(--text-ghost);
-    margin: 0 4px;
-    font-size: 0.7rem;
-    opacity: 0.5;
-}
-
-@keyframes stemGroupEnter {
-    from {
-        opacity: 0;
-        transform: translateY(-8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.stem-preview-tag {
-    padding: 5px 10px;
-    background: var(--bg-panel);
-    border-radius: 6px;
-    font-size: 0.65rem;
-    border: 1px solid var(--border-subtle);
-    color: var(--text-normal);
-    transition: all 0.2s;
-    cursor: default;
-    position: relative;
-}
-
-.stem-preview-tag:hover {
-    border-color: var(--amber-dim);
-    color: var(--amber-glow);
-    box-shadow: 0 0 8px rgba(255, 170, 0, 0.2);
-    transform: translateY(-1px);
-}
-
-/* Subtle dot indicator for each tag */
-.stem-preview-tag::before {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 6px;
-    transform: translateY(-50%);
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: currentColor;
-    opacity: 0.5;
-}
-
-.stem-preview-tag {
-    padding-left: 18px;
-}
-
-/* Color-coded stem tags by instrument type */
-.stem-preview-tag[data-type="drums"] {
-    border-color: rgba(255, 68, 68, 0.4);
-    color: #ff4466;
-}
-
-.stem-preview-tag[data-type="drums"]:hover {
-    box-shadow: 0 0 12px rgba(255, 68, 68, 0.5);
-    border-color: rgba(255, 68, 68, 0.8);
-}
-
-.stem-preview-tag[data-type="bass"] {
-    border-color: rgba(0, 240, 255, 0.4);
-    color: var(--cyan-glow);
-}
-
-.stem-preview-tag[data-type="bass"]:hover {
-    box-shadow: 0 0 12px rgba(0, 240, 255, 0.5);
-    border-color: rgba(0, 240, 255, 0.8);
-}
-
-.stem-preview-tag[data-type="synth"] {
-    border-color: rgba(255, 0, 170, 0.4);
-    color: var(--magenta-pulse);
-}
-
-.stem-preview-tag[data-type="synth"]:hover {
-    box-shadow: 0 0 12px rgba(255, 0, 170, 0.5);
-    border-color: rgba(255, 0, 170, 0.8);
-}
-
-.stem-preview-tag[data-type="vocals"] {
-    border-color: rgba(255, 170, 0, 0.4);
-    color: var(--amber-glow);
-}
-
-.stem-preview-tag[data-type="vocals"]:hover {
-    box-shadow: 0 0 12px rgba(255, 170, 0, 0.5);
-    border-color: rgba(255, 170, 0, 0.8);
-}
 
 /* ========== EXPORT SECTION ========== */
 .export-section {

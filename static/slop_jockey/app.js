@@ -17,7 +17,9 @@ class DJSlopApp {
             currentStems: [],
             prevStems: [],
             nextStems: [],
-            isEngineRunning: false
+            isEngineRunning: false,
+            lastActions: null,
+            stemMixerData: []
         };
 
         this.recordingStartTime = null;
@@ -26,6 +28,9 @@ class DJSlopApp {
         this.audioContext = null;
         this.analyser = null;
         this.source = null;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
+        this.reconnectDelay = 2000; // ms between reconnect attempts
 
         this.init();
     }
@@ -69,9 +74,6 @@ class DJSlopApp {
         this.energyMeterBar = document.getElementById('energy-meter-bar');
         this.energyMeterValue = document.getElementById('energy-meter-value');
         this.currentTrackName = document.getElementById('current-track-name');
-        this.prevStemsEl = document.getElementById('prev-stems');
-        this.currStemsEl = document.getElementById('curr-stems');
-        this.nextStemsEl = document.getElementById('next-stems');
 
         // Export
         this.recordBtn = document.getElementById('record-btn');
@@ -103,7 +105,7 @@ class DJSlopApp {
         this.togglePasswordBtn = document.getElementById('toggle-password');
         
         // Phase 3: New Elements
-        this.stemMixer = document.getElementById('stem-mixer');
+        this.stemDeck = document.getElementById('stem-deck');
         this.loopCounter = document.getElementById('loop-counter');
         this.cfgScale = document.getElementById('cfg-scale');
         this.cfgVal = document.getElementById('cfg-val');
@@ -196,6 +198,25 @@ class DJSlopApp {
 
         // Window resize
         window.addEventListener('resize', () => this.resizeVisualizer());
+
+        // Stem deck event delegation
+        if (this.stemDeck) {
+            this.stemDeck.addEventListener('input', (e) => {
+                if (e.target.classList.contains('stem-vol-slider')) {
+                    const index = parseInt(e.target.dataset.stemIndex);
+                    this.setStemVolume(index, e.target.value);
+                }
+            });
+            this.stemDeck.addEventListener('click', (e) => {
+                const btn = e.target.closest('.stem-btn');
+                if (!btn) return;
+                const action = btn.dataset.action;
+                const index = parseInt(btn.dataset.stemIndex);
+                if (action === 'mute') this.toggleStemMute(index);
+                else if (action === 'solo') this.toggleStemSolo(index);
+                else if (action === 'download') this.downloadStem(index);
+            });
+        }
     }
 
     bindInstrumentRackToggle() {
@@ -229,11 +250,35 @@ class DJSlopApp {
 
         this.audioPlayer.addEventListener('playing', () => {
             this.setStatus('connected');
+            this.reconnectAttempts = 0; // Reset reconnect counter on successful play
         });
 
         this.audioPlayer.addEventListener('error', () => {
             this.setStatus('disconnected');
+            this.handleAudioError();
         });
+
+        // Also handle ended event - stream may end without error
+        this.audioPlayer.addEventListener('ended', () => {
+            this.setStatus('disconnected');
+            this.handleAudioError();
+        });
+    }
+
+    handleAudioError() {
+        if (!this.state.isPlaying) return; // Only auto-reconnect if we think we should be playing
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            this.showToast('Stream disconnected after multiple attempts. Use the reconnect button.', 'error');
+            return;
+        }
+        this.reconnectAttempts++;
+        const delay = this.reconnectDelay * this.reconnectAttempts;
+        this.showToast(`Stream interrupted, reconnecting... (attempt ${this.reconnectAttempts})`);
+        setTimeout(() => {
+            if (this.state.isPlaying) {
+                this.reconnectStream();
+            }
+        }, delay);
     }
 
     setStatus(status) {
@@ -299,6 +344,9 @@ class DJSlopApp {
         } catch (e) {
             console.error('Failed to load LLM config:', e);
         }
+
+        // Load mixer data
+        this.updateStemMixer();
     }
 
     updateUIFromState(data) {
@@ -323,8 +371,6 @@ class DJSlopApp {
         this.state.currentStems = data.active_stems || [];
         this.state.prevStems = data.previous_stems || [];
         this.state.nextStems = data.next_stems || [];
-
-        this.renderStems();
 
         // Playing state from backend
         this.state.isPlaying = data.is_generating || false;
@@ -356,62 +402,108 @@ class DJSlopApp {
 
         // Action Log
         if (this.actionLog && data.last_actions) {
-            this.actionLog.innerHTML = data.last_actions.map(action => 
-                `<div class="action-entry">${action}</div>`
-            ).join('');
+            const newActions = JSON.stringify(data.last_actions);
+            if (newActions !== this.state.lastActions) {
+                this.state.lastActions = newActions;
+                this.actionLog.innerHTML = data.last_actions.map(action =>
+                    `<div class="action-entry">${action}</div>`
+                ).join('');
+            }
         }
     }
 
-    renderStems() {
+    renderStemDeck() {
         // Current track name
         this.currentTrackName.textContent = this.state.current_set_name || 'Waiting for track...';
 
-        // Current stems (timeline)
-        this.currStemsEl.innerHTML = this.state.currentStems.length > 0
-            ? this.renderStemDetails(this.state.currentStems, 'current')
-            : '<p class="placeholder">--</p>';
+        if (!this.stemDeck) return;
+
+        // Build unified list of all stems with position
+        const allStems = [];
 
         // Previous stems
-        this.prevStemsEl.innerHTML = this.state.prevStems.length > 0
-            ? this.renderStemDetails(this.state.prevStems, 'previous')
-            : '<p class="placeholder">--</p>';
+        this.state.prevStems.forEach(stem => {
+            allStems.push({ ...stem, position: 'previous' });
+        });
+
+        // Current stems - merge with mixer data
+        const mixerData = this.state.stemMixerData || [];
+        this.state.currentStems.forEach((stem, idx) => {
+            const mixer = mixerData.find(m => m.index === idx) || {};
+            allStems.push({
+                ...stem,
+                position: 'current',
+                index: idx,
+                volume: mixer.volume ?? 1.0,
+                is_muted: mixer.is_muted ?? false,
+                is_soloed: mixer.is_soloed ?? false,
+                hasMixerControls: true
+            });
+        });
 
         // Next stems
-        this.nextStemsEl.innerHTML = this.state.nextStems.length > 0
-            ? this.renderStemDetails(this.state.nextStems, 'next')
-            : '<p class="placeholder">Generating...</p>';
+        this.state.nextStems.forEach(stem => {
+            allStems.push({ ...stem, position: 'next' });
+        });
+
+        if (allStems.length === 0) {
+            this.stemDeck.innerHTML = '<p class="placeholder">No stems yet</p>';
+            return;
+        }
+
+        this.stemDeck.innerHTML = allStems.map(stem => this.renderStemRow(stem)).join('');
     }
 
-    renderStemDetails(stems, groupType = 'current') {
-        if (!stems || stems.length === 0) return '<p class="placeholder">--</p>';
+    async updateStemMixer() {
+        try {
+            const response = await fetch('/api/stems');
+            if (response.ok) {
+                this.state.stemMixerData = await response.json();
+                this.renderStemDeck();
+            }
+        } catch (e) {
+            console.error('Failed to update stem mixer:', e);
+        }
+    }
 
-        // Extract bars from the first stem (representative for the group)
-        const groupBars = stems[0]?.bars || '';
+    renderStemRow(stem) {
+        const position = stem.position || 'current';
+        const prompt = stem.prompt || '';
+        const bars = stem.bars || '';
+        const hasControls = stem.hasMixerControls && stem.index !== undefined;
 
-        // Wrap all stems in a group container
-        const tagsHtml = stems.map(stem => {
-            const prompt = stem.prompt || '';
-            const tags = prompt.split(',').map((tag, i) => {
-                const trimmed = tag.trim().toLowerCase();
-                let type = 'default';
-                if (trimmed.includes('drum') || trimmed.includes('kick') || trimmed.includes('snare') || trimmed.includes('hihat') || trimmed.includes('hat')) type = 'drums';
-                else if (trimmed.includes('bass')) type = 'bass';
-                else if (trimmed.includes('synth') || trimmed.includes('pad') || trimmed.includes('lead')) type = 'synth';
-                else if (trimmed.includes('vocal') || trimmed.includes('voice') || trimmed.includes('singer')) type = 'vocals';
-                return `<span class="stem-preview-tag" data-type="${type}">${tag.trim()}</span>`;
-            }).join('');
-            return `<div class="stem-tags-row" style="margin-bottom: 6px; padding: 6px 8px; background: rgba(0, 0, 0, 0.2); border-radius: 6px; border-left: 2px solid var(--border-active); display: flex; flex-wrap: wrap; gap: 6px; width: 100%; box-sizing: border-box;">${tags}</div>`;
+        // Render tags
+        const tags = prompt.split(',').map(tag => {
+            const trimmed = tag.trim().toLowerCase();
+            let type = 'default';
+            if (trimmed.includes('drum') || trimmed.includes('kick') || trimmed.includes('snare') || trimmed.includes('hihat') || trimmed.includes('hat')) type = 'drums';
+            else if (trimmed.includes('bass')) type = 'bass';
+            else if (trimmed.includes('synth') || trimmed.includes('pad') || trimmed.includes('lead')) type = 'synth';
+            else if (trimmed.includes('vocal') || trimmed.includes('voice') || trimmed.includes('singer')) type = 'vocals';
+            return `<span class="stem-preview-tag" data-type="${type}">${tag.trim()}</span>`;
         }).join('');
 
-        const timeInfo = groupBars ? `${groupBars} bars` : '';
+        const timeInfo = bars ? `${bars} bars` : '';
 
         return `
-            <div class="stem-group ${groupType}">
-                <div class="stem-group-header">
-                    <span class="stem-group-label">${groupType.toUpperCase()}</span>
-                    ${timeInfo ? `<span class="stem-group-time">${timeInfo}</span>` : ''}
+            <div class="stem-row ${position}">
+                <div class="stem-row-header">
+                    <span class="stem-position-label">${position.toUpperCase()}</span>
+                    ${timeInfo ? `<span class="stem-time">${timeInfo}</span>` : ''}
                 </div>
-                <div class="stem-group-tags">${tagsHtml}</div>
+                <div class="stem-tags">${tags}</div>
+                ${hasControls ? `
+                <div class="stem-controls">
+                    <input type="range" class="stem-vol-slider" min="0" max="2" step="0.05"
+                           value="${stem.volume ?? 1.0}"
+                           data-stem-index="${stem.index}">
+                    <div class="stem-btns">
+                        <button class="stem-btn ${stem.is_muted ? 'active-mute' : ''}" data-action="mute" data-stem-index="${stem.index}">M</button>
+                        <button class="stem-btn ${stem.is_soloed ? 'active-solo' : ''}" data-action="solo" data-stem-index="${stem.index}">S</button>
+                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}">↓</button>
+                    </div>
+                </div>
+                ` : ''}
             </div>
         `;
     }
@@ -488,6 +580,7 @@ class DJSlopApp {
         this.state.isPlaying = true;
         this.updatePlayButton();
         this.setStatus('connecting');
+        this.reconnectAttempts = 0; // Reset reconnect counter on manual play
 
         // Refresh the audio stream source before playing
         this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
@@ -516,6 +609,7 @@ class DJSlopApp {
         this.state.isPlaying = false;
         this.updatePlayButton();
         this.setStatus('paused');
+        this.reconnectAttempts = 0; // Don't auto-reconnect when paused
         this.applyState({ is_generating: false }).catch(e => {
             console.error('Pause failed:', e);
         });
@@ -541,6 +635,7 @@ class DJSlopApp {
         this.setStatus('disconnected');
         this.clearOverrideIndicators();
         this.clearVibe();
+        this.reconnectAttempts = 0; // Reset reconnect counter on stop
         this.applyState({ is_generating: false, should_reset: true }).catch(e => {
             console.error('Stop failed:', e);
         });
@@ -569,7 +664,9 @@ class DJSlopApp {
         this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
         this.audioPlayer.load();
         if (this.state.isPlaying) {
-            this.audioPlayer.play().catch(e => {
+            this.audioPlayer.play().then(() => {
+                this.reconnectAttempts = 0; // Reset on successful reconnect
+            }).catch(e => {
                 console.error('Reconnect play error:', e);
                 this.showToast('Reconnect failed', 'error');
             });
@@ -649,92 +746,13 @@ class DJSlopApp {
             });
     }
 
-    async updateStemMixer() {
-        if (!this.stemMixer) return;
-        try {
-            const response = await fetch('/api/stems');
-            if (response.ok) {
-                const stems = await response.json();
-                this.renderStemMixer(stems);
-            }
-        } catch (e) {
-            console.error('Failed to update stem mixer:', e);
-        }
-    }
-
-    renderStemMixer(stems) {
-        if (!this.stemMixer) return;
-        
-        if (!stems || stems.length === 0) {
-            this.stemMixer.innerHTML = '<p class="placeholder">No active stems</p>';
-            return;
-        }
-
-        // We use a simple diffing approach or just full re-render for simplicity 
-        // since stems are few (3-5)
-        this.stemMixer.innerHTML = '';
-        stems.forEach(stem => {
-            const row = document.createElement('div');
-            row.className = 'stem-row';
-            
-            const info = document.createElement('div');
-            info.className = 'stem-info';
-            info.textContent = stem.prompt || `Stem ${stem.index}`;
-            row.appendChild(info);
-
-            const controls = document.createElement('div');
-            controls.className = 'stem-controls';
-
-            const slider = document.createElement('input');
-            slider.type = 'range';
-            slider.className = 'stem-vol-slider';
-            slider.min = '0';
-            slider.max = '2';
-            slider.step = '0.05';
-            slider.value = stem.volume;
-            slider.addEventListener('input', (e) => this.setStemVolume(stem.index, e.target.value));
-            controls.appendChild(slider);
-
-            const btns = document.createElement('div');
-            btns.className = 'stem-btns';
-
-            const muteBtn = document.createElement('button');
-            muteBtn.className = `stem-btn ${stem.is_muted ? 'active-mute' : ''}`;
-            muteBtn.textContent = 'M';
-            muteBtn.title = 'Mute';
-            muteBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleStemMute(stem.index);
-            });
-            btns.appendChild(muteBtn);
-
-            const soloBtn = document.createElement('button');
-            soloBtn.className = `stem-btn ${stem.is_soloed ? 'active-solo' : ''}`;
-            soloBtn.textContent = 'S';
-            soloBtn.title = 'Solo';
-            soloBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleStemSolo(stem.index);
-            });
-            btns.appendChild(soloBtn);
-
-            const dlBtn = document.createElement('button');
-            dlBtn.className = 'stem-btn stem-btn-dl';
-            dlBtn.textContent = '↓';
-            dlBtn.title = 'Download Stem';
-            dlBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.downloadStem(stem.index);
-            });
-            btns.appendChild(dlBtn);
-
-            controls.appendChild(btns);
-            row.appendChild(controls);
-            this.stemMixer.appendChild(row);
-        });
-    }
-
     async setStemVolume(index, volume) {
+        // Update local state immediately for responsive UI
+        const mixerEntry = this.state.stemMixerData.find(m => m.index === index);
+        if (mixerEntry) {
+            mixerEntry.volume = parseFloat(volume);
+        }
+
         try {
             await fetch(`/api/stems/${index}/volume`, {
                 method: 'POST',
@@ -1041,15 +1059,31 @@ class DJSlopApp {
     }
 
     async pollState() {
-        // Show loading indicator
-        this.reasoningBox.classList.add('loading');
-
         try {
             const response = await fetch('/api/state');
             if (response.ok) {
                 const data = await response.json();
-                this.updateUIFromState(data);
-                this.updateStemMixer();
+
+                // Check if anything meaningful changed before updating UI
+                const hasChanged =
+                    data.current_set_name !== this.state.current_set_name ||
+                    data.current_bpm !== this.state.bpm ||
+                    data.current_key !== this.state.key ||
+                    data.llm_reasoning !== this.state.reasoning ||
+                    data.loop_count !== this.state.loop_count ||
+                    data.energy_level !== this.state.energy_level ||
+                    JSON.stringify(data.active_stems) !== JSON.stringify(this.state.currentStems) ||
+                    JSON.stringify(data.previous_stems) !== JSON.stringify(this.state.prevStems) ||
+                    JSON.stringify(data.next_stems) !== JSON.stringify(this.state.nextStems) ||
+                    data.is_generating !== this.state.isPlaying ||
+                    data.is_running !== this.state.isEngineRunning;
+
+                if (hasChanged) {
+                    this.updateUIFromState(data);
+                    // Also refresh mixer data (volume, mute, solo)
+                    this.updateStemMixer();
+                }
+
                 this.state.isEngineRunning = data.is_running || false;
                 if (data.is_running === false) {
                     this.setStatus('disconnected');
@@ -1063,11 +1097,6 @@ class DJSlopApp {
             }
         } catch (e) {
             this.setStatus('disconnected');
-        } finally {
-            // Remove loading indicator after short delay for visual continuity
-            setTimeout(() => {
-                this.reasoningBox.classList.remove('loading');
-            }, 300);
         }
     }
 

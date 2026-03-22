@@ -49,6 +49,7 @@ class GlobalState:
         self.muted_stems = set()
         self.soloed_stems = set()
         self.loop_count = 0
+        self.stem_ages = {} # index -> int (number of loops the stem has been active)
         self.energy_level = 5 # 1-10 intensity
         self.last_actions = [] # List of descriptive action strings
         self.generation_cfg_scale = 7.0
@@ -88,6 +89,7 @@ class GlobalState:
             self.stem_volumes = {}
             self.muted_stems = set()
             self.soloed_stems = set()
+            self.stem_ages = {}
         
     def _load_instruments(self):
         if os.path.exists(self.instruments_file):

@@ -19,16 +19,17 @@ CRITICAL DJ & MUSIC THEORY RULES:
 2. GROOVE & RHYTHM (THE BEAT): Dance music relies heavily on a consistent drum beat. You MUST explicitly `add` 'Drums' or 'Percussion' (using the `major_family` tag) to provide the rhythmic foundation. A mix will lack momentum without drums. Ensure drums are actively playing during high energy sections (energy > 5).
 3. HARMONIC MIXING: The backend automatically forces all instruments into the `master_key`. Your ONLY job regarding harmony is to decide if the overall `master_key` should change. Keep it the same for stability, or change it along compatible intervals when transitioning.
 4. FREQUENCY BALANCING: Prevent a muddy mix by avoiding frequency overlaps. DO NOT use multiple competing sub-basses or heavy low-end instruments simultaneously. Ensure a spread across Lows (Kick/Bass), Mids (Synths/Vocals/Pads), and Highs (Hats/Plucks).
-5. ARRANGEMENT & ENERGY (SONG STRUCTURE): 
-   - Intro / Outro (Energy 1-3): Sparse elements, atmospheric pads, light percussion.
-   - Build-up (Energy 4-7): Introduce Drums, fast high-hats, snare rolls, rising synths.
-   - The Drop / Chorus (Energy 8-10): All core elements active (Full Drums, Kick, Bass, Main Lead). Maximum impact.
-   - Breakdown (Energy 3-5): Drop the Lows (Remove/Mute Kick and Bass) and let strings/pads/vocals breathe without the drum beat.
-6. Provide a 1-sentence 'reasoning' explaining your DJ choice based on these music theory principles.
+5. DENSITY & LAYERING: A professional, rich mix usually has 4 to 6 active stems. If the current 'Active Stems' list is sparse (1-3 stems), you MUST `add` more elements (Pads, Arps, Percussion, Leads) to fill out the frequency spectrum. Don't be afraid to layer multiple mid/high elements.
+6. ARRANGEMENT & ENERGY (SONG STRUCTURE): 
+   - Intro / Outro (Energy 1-3): Sparse elements (1-3 stems), atmospheric pads, light percussion.
+   - Build-up (Energy 4-7): Growing complexity (3-5 stems). Introduce Drums, fast high-hats, snare rolls, rising synths.
+   - The Drop / Chorus (Energy 8-10): Full mix (5-6 stems). All core elements active (Full Drums, Kick, Bass, Main Lead). Maximum impact.
+   - Breakdown (Energy 3-5): Drop the Lows (Remove/Mute Kick and Bass) and let 2-3 strings/pads/vocals breathe without the drum beat.
+7. Provide a 1-sentence 'reasoning' explaining your DJ choice based on these music theory principles.
 
 DJ ACTION RULES:
 - For 'add' actions: You MUST provide a valid musical selection for EVERY instrument field (major_family, sub_family, timbre_tags, etc.). You are strictly FORBIDDEN from using `null` or empty values for these fields when adding a stem.
-- For 'retain', 'remove', or 'mix' actions: You only need to provide the `stem_index` and the specific parameters being changed (like volume). Other instrument fields should be `null`.
+- For 'retain' or 'remove' actions: You only need to provide the `stem_index`. Other instrument fields should be `null`.
 
 Output a valid JSON object matching the requested schema EXACTLY. Do not output any thinking or extra text outside the JSON.
 """
@@ -51,11 +52,11 @@ Instead of generating a full tracklist, you must define an array of `actions`:
 - `retain`: Keep an active stem playing exactly as it is (REQUIRED for flow). You must provide its exact `stem_index`.
 - `add`: Introduce a NEW stem. Provide the full instrument parameters (major_family, sub_family, etc.).
 - `remove`: Stop an active stem from playing. Provide its `stem_index`.
-- `mix`: Change the volume or mute state of an active stem. Provide `stem_index`, `target_volume` (0.0 to 2.0), and `is_muted`.
 
 To keep the groove flowing, you SHOULD `retain` most of the 'Active Stems'. You should never have complete turn over of stems.
 CRITICAL: If the music needs rhythm or you are building energy, ensure you explicitly `add` a 'Drums' stem if one is not already playing!
-To evolve the track, you MAY `add` 1 to 2 new stems, `remove` an existing one to drop the energy, or `mix` an existing one to fade it in/out.
+DENSITY RULE: There are currently {stem_count} active stems. {density_directive}
+To evolve the track, you MAY `add` 1 to 2 new stems or `remove` an existing one to drop the energy.
 
 Provide a `next_energy_level` (1-10) to track the intensity progression of the set.
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
@@ -68,7 +69,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             available_instruments = ["Any"]
         if stem_history is None:
             stem_history = []
-            
+
         # Very compact history
         simple_history = []
         for loop_stems in stem_history[-5:]: # Get last 5 for better context
@@ -76,10 +77,11 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             simple_history.append("+".join(prompts))
         history_str = " | ".join(simple_history)
 
-        # Compact current with indices for actions
+        # Compact current with indices for actions (include age for context)
         simple_stems = []
         for idx, s in enumerate(active_stems):
-            simple_stems.append(f"Index {idx}: {s.get('prompt', 'Unknown')}")
+            age = s.get('_age', 0)
+            simple_stems.append(f"Index {idx} (age {age}): {s.get('prompt', 'Unknown')}")
 
         # Handle client caching
         if llm_config and llm_config.get('base_url'):
@@ -94,13 +96,18 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             client = self.client
             model_name = self.model_name
 
+        stem_count = len(active_stems)
+        density_directive = "This mix is too sparse for a professional sound. Aim for 4-6 stems." if stem_count < 4 else "The mix density is good. Maintain 4-6 stems for a full sound."
+
         user_prompt = self.user_message_template.format(
             bpm=current_bpm,
             key=current_key,
             energy=energy_level,
             stems="\n".join(simple_stems) if simple_stems else "None",
             history=history_str if history_str else "None",
-            instruments=", ".join(available_instruments)
+            instruments=", ".join(available_instruments),
+            stem_count=stem_count,
+            density_directive=density_directive
         )
         
         if user_override:
@@ -168,18 +175,6 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                                     "stem_index": { "type": "integer" }
                                                 },
                                                 "required": ["action_type", "stem_index"],
-                                                "additionalProperties": False
-                                            },
-                                            {
-                                                "type": "object",
-                                                "description": "Adjust the volume or mute state of an active stem.",
-                                                "properties": {
-                                                    "action_type": { "type": "string", "const": "mix" },
-                                                    "stem_index": { "type": "integer" },
-                                                    "target_volume": { "type": "number", "minimum": 0.0, "maximum": 2.0 },
-                                                    "is_muted": { "type": "boolean" }
-                                                },
-                                                "required": ["action_type", "stem_index", "target_volume", "is_muted"],
                                                 "additionalProperties": False
                                             }
                                         ]

@@ -106,8 +106,11 @@ def run_framework_loop():
                     if a_type == "retain" and idx is not None and 0 <= idx < len(active_stems):
                         # Use the original generated details or reconstruct a partial object
                         s = active_stems[idx]
-                        new_tracks.append(s.get('_original_details', {}))
-                        current_actions_log.append(f"Retained {s.get('prompt', '').split(',')[1].strip()}")
+                        orig = s.get('_original_details', {})
+                        # Carry over age from active_stems (stored in _age field)
+                        orig['_age'] = s.get('_age', 0) + 1
+                        new_tracks.append(orig)
+                        current_actions_log.append(f"Retained {s.get('prompt', '').split(',')[1].strip()} (age {orig['_age']})")
 
                     elif a_type == "add":
                         major = action.get("major_family", "Synth")
@@ -118,29 +121,10 @@ def run_framework_loop():
                             "timbre_tags": action.get("timbre_tags", ["Warm"]),
                             "notation_tag": action.get("notation_tag", "melody"),
                             "fx_tag": action.get("fx_tag", "Medium Reverb"),
-                            "bars": action.get("bars", 4)
+                            "bars": action.get("bars", 4),
+                            "_age": 0  # New stem starts at age 0
                         })
                         current_actions_log.append(f"Added {sub}")
-
-                    elif a_type == "mix" and idx is not None and 0 <= idx < len(active_stems):
-                        s = active_stems[idx]
-                        vol = action.get("target_volume")
-                        log_msg = f"Mixed {s.get('prompt', '').split(',')[1].strip()}"
-
-                        if vol is not None:
-                            state.stem_volumes[idx] = max(0.0, min(2.0, vol))
-                            log_msg += f" to {int(vol*100)}%"
-
-                        muted = action.get("is_muted")
-                        if muted is True:
-                            state.muted_stems.add(idx)
-                            log_msg += " (Muted)"
-                        elif muted is False and idx in state.muted_stems:
-                            state.muted_stems.remove(idx)
-                            log_msg += " (Unmuted)"
-
-                        current_actions_log.append(log_msg)
-                        new_tracks.append(s.get('_original_details', {}))
 
                     elif a_type == "remove" and idx is not None and 0 <= idx < len(active_stems):
                         s = active_stems[idx]
@@ -188,7 +172,8 @@ def run_framework_loop():
                         "bpm": state.current_bpm,
                         "key": state.current_key,
                         "bars": t.get("bars") or 8,
-                        "_original_details": t # Save for retain actions
+                        "_original_details": t, # Save for retain actions
+                        "_age": t.get("_age", 0)  # Carry over age from deduped tracks
                     })
             print(f"Target Master BPM: {state.current_bpm} | Master Key: {state.current_key}")
             

@@ -7,6 +7,7 @@ from safetensors.torch import load_file
 from huggingface_hub import hf_hub_download
 import json
 import os
+import time
 
 class Generator:
     def __init__(self, repo_id="RoyalCities/Foundation-1"):
@@ -17,21 +18,23 @@ class Generator:
 
     def _get_cached_model_path(self, filename):
         """Get path to cached model file if it exists"""
+        # huggingface_hub caches files in ~/.cache/huggingface/hub/
+        # The structure is: models--{repo_id}/snapshots/{revision}/filename
+        # hf_hub_download handles cache checking internally, so we use it directly
+        # instead of trying to replicate its caching logic here.
         cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
-        snapshots_dir = os.path.join(cache_dir, f"models--{self.repo_id.replace('/', '--')}", "snapshots")
-        if os.path.exists(snapshots_dir):
-            for snapshot in os.listdir(snapshots_dir):
-                # Check both original filename and blob directory
-                blob_dir = os.path.join(snapshots_dir, snapshot, "blobs")
-                if os.path.exists(blob_dir):
-                    for f in os.listdir(blob_dir):
-                        # The blobs contain the actual files, find the right one
-                        if f.endswith('.safetensors') or f.endswith('.json'):
-                            return os.path.join(blob_dir, f)
-                # Also check for original filename in snapshot
-                original_path = os.path.join(snapshots_dir, snapshot, filename)
-                if os.path.exists(original_path):
-                    return original_path
+        repo_cache = os.path.join(cache_dir, f"models--{self.repo_id.replace('/', '--')}")
+        snapshots_dir = os.path.join(repo_cache, "snapshots")
+        if not os.path.exists(snapshots_dir):
+            return None
+        # Get the current revision (snapshot)
+        for snapshot in os.listdir(snapshots_dir):
+            snapshot_path = os.path.join(snapshots_dir, snapshot)
+            if os.path.isdir(snapshot_path):
+                # Check for the file directly in the snapshot directory
+                file_path = os.path.join(snapshot_path, filename)
+                if os.path.exists(file_path):
+                    return file_path
         return None
 
     def load(self):
@@ -55,7 +58,21 @@ class Generator:
         with open(config_path, "r") as f:
             config = json.load(f)
 
-        self.model = create_model_from_config(config)
+        # Retry logic for transient httpx errors during model loading.
+        # The stable_audio_tools library creates T5Conditioner which downloads
+        # tokenizers via httpx, and sometimes the client gets closed prematurely
+        # due to a race condition. Retrying usually resolves this.
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self.model = create_model_from_config(config)
+                break
+            except RuntimeError as e:
+                if "Cannot send a request, as the client has been closed" in str(e) and attempt < max_retries - 1:
+                    print(f"Warning: httpx client closed during model loading (attempt {attempt + 1}/{max_retries}). Retrying...")
+                    time.sleep(2)
+                else:
+                    raise
         state_dict = load_file(model_path, device=self.device)
         self.model.load_state_dict(state_dict)
         self.model = self.model.to(self.device)
