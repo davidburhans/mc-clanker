@@ -20,6 +20,7 @@ class GlobalState:
         self.active_stems = []
         self.next_stems = []
         self.stem_history = [] # Rolling list of last 8 stem sets
+        self.current_set_name = "Initial Vibe"
 
         self.instruments_file = "instruments.json"
         self.categorized_instruments = self._load_instruments()
@@ -43,12 +44,25 @@ class GlobalState:
         self.audio_clients = [] # List of queues
         self.is_running = True
 
+        # Phase 2: Missing Features - Per-stem state
+        self.stem_volumes = {} # index -> float gain (0.0-2.0)
+        self.muted_stems = set()
+        self.soloed_stems = set()
+        self.loop_count = 0
+        self.generation_cfg_scale = 7.0
+        self.generation_steps = 15
+        self.last_generated_stems = {} # prompt -> bytes (wav) for download
+
         # Recording state
         self.is_recording = False
         self.recording_file_path = None
         self.recording_format = "wav"
         self.recording_start_time = None
         self.recording_chunks = []
+
+        # Subprocess tracking for graceful shutdown
+        self.active_subprocesses = set()
+        self.shutdown_event = threading.Event()
 
         # Icecast
         self.icecast_enabled = False
@@ -61,12 +75,17 @@ class GlobalState:
             self.active_stems = []
             self.next_stems = []
             self.stem_history = []
+            self.current_set_name = "System Reset"
             self.llm_reasoning = "System Reset. Configure settings and press Start."
             self.user_override = ""
             self.target_bpm_override = None
             self.target_key_override = None
             self.should_reset = True
             self.is_generating = False
+            # Clear per-stem mixer state
+            self.stem_volumes = {}
+            self.muted_stems = set()
+            self.soloed_stems = set()
         
     def _load_instruments(self):
         if os.path.exists(self.instruments_file):
@@ -110,6 +129,9 @@ class GlobalState:
                 self.audio_clients.remove(client_queue)
                 
     def broadcast_audio(self, pcm_data):
+        if self.shutdown_event.is_set():
+            return
+            
         with self.lock:
             for q in self.audio_clients:
                 try:
@@ -121,5 +143,38 @@ class GlobalState:
             # Also save to recording buffer if recording
             if self.is_recording and self.recording_chunks is not None:
                 self.recording_chunks.append(pcm_data)
+
+    def register_subprocess(self, process):
+        with self.lock:
+            self.active_subprocesses.add(process)
+
+    def unregister_subprocess(self, process):
+        with self.lock:
+            self.active_subprocesses.discard(process)
+
+    def trigger_shutdown(self):
+        print("FORCING IMMEDIATE SHUTDOWN...")
+        self.shutdown_event.set()
+        self.is_running = False
+        self.is_generating = False
+        
+        # Poison all audio client queues to break StreamingResponse loops
+        with self.lock:
+            for q in self.audio_clients:
+                try:
+                    q.put_nowait(None)
+                except:
+                    pass
+        
+        # Immediate termination of all tracked subprocesses
+        with self.lock:
+            for p in list(self.active_subprocesses):
+                try:
+                    print(f"Killing tracked process {p.pid}...")
+                    p.kill()
+                    p.wait(timeout=1)
+                except:
+                    pass
+            self.active_subprocesses.clear()
 
 state = GlobalState()

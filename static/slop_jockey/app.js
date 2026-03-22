@@ -98,6 +98,14 @@ class DJSlopApp {
         this.llmModel = document.getElementById('llm-model');
         this.icecastEnabled = document.getElementById('icecast-enabled');
         this.togglePasswordBtn = document.getElementById('toggle-password');
+        
+        // Phase 3: New Elements
+        this.stemMixer = document.getElementById('stem-mixer');
+        this.loopCounter = document.getElementById('loop-counter');
+        this.cfgScale = document.getElementById('cfg-scale');
+        this.cfgVal = document.getElementById('cfg-val');
+        this.stepsRange = document.getElementById('steps-range');
+        this.stepsVal = document.getElementById('steps-val');
 
         // Visualizer
         this.visualizer = document.getElementById('visualizer');
@@ -143,6 +151,20 @@ class DJSlopApp {
         this.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
         this.testConnectionBtn.addEventListener('click', () => this.testConnection());
         this.togglePasswordBtn.addEventListener('click', () => this.togglePasswordVisibility());
+
+        // Generation Config
+        if (this.cfgScale) {
+            this.cfgScale.addEventListener('input', () => {
+                this.cfgVal.textContent = parseFloat(this.cfgScale.value).toFixed(1);
+                this.updateGenerationConfig();
+            });
+        }
+        if (this.stepsRange) {
+            this.stepsRange.addEventListener('input', () => {
+                this.stepsVal.textContent = this.stepsRange.value;
+                this.updateGenerationConfig();
+            });
+        }
 
         // Settings modal - close on backdrop click
         this.settingsModal.addEventListener('click', (e) => {
@@ -277,6 +299,9 @@ class DJSlopApp {
     }
 
     updateUIFromState(data) {
+        // Set Name
+        this.state.current_set_name = data.current_set_name || 'Waiting for track...';
+
         // BPM
         this.state.bpm = data.current_bpm || 120;
         this.bpmDisplay.textContent = this.state.bpm;
@@ -301,17 +326,16 @@ class DJSlopApp {
         // Playing state from backend
         this.state.isPlaying = data.is_generating || false;
         this.updatePlayButton();
+
+        // Update loop counter
+        if (this.loopCounter && data.loop_count !== undefined) {
+            this.loopCounter.textContent = `LOOP: ${data.loop_count}`;
+        }
     }
 
     renderStems() {
         // Current track name
-        if (this.state.currentStems.length > 0) {
-            const firstStem = this.state.currentStems[0];
-            const parts = firstStem.prompt ? firstStem.prompt.split(',') : ['Unknown'];
-            this.currentTrackName.textContent = parts[0].trim();
-        } else {
-            this.currentTrackName.textContent = 'Waiting for track...';
-        }
+        this.currentTrackName.textContent = this.state.current_set_name || 'Waiting for track...';
 
         // Current stems (timeline)
         this.currStemsEl.innerHTML = this.state.currentStems.length > 0
@@ -332,10 +356,12 @@ class DJSlopApp {
     renderStemDetails(stems, groupType = 'current') {
         if (!stems || stems.length === 0) return '<p class="placeholder">--</p>';
 
+        // Extract bars from the first stem (representative for the group)
+        const groupBars = stems[0]?.bars || '';
+
         // Wrap all stems in a group container
         const tagsHtml = stems.map(stem => {
             const prompt = stem.prompt || '';
-            const bars = stem.bars || '';
             const tags = prompt.split(',').map((tag, i) => {
                 const trimmed = tag.trim().toLowerCase();
                 let type = 'default';
@@ -345,10 +371,10 @@ class DJSlopApp {
                 else if (trimmed.includes('vocal') || trimmed.includes('voice') || trimmed.includes('singer')) type = 'vocals';
                 return `<span class="stem-preview-tag" data-type="${type}">${tag.trim()}</span>`;
             }).join('');
-            return tags;
-        }).join('<span class="stem-separator">|</span>');
+            return `<div class="stem-tags-row" style="margin-bottom: 6px; padding: 6px 8px; background: rgba(0, 0, 0, 0.2); border-radius: 6px; border-left: 2px solid var(--border-active); display: flex; flex-wrap: wrap; gap: 6px; width: 100%; box-sizing: border-box;">${tags}</div>`;
+        }).join('');
 
-        const timeInfo = bars ? `${bars} bars` : '';
+        const timeInfo = groupBars ? `${groupBars} bars` : '';
 
         return `
             <div class="stem-group ${groupType}">
@@ -592,6 +618,160 @@ class DJSlopApp {
                 this.applyAllBtn.classList.remove('loading');
                 this.applyAllBtn.textContent = 'Apply All Settings';
             });
+    }
+
+    async updateStemMixer() {
+        if (!this.stemMixer) return;
+        try {
+            const response = await fetch('/api/stems');
+            if (response.ok) {
+                const stems = await response.json();
+                this.renderStemMixer(stems);
+            }
+        } catch (e) {
+            console.error('Failed to update stem mixer:', e);
+        }
+    }
+
+    renderStemMixer(stems) {
+        if (!this.stemMixer) return;
+        
+        if (!stems || stems.length === 0) {
+            this.stemMixer.innerHTML = '<p class="placeholder">No active stems</p>';
+            return;
+        }
+
+        // We use a simple diffing approach or just full re-render for simplicity 
+        // since stems are few (3-5)
+        this.stemMixer.innerHTML = '';
+        stems.forEach(stem => {
+            const row = document.createElement('div');
+            row.className = 'stem-row';
+            
+            const info = document.createElement('div');
+            info.className = 'stem-info';
+            info.textContent = stem.prompt || `Stem ${stem.index}`;
+            row.appendChild(info);
+
+            const controls = document.createElement('div');
+            controls.className = 'stem-controls';
+
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.className = 'stem-vol-slider';
+            slider.min = '0';
+            slider.max = '2';
+            slider.step = '0.05';
+            slider.value = stem.volume;
+            slider.addEventListener('input', (e) => this.setStemVolume(stem.index, e.target.value));
+            controls.appendChild(slider);
+
+            const btns = document.createElement('div');
+            btns.className = 'stem-btns';
+
+            const muteBtn = document.createElement('button');
+            muteBtn.className = `stem-btn ${stem.is_muted ? 'active-mute' : ''}`;
+            muteBtn.textContent = 'M';
+            muteBtn.title = 'Mute';
+            muteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleStemMute(stem.index);
+            });
+            btns.appendChild(muteBtn);
+
+            const soloBtn = document.createElement('button');
+            soloBtn.className = `stem-btn ${stem.is_soloed ? 'active-solo' : ''}`;
+            soloBtn.textContent = 'S';
+            soloBtn.title = 'Solo';
+            soloBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleStemSolo(stem.index);
+            });
+            btns.appendChild(soloBtn);
+
+            const dlBtn = document.createElement('button');
+            dlBtn.className = 'stem-btn stem-btn-dl';
+            dlBtn.textContent = '↓';
+            dlBtn.title = 'Download Stem';
+            dlBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.downloadStem(stem.index);
+            });
+            btns.appendChild(dlBtn);
+
+            controls.appendChild(btns);
+            row.appendChild(controls);
+            this.stemMixer.appendChild(row);
+        });
+    }
+
+    async setStemVolume(index, volume) {
+        try {
+            await fetch(`/api/stems/${index}/volume`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ volume: parseFloat(volume) })
+            });
+        } catch (e) {
+            console.error('Failed to set stem volume:', e);
+        }
+    }
+
+    async toggleStemMute(index) {
+        try {
+            const resp = await fetch(`/api/stems/${index}/mute`, { method: 'POST' });
+            if (resp.ok) this.updateStemMixer();
+        } catch (e) {
+            console.error('Failed to toggle mute:', e);
+        }
+    }
+
+    async toggleStemSolo(index) {
+        try {
+            const resp = await fetch(`/api/stems/${index}/solo`, { method: 'POST' });
+            if (resp.ok) this.updateStemMixer();
+        } catch (e) {
+            console.error('Failed to toggle solo:', e);
+        }
+    }
+
+    async downloadStem(index) {
+        window.open(`/api/stems/${index}/download`, '_blank');
+    }
+
+    async updateGenerationConfig() {
+        if (!this.cfgScale || !this.stepsRange) return;
+        try {
+            await fetch('/api/generation-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cfg_scale: parseFloat(this.cfgScale.value),
+                    steps: parseInt(this.stepsRange.value)
+                })
+            });
+        } catch (e) {
+            console.error('Failed to update generation config:', e);
+        }
+    }
+
+    async loadGenerationConfig() {
+        try {
+            const response = await fetch('/api/generation-config');
+            if (response.ok) {
+                const config = await response.json();
+                if (this.cfgScale) {
+                    this.cfgScale.value = config.cfg_scale;
+                    this.cfgVal.textContent = config.cfg_scale.toFixed(1);
+                }
+                if (this.stepsRange) {
+                    this.stepsRange.value = config.steps;
+                    this.stepsVal.textContent = config.steps;
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load generation config:', e);
+        }
     }
 
     showToast(message, type = 'success') {
@@ -840,6 +1020,7 @@ class DJSlopApp {
             if (response.ok) {
                 const data = await response.json();
                 this.updateUIFromState(data);
+                this.updateStemMixer();
                 this.state.isEngineRunning = data.is_running || false;
                 if (data.is_running === false) {
                     this.setStatus('disconnected');

@@ -13,10 +13,26 @@ import subprocess
 from framework_state import state
 from framework_main import run_framework_loop
 from api_routes import router as api_router
+import atexit
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    yield
+    # Shutdown logic
+    print("FASTAPI LIFESPAN: Shutting down resources...")
+    state.trigger_shutdown()
 
 # 1. Start the generator loop in a background thread
 framework_thread = threading.Thread(target=run_framework_loop, daemon=True)
 framework_thread.start()
+
+def cleanup():
+    print("Application exiting, cleaning up...")
+    state.is_running = False
+
+atexit.register(cleanup)
 
 # Initial reasoning state to reflect loading
 state.llm_reasoning = "⚙️ Initializing Engine... (Loading Foundation-1 Model, ~20s)"
@@ -217,7 +233,7 @@ with gr.Blocks(title="LLM Composer - Soundtrack for Life") as demo:
     )
 
 # 3. Build FastAPI App and Mount Gradio
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 # Register API routes for DJ UI
 app.include_router(api_router)
@@ -304,6 +320,9 @@ def audio_stream_generator():
             while state.is_running:
                 try:
                     chunk = client_q.get(timeout=1.0)
+                    if chunk is None: # Poison pill
+                        print("DEBUG: Feeder received poison pill")
+                        break
                     if process.poll() is not None:
                         stderr = (
                             process.stderr.read().decode() if process.stderr else ""
@@ -328,6 +347,9 @@ def audio_stream_generator():
             if stderr:
                 print(f"FFmpeg stderr: {stderr}")
 
+    # Register for cleanup
+    state.register_subprocess(process)
+    
     threading.Thread(target=feeder, daemon=True).start()
 
     try:
@@ -347,7 +369,12 @@ def audio_stream_generator():
         print(f"Audio stream ended. Total bytes yielded: {bytes_yielded}")
     finally:
         state.remove_audio_client(client_q)
-        process.terminate()
+        state.unregister_subprocess(process)
+        try:
+            process.kill()
+            process.wait(timeout=2)
+        except:
+            pass
         print("Audio stream generator closed")
 
 

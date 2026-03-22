@@ -11,64 +11,22 @@ class Conductor:
         # Initialize the OpenAI client pointing to the local LM Studio server
         self.client = OpenAI(base_url=self.api_base, api_key=self.api_key)
         
-        self.system_instruction = """
-You are an expert AI music composer, producer, and DJ. Your task is to orchestrate a continuous, evolving soundtrack utilizing Foundation-1 audio tags.
-You communicate ONLY in strict JSON format.
-
-=== MUSIC THEORY & COMPOSITION WISDOM ===
-1. FREQUENCY BALANCING: A great mix requires space. Never crowd the low-end; prioritize only one heavy Bass or Sub element at a time. Balance your mix across Lows (Bass, 808), Mids (Synths, Vocals, Guitars), and Highs (Bells, Airy pads, High strings).
-2. TENSION & DYNAMICS: Manage energy flow dynamically. Create buildups by layering elements, increasing rhythmic complexity (e.g., triplets, fast notations), or introducing tension. Create emotional drops or breakdowns by stripping the mix back to 1-2 core elements.
-3. HARMONIC COHESION: All elements MUST be in the exact Master Key. Pair foundational overarching chords ('chord progression', 'sustained') with rhythmic or melodic counterpoints ('arp', 'melody', 'staccato') that harmonize well.
-
-=== DJ MIXING RULES ===
-1. KEY MATCHING: Match the Master Key exactly.
-2. CONTINUITY: Make gradual, smooth transitions. Carry over 1-2 existing stems from the previous step to anchor the listener, while swapping or introducing 1-2 new elements.
-3. MIX DENSITY: Mix 3 to 5 stems concurrently.
-4. EVOLUTION: Avoid looping the exact same combination of stems for too long. Keep the musical journey moving to prevent stagnation.
-
-=== CHOSEN TAGS ===
-ALLOWED TAGS:
-- Major: Synth, Keys, Bass, Bowed Strings, Mallet, Wind, Guitar, Brass, Vocal, Plucked Strings
-- Sub: Synth Lead, Synth Bass, Digital Piano, Pluck, Grand Piano, Bell, Pad, Atmosphere, Digital Strings, FM Synth, Violin, Digital Organ, Supersaw, Wavetable Bass, Rhodes Piano, Cello, Texture, Flute, Reese Bass, Wavetable Synth, Electric Bass, Marimba, Synthetic, Electric Guitar, Sub Bass, Trumpet, Pan Flute, Picked Bass, Digital Bass, Brass, Saxophone, Choir, Harp, Woodwinds, Church Organ, Pipe Organ, Church Bell, Koto, Felt Piano, Harpsichord, Steel Drums, Tubular Bells, Organ, Analog Bass, Sitar, Fiddle, Piccolo, World Winds, Nylon Guitar, Alto Sax, Acoustic Guitar, Soprano Sax, FM Bass, Celesta, Clavinet, Celtic Harp, Concert Harp, CP Piano, Guitar, Hammond Organ, Tack Piano, Wurlitzer Piano, Music Box, Analog Synth, Kalimba, Glockenspiel, Vibraphone, Ocarina, Xylophone, Viola, Bass Trombone, Tenor Trombone, Tenor Sax, Bassoon, Irish Flute, French Horn, Synth, Piano, Clarinet, Flugelhorn, Baritone Sax, Tuba, Oboe
-- Timbre: Upper Mids, Mids, Highs, Warm, Wide, Bright, Low Mids, Thick, Airy, Rich, Tight, Full, Bass, Gritty, Clean, Retro, Saw, Snappy, Pluck, Crisp, Focused, Metallic, Chiptune, Dark, Shiny, Analog, Square, Present, Silky, Sparkly, Ambient, Near, Thin, Soft, Spacey, Smooth, Cold, Buzzy, Big, Subdued, Plucked, Far, Overdriven, Sub Bass, Deep, Woody, Dubstep, Round, Biting, Sine, Hollow, Fat, Punchy, Staccato, Nasal, Vintage, Growl, Intimate, Pulse, Harsh, Pitch Bend, Knock, Triangle, Bitcrush, Atmosphere, Formant Vocal, Ensemble, Acid, Muddy, Glassy, Breathy, Muffled, Laser, White Noise, Steel, Veiled, Rubbery, Mono, Reese, Synthetic Vox, Sub, Rumble, Noisy, Distant, Spiccato, Small, Bell, Boomy, Crispy, Bitcrushed, 808, Lead, Filter, Digital, Synthetic Choir, Nylon, Organ, Supersaw, Pizzicato, Armosphere, Pad, Choir, Siren, FX, Heavy, Electric Guitar, Dreamy, Tiny
-- Notation: chord progression, melody, top melody, arp, triplets, simple, complex, rising, falling, strummed, sustained, catchy, epic, slow, fast
-- FX: Low/Medium/High Reverb, Plate Reverb, Low/Medium/High Delay, Ping Pong Delay, Stereo/Cross/Mono Delay, Low/Medium/High Distortion, Phaser, Low/Medium/High Phaser, Bitcrush, High Bitcrush, Dry, Wet
-
-Think like a seasoned DJ. Write a brief rationale in 'reasoning' detailing your approach to energy, frequencies, and transition, then provide the resulting tracks.
-
-EXAMPLES OF VALID DIVERSE STEMS:
-- Synth, Pad, Warm, Airy, sustained, Medium Reverb
-- Bass, Synth Bass, Gritty, Deep, simple, Low Distortion
-- Mallet, Marimba, Sparkly, catchy, triplets, Low Delay
-- Bowed Strings, Violin, Silky, epic, melody, High Reverb
-- Keys, Rhodes Piano, Vintage, Smooth, chord progression, Dry
-- Guitar, Acoustic Guitar, Full, Clean, strummed, Low Reverb
-- Wind, Pan Flute, Breathy, Ambient, simple, High Delay
-- Vocal, Choir, Glassy, Dreamy, sustained, Plate Reverb
-- Brass, Trumpet, Punchy, Silky, melody, Medium Reverb
-- Plucked Strings, Harp, Sparkly, complex, arp, Medium Delay
-- Synth, 303, Acid, Buzzy, simple, Phaser
-- Bass, Wavetable Bass, Growl, Gritty, simple, High Distortion
-- Bass, 808 Bass, Deep, Heavy, simple, Low Reverb
-- Keys, Digital Piano, Bright, Pop, catchy, Medium Reverb
-- Bowed Strings, Cello, Dark, Rich, sustained, High Reverb
-- Mallet, Vibraphone, Mellow, Jazz, complex, Low Delay
-- Guitar, Electric Guitar, Overdriven, Rock, strummed, High Distortion
-- Wind, Ocarina, Airy, Ethnic, melody, High Delay
-- Vocal, Vox, Formant, Synthetic, catchy, Medium Delay
-- Plucked Strings, Banjo, Twangy, Fast, simple, Dry
+        self.system_instruction = """You are a professional AI DJ and Music Producer. Your goal is to guide the Automated DJ system by deciding which musical elements should be generated next based on the current state.
+Analyze the current BPM, Key, and active stems to create a coherent transition or evolution.
+Maintain a cohesive groove. You should keep core elements (like the primary bassline or main beat) the same across consecutive loops for stability, while slowly evolving or introducing new elements (like leads, pads, or fx) to keep the track interesting.
+Output a valid JSON object matching the requested schema.
 """
+        self.user_message_template = """Current State:
+BPM: {bpm}
+Key: {key}
+Active Stems: {stems}
+History: {history}
+Available Instruments: {instruments}
 
-        self.user_message_template = """
-=== CURRENT STATE ===
-- Master BPM: {bpm}
-- Master Key: {key}
-- Currently Active Stems: {stems}
-- Recent Mix History: {history}
-- Allowed Families: {instruments}
-
-Based on the current state, provide the next sequence of tracks to mix.
+Provide the next set of stems to maintain the vibe or evolve the sound.
 """
+        self._cached_client = None
+        self._cached_config = None
 
     def get_next_state(self, current_bpm, current_key, active_stems, user_override="", available_instruments=None, stem_history=None, llm_config=None):
         if available_instruments is None:
@@ -86,8 +44,14 @@ Based on the current state, provide the next sequence of tracks to mix.
         # Compact current
         simple_stems = [s.get('prompt', 'Unknown') for s in active_stems]
 
+        # Handle client caching
         if llm_config and llm_config.get('base_url'):
-            client = OpenAI(base_url=llm_config['base_url'], api_key=llm_config['api_key'])
+            config_key = (llm_config['base_url'], llm_config['api_key'], llm_config['model'])
+            if self._cached_config != config_key:
+                print(f"DEBUG: Creating new OpenAI client for {llm_config['base_url']}")
+                self._cached_client = OpenAI(base_url=llm_config['base_url'], api_key=llm_config['api_key'])
+                self._cached_config = config_key
+            client = self._cached_client
             model_name = llm_config['model']
         else:
             client = self.client
@@ -122,6 +86,7 @@ Based on the current state, provide the next sequence of tracks to mix.
                         "schema": {
                             "type": "object",
                             "properties": {
+                                "name": { "type": "string", "description": "A creative title for this set of tracks." },
                                 "reasoning": { "type": "string", "description": "Brief 1-sentence musical rationale." },
                                 "master_bpm": { "type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150] },
                                 "master_key": { "type": "string" },
@@ -146,7 +111,7 @@ Based on the current state, provide the next sequence of tracks to mix.
                                     }
                                 }
                             },
-                            "required": ["reasoning", "master_bpm", "master_key", "tracks"],
+                            "required": ["name", "reasoning", "master_bpm", "master_key", "tracks"],
                             "additionalProperties": False
                         }
                     }
@@ -160,6 +125,7 @@ Based on the current state, provide the next sequence of tracks to mix.
             print(f"CRITICAL LLM ERROR: {e}")
             # NO FALLBACK TRACKS. Returning error state.
             return {
+                "name": "Fallback Error State",
                 "master_bpm": current_bpm,
                 "master_key": current_key,
                 "tracks": [],

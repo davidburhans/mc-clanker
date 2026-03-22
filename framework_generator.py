@@ -61,16 +61,6 @@ class Generator:
         self.model = self.model.to(self.device)
         self.sample_rate = self.model.sample_rate
         print("Generator loaded successfully.")
-        
-        with open(config_path, "r") as f:
-            config = json.load(f)
-            
-        self.model = create_model_from_config(config)
-        state_dict = load_file(model_path, device=self.device)
-        self.model.load_state_dict(state_dict)
-        self.model = self.model.to(self.device)
-        self.sample_rate = self.model.sample_rate
-        print("Generator loaded successfully.")
 
     def generate_batch(self, requests, bpm, cfg_scale=7.0, steps=15):
         """

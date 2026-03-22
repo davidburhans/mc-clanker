@@ -1493,6 +1493,130 @@ select:hover {
     transform: translateX(4px);
 }
 
+/* --- Loop Counter --- */
+.loop-counter {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    background: rgba(255, 170, 0, 0.1);
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 170, 0, 0.3);
+    text-shadow: 0 0 10px rgba(255, 170, 0, 0.5);
+}
+
+/* --- Stem Mixer --- */
+.mixer-section {
+    margin-top: 20px;
+    flex: 1;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+}
+
+.stem-mixer {
+    padding: 14px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.stem-row {
+    background: var(--bg-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: all 0.2s;
+}
+
+.stem-row:hover {
+    border-color: var(--border-active);
+}
+
+.stem-info {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-normal);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.9;
+}
+
+.stem-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.stem-vol-slider {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    outline: none;
+}
+
+.stem-vol-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--accent-color);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 10px var(--accent-color);
+}
+
+.stem-btns {
+    display: flex;
+    gap: 5px;
+}
+
+.stem-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-dim);
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.stem-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.stem-btn.active-mute {
+    background: rgba(255, 68, 0, 0.2);
+    border-color: #ff4400;
+    color: #ff4400;
+    box-shadow: 0 0 10px rgba(255, 68, 0, 0.3);
+}
+
+.stem-btn.active-solo {
+    background: rgba(0, 240, 255, 0.2);
+    border-color: var(--cyan-glow);
+    color: var(--cyan-glow);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.3);
+}
+
+.stem-btn-dl {
+    background: rgba(0, 255, 136, 0.1);
+    border-color: rgba(0, 255, 136, 0.3);
+    color: #00ff88;
+}
+
+.stem-btn-dl:hover {
+    background: rgba(0, 255, 136, 0.2);
+    box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+}
+
 @keyframes timelineSlideIn {
     from {
         opacity: 0;
@@ -2114,7 +2238,26 @@ button:focus-visible,
     box-shadow: 0 0 15px rgba(0, 240, 255, 0.4);
 }
 
-/* ========== RESPONSIVE ========== */
+/* --- Generation Config (Settings Modal) --- */
+.settings-divider-wrapper {
+    margin: 20px 0 10px 0;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 5px;
+}
+
+.settings-divider {
+    font-size: 0.8rem;
+    font-family: 'Orbitron', sans-serif;
+    color: var(--accent-color);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+input[type="range"] {
+    width: 100%;
+    margin-top: 5px;
+}
+
 @media (max-width: 1300px) {
     .main-content {
         grid-template-columns: 1fr 300px 360px;
@@ -2149,3 +2292,211 @@ button:focus-visible,
         letter-spacing: 4px;
     }
 }
+
+/* ========== MISSING / PHASE 2 STYLES ========== */
+
+/* CSS variable alias for danger (used by JS toast) */
+:root {
+    --danger: var(--led-red);
+    --accent-color: var(--amber-glow);
+}
+
+/* ========== TOAST NOTIFICATIONS ========== */
+.toast-notification {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--bg-raised);
+    border: 1px solid var(--amber-dim);
+    border-radius: 10px;
+    padding: 12px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    color: var(--text-bright);
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.5),
+        0 0 20px rgba(255, 170, 0, 0.15);
+    z-index: 9999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    white-space: nowrap;
+    max-width: 480px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.toast-notification.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+/* ========== RECONNECT BUTTON ========== */
+.reconnect-btn {
+    margin-left: 8px;
+    font-size: 1.1rem;
+    color: var(--cyan-dim);
+}
+
+.reconnect-btn:hover {
+    color: var(--cyan-glow);
+    border-color: var(--cyan-dim);
+    box-shadow: 0 0 12px rgba(0, 240, 255, 0.3);
+    transform: translateY(-2px) rotate(30deg);
+}
+
+/* ========== VIBE INPUT ========== */
+.vibe-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.vibe-input-wrapper #vibe-input {
+    padding-right: 36px;
+    width: 100%;
+}
+
+.vibe-active-indicator {
+    position: absolute;
+    right: 10px;
+    font-size: 1rem;
+    color: var(--amber-glow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
+    text-shadow: 0 0 8px var(--amber-glow);
+    animation: sparkle 1.5s ease-in-out infinite;
+}
+
+.vibe-active-indicator.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+@keyframes sparkle {
+    0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.8; }
+    50%       { transform: scale(1.2) rotate(20deg); opacity: 1; }
+}
+
+.input-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 6px;
+}
+
+.input-hint {
+    font-size: 0.65rem;
+    color: var(--text-ghost);
+    font-style: italic;
+}
+
+.char-count {
+    font-size: 0.65rem;
+    color: var(--text-ghost);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 1px;
+}
+
+/* ========== ACTIVE VIBE DISPLAY ========== */
+.active-vibe-display {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(255, 170, 0, 0.08);
+    border: 1px solid rgba(255, 170, 0, 0.25);
+    border-radius: 8px;
+    margin-top: 6px;
+    animation: vibeAppear 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.active-vibe-display.visible {
+    display: flex;
+}
+
+@keyframes vibeAppear {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.active-vibe-label {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.5rem;
+    letter-spacing: 2px;
+    color: var(--amber-glow);
+    flex-shrink: 0;
+}
+
+.active-vibe-text {
+    font-size: 0.75rem;
+    color: var(--text-bright);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.clear-vibe-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.clear-vibe-btn:hover {
+    color: var(--led-red);
+    background: rgba(255, 34, 68, 0.1);
+}
+
+/* ========== OVERRIDE ACTIVE INDICATOR ========== */
+select.override-active {
+    border-color: var(--amber-glow) !important;
+    box-shadow: 0 0 12px rgba(255, 170, 0, 0.35);
+    color: var(--amber-glow);
+}
+
+/* ========== PASSWORD INPUT (SETTINGS) ========== */
+.password-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.password-input-wrapper input {
+    width: 100%;
+    padding-right: 44px;
+}
+
+.toggle-password {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 4px;
+    border-radius: 4px;
+    transition: color 0.2s;
+    line-height: 1;
+}
+
+.toggle-password:hover {
+    color: var(--amber-glow);
+}
+
+.setting-hint {
+    font-size: 0.68rem;
+    color: var(--text-ghost);
+    font-style: italic;
+    text-align: center;
+}
+

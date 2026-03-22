@@ -14,6 +14,7 @@ services:
       - LLM_MODEL=local-model
       - ICECAST_ENABLED=false
       - EXPORT_DIR=/exports
+      - DISABLE_LOCAL_AUDIO=1
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface:rw
       - ./exports:/exports:rw

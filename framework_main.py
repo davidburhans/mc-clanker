@@ -42,10 +42,10 @@ def run_framework_loop():
         loop_idx = 0
         while state.is_running:
             # Wait for user to hit Start
-            while not state.is_generating and state.is_running:
+            while not state.is_generating and state.is_running and not state.shutdown_event.is_set():
                 time.sleep(0.5)
                 
-            if not state.is_running: break
+            if not state.is_running or state.shutdown_event.is_set(): break
             
             loop_idx += 1
             print(f"\n[Loop {loop_idx}] Requesting track state from LLM Conductor...")
@@ -114,6 +114,7 @@ def run_framework_loop():
                 else:
                     state.current_key = next_state.get("master_key", current_key)
                     
+                state.current_set_name = next_state.get("name", "Unknown Set")
                 state.llm_reasoning = next_state.get("reasoning", "No reasoning provided.")
                 
                 # POPULATE UP NEXT SECTION IMMEDIATELY
@@ -137,38 +138,47 @@ def run_framework_loop():
             
             # 3. Preparation for generation
             loop_bars = max([t.get("bars", 8) for t in deduped_tracks] + [8])
+            if state.shutdown_event.is_set(): break
+            
             duration_seconds = calc_duration(state.current_bpm, loop_bars)
             loop_duration_samples = int(duration_seconds * mixer.sample_rate)
             
-            tracks_data = []
+            # Pre-allocate tracks_data and map cache Hits vs Misses
+            tracks_data = [None] * len(state.next_stems)
             new_generation_requests = []
             
-            for t in state.next_stems:
+            for i, t in enumerate(state.next_stems):
                 prompt = t["prompt"]
                 track_bars = t["bars"]
                 cache_key = f"{prompt}_{state.current_bpm}_{state.current_key}_{track_bars}"
                 
                 if cache_key in stem_cache:
                     print(f"Cache HIT: '{prompt}'")
-                    tracks_data.append(stem_cache[cache_key]["audio_data"])
+                    tracks_data[i] = stem_cache[cache_key]["audio_data"]
                     stem_cache[cache_key]["last_used"] = time.time()
                 else:
                     new_generation_requests.append({
                         "prompt": prompt,
                         "bars": track_bars,
                         "duration": calc_duration(state.current_bpm, track_bars),
-                        "cache_key": cache_key
+                        "cache_key": cache_key,
+                        "original_index": i
                     })
             
             # 4. Generate NEW stems in BATCH
             if new_generation_requests:
                 batch_results, sr = generator.generate_batch(
                     new_generation_requests,
-                    bpm=state.current_bpm
+                    bpm=state.current_bpm,
+                    cfg_scale=state.generation_cfg_scale,
+                    steps=state.generation_steps
                 )
                 for i, audio_data in enumerate(batch_results):
-                    tracks_data.append(audio_data)
-                    stem_cache[new_generation_requests[i]["cache_key"]] = {"audio_data": audio_data, "last_used": time.time()}
+                    req = new_generation_requests[i]
+                    tracks_data[req["original_index"]] = audio_data
+                    stem_cache[req["cache_key"]] = {"audio_data": audio_data, "last_used": time.time()}
+                    # Store for download later
+                    state.last_generated_stems[req["prompt"]] = audio_data
             
             # Cache maintenance
             current_time = time.time()
@@ -179,7 +189,7 @@ def run_framework_loop():
             if loop_idx == 1 or mixer.current_sample > next_loop_start_sample:
                 next_loop_start_sample = mixer.current_sample + int(mixer.sample_rate * 0.1)
                 
-            for audio_data in tracks_data:
+            for stem_idx, audio_data in enumerate(tracks_data):
                 # Ensure each stem fills the entire master loop duration by tiling if necessary
                 if len(audio_data) < loop_duration_samples:
                     # Tile (repeat) the audio until it meets or exceeds the required length
@@ -187,7 +197,7 @@ def run_framework_loop():
                     tiled_audio = np.tile(audio_data, (repeats, 1))
                     audio_data = tiled_audio[:loop_duration_samples, :]
                 
-                mixer.add_track(audio_data, next_loop_start_sample)
+                mixer.add_track(audio_data, next_loop_start_sample, stem_index=stem_idx)
             
             # 6. Wait for the loop to actually start playing
             samples_until_start = next_loop_start_sample - mixer.current_sample
@@ -202,6 +212,9 @@ def run_framework_loop():
                     if len(state.stem_history) > 8: state.stem_history.pop(0)
                 state.active_stems = list(state.next_stems)
                 state.next_stems = []
+                state.muted_stems.clear()
+                state.soloed_stems.clear()
+                state.stem_volumes.clear()
                 
             print(f"Loop {loop_idx} is now playing!")
             
@@ -210,6 +223,8 @@ def run_framework_loop():
             
             # 8. Buffer control: only sleep if we are already buffered ahead
             # We want to start the NEXT generation as soon as possible.
+            with state.lock:
+                state.loop_count += 1
             while state.is_running:
                 current_ahead = (next_loop_start_sample - mixer.current_sample) / mixer.sample_rate
                 if current_ahead > (duration_seconds * 1.1):
@@ -220,8 +235,13 @@ def run_framework_loop():
     except KeyboardInterrupt:
         print("\nStopping playback...")
     finally:
+        import torch
         state.is_running = False
         mixer.stop()
+        if hasattr(generator, 'model') and generator.model is not None:
+            del generator.model
+            torch.cuda.empty_cache()
+        stem_cache.clear()
         print("Done.")
 
 if __name__ == "__main__":

@@ -178,6 +178,18 @@
                     </div>
                 </div>
 
+                <!-- Stem Mixer -->
+                <div class="mixer-section">
+                    <div class="panel-header">
+                        <h3>STEM MIXER</h3>
+                        <div class="loop-counter" id="loop-counter">LOOP: 0</div>
+                    </div>
+                    <div class="stem-mixer" id="stem-mixer">
+                        <!-- Populated by JS -->
+                        <p class="placeholder">Start engine to see mixer</p>
+                    </div>
+                </div>
+
                 <!-- Export Section -->
                 <div class="export-section">
                     <div class="panel-header">
@@ -225,6 +237,19 @@
                     <label>LLM Model Name</label>
                     <input type="text" id="llm-model" value="local-model">
                 </div>
+
+                <div class="settings-divider-wrapper">
+                    <h3 class="settings-divider">Generation Config</h3>
+                </div>
+                <div class="setting-group">
+                    <label>CFG Scale: <span id="cfg-val">7.0</span></label>
+                    <input type="range" id="cfg-scale" min="1.0" max="15.0" step="0.5" value="7.0">
+                </div>
+                <div class="setting-group">
+                    <label>Steps: <span id="steps-val">15</span></label>
+                    <input type="range" id="steps-range" min="5" max="50" step="1" value="15">
+                </div>
+
                 <div class="setting-group">
                     <label>Icecast Enabled</label>
                     <input type="checkbox" id="icecast-enabled">
