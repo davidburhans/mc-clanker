@@ -187,13 +187,13 @@ def run_framework_loop():
                         "prompt": constructed_prompt,
                         "bpm": state.current_bpm,
                         "key": state.current_key,
-                        "bars": t.get("bars", 8),
+                        "bars": t.get("bars") or 8,
                         "_original_details": t # Save for retain actions
                     })
             print(f"Target Master BPM: {state.current_bpm} | Master Key: {state.current_key}")
             
             # 3. Preparation for generation
-            loop_bars = max([t.get("bars", 8) for t in deduped_tracks] + [8])
+            loop_bars = max([(t.get("bars") or 8) for t in deduped_tracks] + [8])
             if state.shutdown_event.is_set(): break
             
             duration_seconds = calc_duration(state.current_bpm, loop_bars)
