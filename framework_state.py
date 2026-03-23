@@ -50,7 +50,6 @@ class GlobalState:
         self.soloed_stems = set()
         self.loop_count = 0
         self.stem_ages = {} # index -> int (number of loops the stem has been active)
-        self.energy_level = 5 # 1-10 intensity
         self.last_actions = [] # List of descriptive action strings
         self.generation_cfg_scale = 7.0
         self.generation_steps = 50

@@ -19,7 +19,7 @@ def test_user_prompt_injection_low_density(mock_openai, conductor):
     # Setup mock response
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = '{"master_bpm": 120, "master_key": "C minor", "next_energy_level": 5, "actions": [], "reasoning": "test", "name": "test"}'
+    mock_response.choices[0].message.content = '{"master_bpm": 120, "master_key": "C minor", "actions": [], "reasoning": "test", "name": "test"}'
     mock_client.chat.completions.create.return_value = mock_response
     
     # Re-initialize conductor within the patch context for the test
@@ -28,13 +28,12 @@ def test_user_prompt_injection_low_density(mock_openai, conductor):
     
     # Setup active stems (only 1, which is low density)
     active_stems = [{"prompt": "Synth, Lead, Warm, melody, Medium Reverb, C minor"}]
-    
+
     # We need to capture the prompt sent to the client
     conductor.get_next_state(
         current_bpm=120,
         current_key="C minor",
-        active_stems=active_stems,
-        energy_level=5
+        active_stems=active_stems
     )
     
     # Check the call arguments
@@ -54,7 +53,7 @@ def test_user_prompt_injection_good_density(mock_openai, conductor):
     # Setup mock response
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = '{"master_bpm": 120, "master_key": "C minor", "next_energy_level": 8, "actions": [], "reasoning": "test", "name": "test"}'
+    mock_response.choices[0].message.content = '{"master_bpm": 120, "master_key": "C minor", "actions": [], "reasoning": "test", "name": "test"}'
     mock_client.chat.completions.create.return_value = mock_response
     
     # Set conductor client
@@ -71,8 +70,7 @@ def test_user_prompt_injection_good_density(mock_openai, conductor):
     conductor.get_next_state(
         current_bpm=120,
         current_key="C minor",
-        active_stems=active_stems,
-        energy_level=8
+        active_stems=active_stems
     )
     
     args, kwargs = mock_client.chat.completions.create.call_args

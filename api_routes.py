@@ -66,7 +66,6 @@ async def get_state():
             "target_bpm_override": state.target_bpm_override,
             "target_key_override": state.target_key_override,
             "loop_count": state.loop_count,
-            "energy_level": state.energy_level,
             "last_actions": state.last_actions,
         }
 
@@ -119,23 +118,33 @@ async def toggle_stem_solo(index: int):
 
 
 @router.get("/api/stems/{index}/download")
-async def download_stem(index: int):
+async def download_stem(index: int, set: str = "active"):
     """Download a single stem as WAV"""
     from fastapi.responses import Response
     import io
     import scipy.io.wavfile as wavfile
     import numpy as np
-    
+
     with state.lock:
-        if index >= len(state.active_stems):
+        if set == "previous":
+            stem_list = state.previous_stems
+            prefix = "prev"
+        elif set == "next":
+            stem_list = state.next_stems
+            prefix = "next"
+        else:
+            stem_list = state.active_stems
+            prefix = "stem"
+
+        if index >= len(stem_list):
             raise HTTPException(status_code=404, detail="Stem not found")
-        
-        prompt = state.active_stems[index].get("prompt")
+
+        prompt = stem_list[index].get("prompt")
         audio_data = state.last_generated_stems.get(prompt)
-        
+
         if audio_data is None:
             raise HTTPException(status_code=404, detail="Audio data not found for this stem")
-            
+
     # Convert numpy array to WAV bytes
     buf = io.BytesIO()
     # Foundation-1 typically outputs float32, convert to int16 for compatibility
@@ -143,13 +152,13 @@ async def download_stem(index: int):
         audio_int = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
     else:
         audio_int = audio_data
-        
+
     wavfile.write(buf, 44100, audio_int)
-    
+
     return Response(
         content=buf.getvalue(),
         media_type="audio/wav",
-        headers={"Content-Disposition": f"attachment; filename=stem_{index}.wav"}
+        headers={"Content-Disposition": f"attachment; filename={prefix}_{index}.wav"}
     )
 
 

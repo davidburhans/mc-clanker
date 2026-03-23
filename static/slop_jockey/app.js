@@ -71,8 +71,6 @@ class DJSlopApp {
         // Info
         this.reasoningBox = document.getElementById('reasoning-box');
         this.actionLog = document.getElementById('action-log');
-        this.energyMeterBar = document.getElementById('energy-meter-bar');
-        this.energyMeterValue = document.getElementById('energy-meter-value');
         this.currentTrackName = document.getElementById('current-track-name');
 
         // Export
@@ -212,9 +210,10 @@ class DJSlopApp {
                 if (!btn) return;
                 const action = btn.dataset.action;
                 const index = parseInt(btn.dataset.stemIndex);
+                const set = btn.dataset.stemSet || 'active';
                 if (action === 'mute') this.toggleStemMute(index);
                 else if (action === 'solo') this.toggleStemSolo(index);
-                else if (action === 'download') this.downloadStem(index);
+                else if (action === 'download') this.downloadStem(index, set);
             });
         }
     }
@@ -381,25 +380,6 @@ class DJSlopApp {
             this.loopCounter.textContent = `LOOP: ${data.loop_count}`;
         }
 
-        // Energy Meter
-        if (this.energyMeterBar && data.energy_level !== undefined) {
-            const level = data.energy_level;
-            this.energyMeterBar.style.width = `${level * 10}%`;
-            this.energyMeterValue.textContent = level;
-            
-            // Change color based on energy
-            if (level >= 8) {
-                this.energyMeterBar.style.background = 'var(--led-red)';
-                this.energyMeterBar.style.boxShadow = '0 0 15px var(--led-red)';
-            } else if (level >= 5) {
-                this.energyMeterBar.style.background = 'var(--amber-glow)';
-                this.energyMeterBar.style.boxShadow = '0 0 10px var(--amber-glow)';
-            } else {
-                this.energyMeterBar.style.background = 'var(--cyan-glow)';
-                this.energyMeterBar.style.boxShadow = '0 0 10px var(--cyan-glow)';
-            }
-        }
-
         // Action Log
         if (this.actionLog && data.last_actions) {
             const newActions = JSON.stringify(data.last_actions);
@@ -422,8 +402,8 @@ class DJSlopApp {
         const allStems = [];
 
         // Previous stems
-        this.state.prevStems.forEach(stem => {
-            allStems.push({ ...stem, position: 'previous' });
+        this.state.prevStems.forEach((stem, idx) => {
+            allStems.push({ ...stem, position: 'previous', index: idx });
         });
 
         // Current stems - merge with mixer data
@@ -442,8 +422,8 @@ class DJSlopApp {
         });
 
         // Next stems
-        this.state.nextStems.forEach(stem => {
-            allStems.push({ ...stem, position: 'next' });
+        this.state.nextStems.forEach((stem, idx) => {
+            allStems.push({ ...stem, position: 'next', index: idx });
         });
 
         if (allStems.length === 0) {
@@ -471,6 +451,7 @@ class DJSlopApp {
         const prompt = stem.prompt || '';
         const bars = stem.bars || '';
         const hasControls = stem.hasMixerControls && stem.index !== undefined;
+        const hasDownload = stem.position === 'previous' || hasControls;
 
         // Render tags
         const tags = prompt.split(',').map(tag => {
@@ -500,7 +481,14 @@ class DJSlopApp {
                     <div class="stem-btns">
                         <button class="stem-btn ${stem.is_muted ? 'active-mute' : ''}" data-action="mute" data-stem-index="${stem.index}">M</button>
                         <button class="stem-btn ${stem.is_soloed ? 'active-solo' : ''}" data-action="solo" data-stem-index="${stem.index}">S</button>
-                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}">↓</button>
+                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}" data-stem-set="${position}">↓</button>
+                    </div>
+                </div>
+                ` : ''}
+                ${hasDownload && !hasControls ? `
+                <div class="stem-controls">
+                    <div class="stem-btns">
+                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}" data-stem-set="${position}">↓</button>
                     </div>
                 </div>
                 ` : ''}
@@ -782,8 +770,8 @@ class DJSlopApp {
         }
     }
 
-    async downloadStem(index) {
-        window.open(`/api/stems/${index}/download`, '_blank');
+    async downloadStem(index, set = 'active') {
+        window.open(`/api/stems/${index}/download?set=${set}`, '_blank');
     }
 
     async updateGenerationConfig() {
@@ -1071,7 +1059,6 @@ class DJSlopApp {
                     data.current_key !== this.state.key ||
                     data.llm_reasoning !== this.state.reasoning ||
                     data.loop_count !== this.state.loop_count ||
-                    data.energy_level !== this.state.energy_level ||
                     JSON.stringify(data.active_stems) !== JSON.stringify(this.state.currentStems) ||
                     JSON.stringify(data.previous_stems) !== JSON.stringify(this.state.prevStems) ||
                     JSON.stringify(data.next_stems) !== JSON.stringify(this.state.nextStems) ||

@@ -16,15 +16,11 @@ You are in control of a live dance floor. The music MUST flow seamlessly and mai
 
 CRITICAL DJ & MUSIC THEORY RULES:
 1. FLOW & RETENTION: NEVER change everything at once. Keep transitions smooth by RETAINING most of the currently playing stems. Core rhythmic elements MUST stay consistent across most consecutive loops.
-2. GROOVE & RHYTHM (THE BEAT): Dance music relies heavily on a consistent drum beat. You MUST explicitly `add` 'Drums' or 'Percussion' (using the `major_family` tag) to provide the rhythmic foundation. A mix will lack momentum without drums. Ensure drums are actively playing during high energy sections (energy > 5).
+2. GROOVE & RHYTHM (THE BEAT): Dance music relies heavily on a consistent drum beat. You MUST explicitly `add` 'Drums' or 'Percussion' (using the `major_family` tag) to provide the rhythmic foundation. A mix will lack momentum without drums.
 3. HARMONIC MIXING: The backend automatically forces all instruments into the `master_key`. Your ONLY job regarding harmony is to decide if the overall `master_key` should change. Keep it the same for stability, or change it along compatible intervals when transitioning.
 4. FREQUENCY BALANCING: Prevent a muddy mix by avoiding frequency overlaps. DO NOT use multiple competing sub-basses or heavy low-end instruments simultaneously. Ensure a spread across Lows (Kick/Bass), Mids (Synths/Vocals/Pads), and Highs (Hats/Plucks).
 5. DENSITY & LAYERING: A professional, rich mix usually has 4 to 6 active stems. If the current 'Active Stems' list is sparse (1-3 stems), you MUST `add` more elements (Pads, Arps, Percussion, Leads) to fill out the frequency spectrum. Don't be afraid to layer multiple mid/high elements.
-6. ARRANGEMENT & ENERGY (SONG STRUCTURE): 
-   - Intro / Outro (Energy 1-3): Sparse elements (1-3 stems), atmospheric pads, light percussion.
-   - Build-up (Energy 4-7): Growing complexity (3-5 stems). Introduce Drums, fast high-hats, snare rolls, rising synths.
-   - The Drop / Chorus (Energy 8-10): Full mix (5-6 stems). All core elements active (Full Drums, Kick, Bass, Main Lead). Maximum impact.
-   - Breakdown (Energy 3-5): Drop the Lows (Remove/Mute Kick and Bass) and let 2-3 strings/pads/vocals breathe without the drum beat.
+6. STEM FRESHNESS: Stems that have been playing for more than 5-10 loops become stale and boring. You should prefer removing or replacing older stems (higher age values) to keep the mix fresh and evolving.
 7. Provide a 1-sentence 'reasoning' explaining your DJ choice based on these music theory principles.
 
 DJ ACTION RULES:
@@ -36,7 +32,6 @@ Output a valid JSON object matching the requested schema EXACTLY. Do not output 
         self.user_message_template = """Current State:
 Master BPM: {bpm}
 Master Key: {key}
-Current Energy Level: {energy} (1-10)
 Active Stems (Currently Playing):
 {stems}
 
@@ -47,24 +42,23 @@ Available Instrument Types:
 {instruments}
 
 YOUR TASK:
-Provide the next set of DJ actions and determine the new energy level.
+Provide the next set of DJ actions.
 Instead of generating a full tracklist, you must define an array of `actions`:
 - `retain`: Keep an active stem playing exactly as it is (REQUIRED for flow). You must provide its exact `stem_index`.
 - `add`: Introduce a NEW stem. Provide the full instrument parameters (major_family, sub_family, etc.).
 - `remove`: Stop an active stem from playing. Provide its `stem_index`.
 
 To keep the groove flowing, you SHOULD `retain` most of the 'Active Stems'. You should never have complete turn over of stems.
-CRITICAL: If the music needs rhythm or you are building energy, ensure you explicitly `add` a 'Drums' stem if one is not already playing!
+CRITICAL: If the music needs rhythm, ensure you explicitly `add` a 'Drums' stem if one is not already playing!
 DENSITY RULE: There are currently {stem_count} active stems. {density_directive}
-To evolve the track, you MAY `add` 1 to 2 new stems or `remove` an existing one to drop the energy.
+STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Prefer removing older stems to keep the mix fresh.
 
-Provide a `next_energy_level` (1-10) to track the intensity progression of the set.
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
 """
         self._cached_client = None
         self._cached_config = None
 
-    def get_next_state(self, current_bpm, current_key, active_stems, user_override="", available_instruments=None, stem_history=None, llm_config=None, energy_level=5):
+    def get_next_state(self, current_bpm, current_key, active_stems, user_override="", available_instruments=None, stem_history=None, llm_config=None):
         if available_instruments is None:
             available_instruments = ["Any"]
         if stem_history is None:
@@ -102,7 +96,6 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         user_prompt = self.user_message_template.format(
             bpm=current_bpm,
             key=current_key,
-            energy=energy_level,
             stems="\n".join(simple_stems) if simple_stems else "None",
             history=history_str if history_str else "None",
             instruments=", ".join(available_instruments),
@@ -133,7 +126,6 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                             "properties": {
                                 "master_bpm": { "type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150] },
                                 "master_key": { "type": "string", "enum": ["C major", "C minor", "C# major", "C# minor", "D major", "D minor", "D# major", "D# minor", "E major", "E minor", "F major", "F minor", "F# major", "F# minor", "G major", "G minor", "G# major", "G# minor", "A major", "A minor", "A# major", "A# minor", "B major", "B minor"] },
-                                "next_energy_level": { "type": "integer", "description": "1-10 energy level." },
                                 "actions": {
                                     "type": "array",
                                     "items": {
@@ -169,7 +161,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                             },
                                             {
                                                 "type": "object",
-                                                "description": "Remove a stem to drop energy or change the arrangement.",
+                                                "description": "Remove a stem to refresh the mix or change the arrangement.",
                                                 "properties": {
                                                     "action_type": { "type": "string", "const": "remove" },
                                                     "stem_index": { "type": "integer" }
@@ -183,7 +175,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                 "reasoning": { "type": "string", "description": "Brief 1-sentence musical rationale." },
                                 "name": { "type": "string", "description": "A creative title for this set of actions/tracks." }
                             },
-                            "required": ["master_bpm", "master_key", "actions", "next_energy_level", "reasoning", "name"],
+                            "required": ["master_bpm", "master_key", "actions", "reasoning", "name"],
                             "additionalProperties": False
                         }
                     }
@@ -207,7 +199,6 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                 "name": "Fallback Recovery State",
                 "master_bpm": current_bpm,
                 "master_key": current_key,
-                "next_energy_level": energy_level,
                 "actions": fallback_actions,
                 "reasoning": f"LLM FAILED ({e}). Automatically retaining current groove."
             }

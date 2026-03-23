@@ -88,8 +88,7 @@ def run_framework_loop():
             # 1. Get next section from LLM
             next_state = conductor.get_next_state(
                 current_bpm, current_key, active_stems,
-                user_override, available_instruments, stem_history, llm_config,
-                energy_level=state.energy_level
+                user_override, available_instruments, stem_history, llm_config
             )
 
             # 2. Process Actions to form the new deduped tracklist
@@ -97,8 +96,6 @@ def run_framework_loop():
             current_actions_log = []
 
             with state.lock:
-                state.energy_level = next_state.get("next_energy_level", state.energy_level)
-
                 for action in next_state.get("actions", []):
                     a_type = action.get("action_type")
                     idx = action.get("stem_index")
