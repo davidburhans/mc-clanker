@@ -31,6 +31,8 @@ mc-clanker transforms the Foundation-1 text-to-sample model into a continuous DJ
 └─────────────────────────────────────────────────────────────┘
 ```
 
+![mc-clanker DJ Interface](static/image.png)
+
 ## Features
 
 - **Professional DJ Interface**: Dark-themed UI with audio visualizer, transport controls, and real-time feedback
