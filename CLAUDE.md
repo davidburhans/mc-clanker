@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Slop Jockey is an AI-powered continuous music generator that transforms the Foundation-1 text-to-sample model into a DJ-style experience. It generates seamless, infinitely-running music tracks controlled by an LLM "Conductor" that decides track arrangement.
+mc-clanker is an AI-powered continuous music generator that transforms the Foundation-1 text-to-sample model into a DJ-style experience. It generates seamless, infinitely-running music tracks controlled by an LLM "Conductor" that decides track arrangement.
 
 ## Running the Application
 
@@ -25,7 +25,7 @@ python app_ui.py
 
 The application has two parallel UI interfaces:
 - **Gradio UI** at `/` - Dashboard-style interface
-- **DJ Web UI** at `/dj` - Custom HTML/JS interface in `static/slop_jockey/`
+- **DJ Web UI** at `/dj` - Custom HTML/JS interface in `static/mc-clanker/`
 
 ### Core Framework Pipeline
 

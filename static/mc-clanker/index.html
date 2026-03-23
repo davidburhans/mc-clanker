@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="AI-Powered Continuous Music Generator - DJ Interface">
+    <meta name="theme-color" content="#06060a">
+    <title>MC CLANKER // Neon Deck</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link id="main-css" rel="stylesheet" href="styles.css">
+    <script>document.getElementById('main-css').href += '?v=' + Date.now();</script>
+</head>
+<body>
+    <div class="floating-particles"></div>
+    <div class="dj-container">
+        <!-- Header -->
+        <header class="dj-header">
+            <div class="logo-section">
+                <h1 class="logo">MC CLANKER</h1>
+                <span class="tagline">AI-Powered Continuous Music Generator</span>
+            </div>
+            <div class="corner-accent"></div>
+            <div class="status-section">
+                <span id="status-indicator" class="status disconnected">Disconnected</span>
+                <button id="settings-btn" class="icon-btn" title="Settings">&#9881;</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left Panel - Visualizer & Transport -->
+            <div class="panel visualizer-panel">
+                <div class="visualizer-container">
+                    <canvas id="visualizer"></canvas>
+                    <div class="now-playing-overlay">
+                        <div class="track-info">
+                            <span class="label">NOW PLAYING</span>
+                            <h2 id="current-track-name">Waiting for track...</h2>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Transport Controls -->
+                <div class="transport-controls">
+                    <button id="play-btn" class="transport-btn play" title="Play/Pause" aria-label="Play or Pause" aria-pressed="false">
+                        <span class="play-icon">&#9658;</span>
+                        <span class="pause-icon">&#10074;&#10074;</span>
+                    </button>
+                    <button id="stop-btn" class="transport-btn stop" title="Stop" aria-label="Stop and Reset">
+                        <span>&#9632;</span>
+                    </button>
+                    <div class="volume-control">
+                        <span class="volume-icon">&#128266;</span>
+                        <input type="range" id="volume-slider" min="0" max="100" value="80">
+                        <span id="volume-value">80%</span>
+                    </div>
+                    <button id="reconnect-btn" class="icon-btn reconnect-btn" title="Reconnect Stream" aria-label="Reconnect Stream">&#8635;</button>
+                    <span class="keyboard-hint">Space to play/pause</span>
+                </div>
+            </div>
+
+            <!-- Center Panel - DJ Controls -->
+            <div class="panel dj-controls-panel">
+                <div class="panel-header">
+                    <h3>DJ CONTROLS</h3>
+                </div>
+
+                <!-- BPM & Key -->
+                <div class="control-row">
+                    <div class="control-group">
+                        <label>BPM</label>
+                        <div class="value-display" id="bpm-display">120</div>
+                        <select id="bpm-override">
+                            <option value="">Auto</option>
+                            <option value="100">100</option>
+                            <option value="110">110</option>
+                            <option value="120">120</option>
+                            <option value="128">128</option>
+                            <option value="130">130</option>
+                            <option value="140">140</option>
+                            <option value="150">150</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label>KEY</label>
+                        <div class="value-display" id="key-display">C minor</div>
+                        <select id="key-override">
+                            <option value="">Auto</option>
+                            <option value="C major">C major</option>
+                            <option value="C minor">C minor</option>
+                            <option value="C# major">C# major</option>
+                            <option value="C# minor">C# minor</option>
+                            <option value="D major">D major</option>
+                            <option value="D minor">D minor</option>
+                            <option value="D# major">D# major</option>
+                            <option value="D# minor">D# minor</option>
+                            <option value="E major">E major</option>
+                            <option value="E minor">E minor</option>
+                            <option value="F major">F major</option>
+                            <option value="F minor">F minor</option>
+                            <option value="F# major">F# major</option>
+                            <option value="F# minor">F# minor</option>
+                            <option value="G major">G major</option>
+                            <option value="G minor">G minor</option>
+                            <option value="G# major">G# major</option>
+                            <option value="G# minor">G# minor</option>
+                            <option value="A major">A major</option>
+                            <option value="A minor">A minor</option>
+                            <option value="A# major">A# major</option>
+                            <option value="A# minor">A# minor</option>
+                            <option value="B major">B major</option>
+                            <option value="B minor">B minor</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Vibe Input -->
+                <div class="control-group full-width">
+                    <label>VIBE / CONTEXT</label>
+                    <div class="vibe-input-wrapper">
+                        <input type="text" id="vibe-input" placeholder="e.g. 'Make it aggressive', 'Cyberpunk night drive'" maxlength="200">
+                        <span class="vibe-active-indicator" id="vibe-active-indicator" title="Custom vibe active">&#10038;</span>
+                    </div>
+                    <div class="active-vibe-display" id="active-vibe-display">
+                        <span class="active-vibe-label">ACTIVE</span>
+                        <span class="active-vibe-text" id="active-vibe-text"></span>
+                        <button class="clear-vibe-btn" id="clear-vibe-btn" title="Clear vibe">&#10005;</button>
+                    </div>
+                    <div class="input-footer">
+                        <span class="input-hint">Press Enter or click "Apply All Settings"</span>
+                        <span class="char-count" id="vibe-char-count">0/200</span>
+                    </div>
+                </div>
+
+                <!-- Instrument Rack -->
+                <div class="instrument-rack" id="instrument-rack">
+                    <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="instrument-categories">
+                        <h3>INSTRUMENT RACK</h3>
+                        <span class="collapse-icon" aria-hidden="true">&#9660;</span>
+                    </div>
+                    <div class="instrument-categories" id="instrument-categories">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Apply Button -->
+                <button id="apply-all-btn" class="primary-btn">Apply All Settings</button>
+            </div>
+
+            <!-- Right Panel - Conductor & Timeline -->
+            <div class="panel info-panel">
+                <!-- Conductor Reasoning -->
+                <div class="reasoning-section">
+                    <div class="panel-header">
+                        <h3>CONDUCTOR REASONING</h3>
+                    </div>
+                    <div class="reasoning-box" id="reasoning-box">
+                        <p class="placeholder">Initializing engine...</p>
+                    </div>
+                    <div class="action-log" id="action-log">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Stem Deck (combined timeline + mixer) -->
+                <div class="stem-deck-section">
+                    <div class="panel-header">
+                        <h3>STEM DECK</h3>
+                        <div class="loop-counter" id="loop-counter">LOOP: 0</div>
+                    </div>
+                    <div class="stem-deck" id="stem-deck">
+                        <!-- Populated by JS -->
+                        <p class="placeholder">Start engine to see stems</p>
+                    </div>
+                </div>
+
+                <!-- Export Section -->
+                <div class="export-section">
+                    <div class="panel-header">
+                        <h3>EXPORT</h3>
+                    </div>
+                    <div class="export-controls">
+                        <button id="record-btn" class="record-btn">
+                            <span class="record-icon">&#9679;</span>
+                            <span id="record-label">Record to File</span>
+                        </button>
+                        <select id="export-format">
+                            <option value="wav">WAV</option>
+                            <option value="mp3">MP3</option>
+                        </select>
+                    </div>
+                    <div class="recording-indicator" id="recording-indicator">
+                        <span class="rec-dot">&#9679;</span>
+                        <span id="recording-time">00:00</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="close-btn" id="close-settings">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label>LLM API Base URL</label>
+                    <input type="text" id="llm-url" value="" placeholder="http://localhost:1234/v1">
+                </div>
+                <div class="setting-group">
+                    <label>LLM API Key</label>
+                    <div class="password-input-wrapper">
+                        <input type="password" id="llm-key" value="not-needed">
+                        <button type="button" class="toggle-password" id="toggle-password" aria-label="Show password">&#128065;</button>
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label>LLM Model Name</label>
+                    <input type="text" id="llm-model" value="local-model">
+                </div>
+
+                <div class="settings-divider-wrapper">
+                    <h3 class="settings-divider">Generation Config</h3>
+                </div>
+                <div class="setting-group">
+                    <label>CFG Scale: <span id="cfg-val">7.0</span></label>
+                    <input type="range" id="cfg-scale" min="1.0" max="15.0" step="0.5" value="7.0">
+                </div>
+                <div class="setting-group">
+                    <label>Steps: <span id="steps-val">50</span></label>
+                    <input type="range" id="steps-range" min="5" max="150" step="1" value="50">
+                </div>
+
+                <div class="setting-group">
+                    <label>Icecast Enabled</label>
+                    <input type="checkbox" id="icecast-enabled">
+                </div>
+                <p class="setting-hint">Press Enter to save settings</p>
+            </div>
+            <div class="modal-footer">
+                <button id="test-connection-btn" class="secondary-btn">Test Connection</button>
+                <button id="save-settings-btn" class="primary-btn">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stop Confirmation Modal -->
+    <div id="stop-modal" class="modal stop-modal">
+        <div class="modal-content stop-modal-content">
+            <div class="stop-modal-icon">&#9888;</div>
+            <h2>Reset Engine?</h2>
+            <p>This will stop playback and clear all current state. This action cannot be undone.</p>
+            <div class="stop-modal-actions">
+                <button id="stop-cancel-btn" class="secondary-btn">Cancel</button>
+                <button id="stop-confirm-btn" class="danger-btn">Reset Engine</button>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audio-player" crossorigin="anonymous"></audio>
+    <script src="app.js"></script>
+</body>
+</html>

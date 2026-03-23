@@ -1,14 +1,14 @@
-# Slop Jockey
+# mc-clanker
 
 AI-Powered Continuous Music Generator - A professional DJ-style interface for real-time music generation using Foundation-1.
 
 ## Overview
 
-Slop Jockey transforms the Foundation-1 text-to-sample model into a continuous DJ experience. Instead of generating individual samples, it creates seamless, infinitely-running music tracks controlled by AI conductor logic.
+mc-clanker transforms the Foundation-1 text-to-sample model into a continuous DJ experience. Instead of generating individual samples, it creates seamless, infinitely-running music tracks controlled by AI conductor logic.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      SLOP JOCKEY                             │
+│                      MC-CLANKER                               │
 │                   AI DJ Interface                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
@@ -95,7 +95,7 @@ python app_ui.py
 
 ### LLM Setup
 
-Slop Jockey requires a local LLM backend with an OpenAI-compatible API:
+mc-clanker requires a local LLM backend with an OpenAI-compatible API:
 
 ```bash
 # Example with Ollama
@@ -185,7 +185,7 @@ To enable Icecast output, uncomment the `icecast` service in `docker-compose.yml
 
 ```yaml
 services:
-  slop-jockey:
+  mc-clanker:
     # ... existing config ...
 
   icecast:
@@ -230,11 +230,11 @@ podman exec <container> nvidia-smi
 ## File Structure
 
 ```
-slop-jockey/
+mc-clanker/
 ├── app_ui.py           # Main FastAPI app with Gradio + DJ UI
 ├── api_routes.py       # REST API endpoints
 ├── framework_*.py      # Audio generation pipeline
-├── static/slop_jockey/     # DJ web interface assets
+├── static/mc-clanker/      # DJ web interface assets
 │   ├── index.html
 │   ├── styles.css
 │   └── app.js

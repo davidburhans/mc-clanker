@@ -1,5 +1,5 @@
 services:
-  slop-jockey:
+  mc-clanker:
     build:
       context: .
       dockerfile: Dockerfile

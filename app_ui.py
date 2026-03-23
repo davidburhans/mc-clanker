@@ -239,7 +239,7 @@ app.include_router(api_router)
 
 # Mount static files for DJ UI
 static_dir = os.path.join(
-    os.path.abspath(os.path.dirname(__file__)), "static", "slop_jockey"
+    os.path.abspath(os.path.dirname(__file__)), "static", "mc-clanker"
 )
 if os.path.exists(static_dir):
     app.mount("/dj", StaticFiles(directory=static_dir, html=True), name="dj_ui")

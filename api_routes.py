@@ -250,7 +250,7 @@ async def start_export(req: ExportStartRequest):
     os.makedirs(export_dir, exist_ok=True)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"slop_jockey_{timestamp}.{req.format}"
+    filename = f"mc_clanker_{timestamp}.{req.format}"
     file_path = os.path.join(export_dir, filename)
 
     with state.lock:
