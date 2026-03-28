@@ -50,17 +50,33 @@ FOUNDATION_1_MODEL = {
         "Pan Flute",
     ],
     "timbre_tags": [
-        "Warm", "Bright", "Wide", "Airy", "Thick", "Rich", "Tight", "Full",
-        "Gritty", "Clean", "Retro", "Saw", "Crisp", "Focused", "Metallic",
-        "Chiptune", "Dark", "303", "Shiny", "Analog", "Present", "Sparkly",
-        "Ambient", "Soft", "Smooth", "Cold", "Buzzy", "Deep", "Formant Vocal",
-        "Round", "Punchy", "Nasal", "Vintage", "Growl", "Breathy", "Glassy",
-        "Noisy", "Synthetic Vox", "Supersaw", "Bitcrushed", "Dreamy",
-        "Upper Mids", "Mids", "Highs", "Low Mids", "Shiny", "Sparkly", "Silky",
-        "Glass", "Woody", "Rubbery", "Square", "Triangle",
-        "Pitch Bend", "Filter", "Bitcrushed", "Growl", "Biting", "Harsh",
-        "Overdriven", "Acid", "Reese", "Siren", "Muffled", "Veiled", "Boomy", "Rumble",
+        # Frequency/Brightness
+        "Upper Mids", "Mids", "Highs", "Low Mids",
+        "Bright", "Dark", "Shiny", "Sparkly",
+        "Warm", "Cold", "Silky", "Glass", "Glassy",
+        # Texture/Character
+        "Clean", "Gritty", "Retro", "Analog",
+        "Crisp", "Focused", "Metallic", "Chiptune",
+        "Woody", "Rubbery", "Buzzy", "Vintage",
+        # Spatial/Dynamic
+        "Wide", "Thick", "Thin", "Full",
+        "Near", "Far", "Rich", "Tight",
+        "Punchy", "Plucked", "Snappy", "Staccato",
+        # Modulation/Effects
+        "Saw", "Square", "Triangle",
+        "Pitch Bend", "Filter", "Bitcrush", "Bitcrushed",
+        "Growl", "Biting", "Harsh", "Overdriven",
+        "Acid", "Reese", "Siren",
+        # Environmental
+        "Spacey", "Ambient", "Muffled", "Veiled",
+        "Boomy", "Deep", "Rumble",
         "White Noise", "Laser", "FX",
+        # Formant/Vocal
+        "Formant Vocal", "Synthetic Vox",
+        # Other
+        "Round", "Nasal", "Noisy", "Dreamy", "Supersaw",
+        "Airy", "Breathy", "Present",
+        "303",
     ],
     "notation_tags": [
         "chord progression", "melody", "top melody", "arp", "triplets",
@@ -83,6 +99,9 @@ FOUNDATION_1_MODEL = {
 # Infinite Pianos model definition
 INFINITE_PIANOS_MODEL = {
     "id": "infinite-pianos",
+    "repo_id": "RoyalCities/RC_Infinite_Pianos",
+    "description": "Specialized piano model. BEST at: Chord Progressions with Melodies. OK at: Chord Progressions only. AVOID: Melody Only.",
+    "major_families": ["Keys", "Piano", "Mallet"],
     "sub_families": [
         "Grand Piano", "Soft E. Piano", "Medium E. Piano"
     ],
@@ -116,6 +135,8 @@ INFINITE_PIANOS_MODEL = {
 # Vocal Textures model definition
 VOCAL_TEXTURES_MODEL = {
     "id": "vocal-textures",
+    "repo_id": "RoyalCities/Vocal_Textures_Main",
+    "description": "Specialized vocal textures. BEST at: Chord Progressions. AVOID: Melodies.",
     "major_families": ["Vocal", "Choir", "Pad", "Atmosphere"],
     "sub_families": ["Male Vocal Texture", "Female Vocal Texture", "Ensemble Vocal Texture"],
     "notation_tags": ["chord progression"],

@@ -35,12 +35,36 @@ def test_all_models_have_ids():
 
 
 def test_timbre_tags_f1_match_hf_docs():
-    expected = {"Warm", "Bright", "Wide", "Airy", "Thick", "Rich", "Tight", "Full",
-                "Gritty", "Clean", "Retro", "Saw", "Crisp", "Focused", "Metallic",
-                "Chiptune", "Dark", "303", "Shiny", "Analog", "Present", "Sparkly",
-                "Ambient", "Soft", "Smooth", "Cold", "Buzzy", "Deep", "Formant Vocal",
-                "Round", "Punchy", "Nasal", "Vintage", "Growl", "Breathy", "Glassy",
-                "Noisy", "Synthetic Vox", "Supersaw", "Bitcrushed", "Dreamy"}
+    # From HF Master Tag Reference — exact timbre tags Foundation-1 was trained on
+    expected = {
+        # Frequency/Brightness
+        "Upper Mids", "Mids", "Highs", "Low Mids",
+        "Bright", "Dark", "Shiny", "Sparkly",
+        "Warm", "Cold", "Silky", "Glass", "Glassy",
+        # Texture/Character
+        "Clean", "Gritty", "Retro", "Analog",
+        "Crisp", "Focused", "Metallic", "Chiptune",
+        "Woody", "Rubbery", "Buzzy", "Vintage",
+        # Spatial/Dynamic
+        "Wide", "Thick", "Thin", "Full",
+        "Near", "Far", "Rich", "Tight",
+        "Punchy", "Plucked", "Snappy", "Staccato",
+        # Modulation/Effects
+        "Saw", "Square", "Triangle",
+        "Pitch Bend", "Filter", "Bitcrush", "Bitcrushed",
+        "Growl", "Biting", "Harsh", "Overdriven",
+        "Acid", "Reese", "Siren",
+        # Environmental
+        "Spacey", "Ambient", "Muffled", "Veiled",
+        "Boomy", "Deep", "Rumble",
+        "White Noise", "Laser", "FX",
+        # Formant/Vocal
+        "Formant Vocal", "Synthetic Vox",
+        # Other
+        "Round", "Nasal", "Noisy", "Dreamy", "Supersaw",
+        "Airy", "Breathy", "Present",
+        "303",
+    }
     assert set(TIMBRE_TAGS_F1) == expected
 
 

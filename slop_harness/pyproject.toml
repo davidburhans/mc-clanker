@@ -21,9 +21,8 @@ dev = [
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-include = ["slop_harness*"]
-exclude = ["tests*"]
+[tool.setuptools]
+packages.find = {where = ["."], include = ["slop_harness*"]}
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
