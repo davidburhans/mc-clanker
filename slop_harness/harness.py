@@ -14,7 +14,6 @@ from random import Random
 from slop_harness.checkpoint import CheckpointManager
 from slop_harness.dataset_writer import DatasetWriter
 from slop_harness.llm_client import LLMClient
-from slop_harness.models import BPMS_ALL, KEYS_ALL
 from slop_harness.prompt_builder import PromptBuilder
 from slop_harness.state_generator import StateGenerator
 from slop_harness.vibe_prompt_bank import VibePromptBank
@@ -130,8 +129,8 @@ async def run_batch(
         if isinstance(result, Exception):
             logger.error(f"Task exception batch={batch_id} i={i}: {result}")
             continue
-        if result is None:
-            # LLM failed
+        if not isinstance(result, dict):
+            # LLM returned None or unexpected type
             continue
 
         # Extract the three messages + response
