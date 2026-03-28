@@ -12,31 +12,22 @@ def test_system_instruction_contains_density_rule(conductor):
 
 @patch('framework_conductor.OpenAI')
 def test_user_prompt_injection_low_density(mock_openai, conductor):
-    # Setup mock client and response
     mock_client = MagicMock()
     mock_openai.return_value = mock_client
-    
-    # Setup mock response
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
     mock_response.choices[0].message.content = '{"master_bpm": 120, "master_key": "C minor", "actions": [], "reasoning": "test", "name": "test"}'
     mock_client.chat.completions.create.return_value = mock_response
-    
-    # Re-initialize conductor within the patch context for the test
-    # Or just set its client manually for simplicity
     conductor.client = mock_client
     
-    # Setup active stems (only 1, which is low density)
     active_stems = [{"prompt": "Synth, Lead, Warm, melody, Medium Reverb, C minor"}]
 
-    # We need to capture the prompt sent to the client
     conductor.get_next_state(
         current_bpm=120,
         current_key="C minor",
         active_stems=active_stems
     )
     
-    # Check the call arguments
     args, kwargs = mock_client.chat.completions.create.call_args
     messages = kwargs['messages']
     user_message = next(m['content'] for m in messages if m['role'] == 'user')
@@ -46,20 +37,14 @@ def test_user_prompt_injection_low_density(mock_openai, conductor):
 
 @patch('framework_conductor.OpenAI')
 def test_user_prompt_injection_good_density(mock_openai, conductor):
-    # Setup mock client and response
     mock_client = MagicMock()
     mock_openai.return_value = mock_client
-    
-    # Setup mock response
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
     mock_response.choices[0].message.content = '{"master_bpm": 120, "master_key": "C minor", "actions": [], "reasoning": "test", "name": "test"}'
     mock_client.chat.completions.create.return_value = mock_response
-    
-    # Set conductor client
     conductor.client = mock_client
     
-    # Setup active stems (4, which is good density)
     active_stems = [
         {"prompt": "Drums, Kick, Driving, simple, Dry, C minor"},
         {"prompt": "Bass, Sub, Thick, sustained, Low Reverb, C minor"},
@@ -79,3 +64,34 @@ def test_user_prompt_injection_good_density(mock_openai, conductor):
     
     assert "DENSITY RULE: There are currently 4 active stems." in user_message
     assert "The mix density is good. Maintain 4-6 stems for a full sound." in user_message
+
+@patch('framework_conductor.OpenAI')
+def test_user_prompt_injection_available_models(mock_openai, conductor):
+    mock_client = MagicMock()
+    mock_openai.return_value = mock_client
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = '{"master_bpm": 120, "master_key": "C minor", "actions": [], "reasoning": "test", "name": "test"}'
+    mock_client.chat.completions.create.return_value = mock_response
+    conductor.client = mock_client
+    
+    active_stems = []
+    available_models_info = [
+        {"id": "model_1", "description": "Good for bass."},
+        {"id": "model_2", "description": "Good for piano."}
+    ]
+    
+    conductor.get_next_state(
+        current_bpm=120,
+        current_key="C minor",
+        active_stems=active_stems,
+        available_models=available_models_info
+    )
+    
+    args, kwargs = mock_client.chat.completions.create.call_args
+    messages = kwargs['messages']
+    user_message = next(m['content'] for m in messages if m['role'] == 'user')
+    
+    assert "Available AI Generator Models:" in user_message
+    assert "- model_1: Good for bass." in user_message
+    assert "- model_2: Good for piano." in user_message

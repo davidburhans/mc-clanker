@@ -4,11 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="description" content="AI-Powered Continuous Music Generator - DJ Interface">
-    <meta name="theme-color" content="#06060a">
+    <meta name="theme-color" content="#03030a">
     <title>MC CLANKER // Neon Deck</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800&family=Fira+Code:wght@400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link id="main-css" rel="stylesheet" href="styles.css">
     <script>document.getElementById('main-css').href += '?v=' + Date.now();</script>
 </head>
@@ -22,9 +22,20 @@
                 <span class="tagline">AI-Powered Continuous Music Generator</span>
             </div>
             <div class="corner-accent"></div>
-            <div class="status-section">
-                <span id="status-indicator" class="status disconnected">Disconnected</span>
-                <button id="settings-btn" class="icon-btn" title="Settings">&#9881;</button>
+            <div class="header-right">
+                <div class="loop-badge" id="loop-badge">
+                    <span class="loop-label">LOOP</span>
+                    <span class="loop-value" id="header-loop-counter">0</span>
+                </div>
+                <div class="status-section">
+                    <span id="status-indicator" class="status disconnected">Disconnected</span>
+                    <button id="settings-btn" class="icon-btn" title="Settings">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+                        </svg>
+                    </button>
+                </div>
             </div>
         </header>
 
@@ -40,40 +51,117 @@
                             <h2 id="current-track-name">Waiting for track...</h2>
                         </div>
                     </div>
+                    <!-- VU Meter decoration -->
+                    <div class="vu-meters">
+                        <div class="vu-bar"><div class="vu-fill" id="vu-left"></div></div>
+                        <div class="vu-bar"><div class="vu-fill" id="vu-right"></div></div>
+                    </div>
                 </div>
 
                 <!-- Transport Controls -->
                 <div class="transport-controls">
-                    <button id="play-btn" class="transport-btn play" title="Play/Pause" aria-label="Play or Pause" aria-pressed="false">
-                        <span class="play-icon">&#9658;</span>
-                        <span class="pause-icon">&#10074;&#10074;</span>
-                    </button>
-                    <button id="stop-btn" class="transport-btn stop" title="Stop" aria-label="Stop and Reset">
-                        <span>&#9632;</span>
-                    </button>
-                    <div class="volume-control">
-                        <span class="volume-icon">&#128266;</span>
-                        <input type="range" id="volume-slider" min="0" max="100" value="80">
-                        <span id="volume-value">80%</span>
+                    <div class="transport-left">
+                        <button id="stop-btn" class="transport-btn stop" title="Stop" aria-label="Stop and Reset">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <rect x="6" y="6" width="12" height="12" rx="1"/>
+                            </svg>
+                        </button>
                     </div>
-                    <button id="reconnect-btn" class="icon-btn reconnect-btn" title="Reconnect Stream" aria-label="Reconnect Stream">&#8635;</button>
-                    <span class="keyboard-hint">Space to play/pause</span>
+                    <button id="play-btn" class="transport-btn play" title="Play/Pause" aria-label="Play or Pause" aria-pressed="false">
+                        <span class="play-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <polygon points="8,5 20,12 8,19"/>
+                            </svg>
+                        </span>
+                        <span class="pause-icon">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                                <rect x="6" y="5" width="4" height="14" rx="1"/>
+                                <rect x="14" y="5" width="4" height="14" rx="1"/>
+                            </svg>
+                        </span>
+                    </button>
+                    <div class="transport-right">
+                        <button id="reconnect-btn" class="icon-btn reconnect-btn" title="Reconnect Stream" aria-label="Reconnect Stream">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6M1 20v-6h6"/>
+                                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                            </svg>
+                        </button>
+                        <div class="volume-control">
+                            <svg class="volume-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                                <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14"/>
+                            </svg>
+                            <input type="range" id="volume-slider" min="0" max="100" value="80">
+                            <span id="volume-value">80</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="keyboard-hint">
+                    <kbd>Space</kbd> Play/Pause
+                </div>
+
+                <!-- Show Control -->
+                <div class="show-control-bar" id="show-control-bar">
+                    <div class="show-mode-indicator">
+                        <span class="mode-label">SHOW MODE</span>
+                        <div class="mode-toggle">
+                            <span class="mode-option" id="mode-ambient">AMBIENT</span>
+                            <span class="mode-divider">|</span>
+                            <span class="mode-option active" id="mode-live">LIVE</span>
+                        </div>
+                    </div>
+                    <button id="start-show-btn" class="show-btn start-show">
+                        <svg class="start-show-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <polygon points="8,5 20,12 8,19"/>
+                        </svg>
+                        <span>START SHOW</span>
+                        <div class="start-show-pulse"></div>
+                    </button>
+                    <div id="show-live-indicator" class="show-live-indicator hidden">
+                        <div class="show-live-badge">
+                            <span class="live-dot"></span>
+                            <span class="live-text">ON AIR</span>
+                        </div>
+                        <div class="show-queue-status" id="show-queue-status">
+                            <svg class="queue-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <polyline points="12 6 12 12 16 14"/>
+                            </svg>
+                            <span class="queue-text" id="queue-text">0:00 in queue</span>
+                        </div>
+                        <div class="show-status-text" id="show-status-text">Audience Connected</div>
+                        <button id="end-show-btn" class="show-btn end-show">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="6" y="6" width="12" height="12" rx="2"/>
+                            </svg>
+                            <span>END SHOW</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
+
             <!-- Center Panel - DJ Controls -->
             <div class="panel dj-controls-panel">
-                <div class="panel-header">
-                    <h3>DJ CONTROLS</h3>
-                </div>
-
-                <!-- BPM & Key -->
-                <div class="control-row">
-                    <div class="control-group">
-                        <label>BPM</label>
-                        <div class="value-display" id="bpm-display">120</div>
-                        <select id="bpm-override">
+                <!-- BPM & Key - Large Display Style -->
+                <div class="tempo-section">
+                    <div class="tempo-knob-group">
+                        <div class="tempo-display" id="bpm-display">
+                            <span class="tempo-value">120</span>
+                            <span class="tempo-label">BPM</span>
+                        </div>
+                        <div class="tempo-presets">
+                            <button class="tempo-preset" data-bpm="90">90</button>
+                            <button class="tempo-preset" data-bpm="120">120</button>
+                            <button class="tempo-preset" data-bpm="128">128</button>
+                            <button class="tempo-preset" data-bpm="140">140</button>
+                        </div>
+                        <select id="bpm-override" class="tempo-select">
                             <option value="">Auto</option>
+                            <option value="80">80</option>
+                            <option value="90">90</option>
                             <option value="100">100</option>
                             <option value="110">110</option>
                             <option value="120">120</option>
@@ -81,12 +169,41 @@
                             <option value="130">130</option>
                             <option value="140">140</option>
                             <option value="150">150</option>
+                            <option value="160">160</option>
                         </select>
                     </div>
-                    <div class="control-group">
-                        <label>KEY</label>
-                        <div class="value-display" id="key-display">C minor</div>
-                        <select id="key-override">
+                    <div class="key-display-container">
+                        <div class="key-wheel" id="key-display" title="Click to change key">Cm</div>
+                        <div class="key-picker-grid" id="key-picker-grid">
+                            <!-- Major keys -->
+                            <button class="key-pick-btn major" data-key="C major">C</button>
+                            <button class="key-pick-btn major" data-key="C# major">C#</button>
+                            <button class="key-pick-btn major" data-key="D major">D</button>
+                            <button class="key-pick-btn major" data-key="D# major">D#</button>
+                            <button class="key-pick-btn major" data-key="E major">E</button>
+                            <button class="key-pick-btn major" data-key="F major">F</button>
+                            <button class="key-pick-btn major" data-key="F# major">F#</button>
+                            <button class="key-pick-btn major" data-key="G major">G</button>
+                            <button class="key-pick-btn major" data-key="G# major">G#</button>
+                            <button class="key-pick-btn major" data-key="A major">A</button>
+                            <button class="key-pick-btn major" data-key="A# major">A#</button>
+                            <button class="key-pick-btn major" data-key="B major">B</button>
+                            <!-- Minor keys -->
+                            <button class="key-pick-btn minor" data-key="C minor">Cm</button>
+                            <button class="key-pick-btn minor" data-key="C# minor">C#m</button>
+                            <button class="key-pick-btn minor" data-key="D minor">Dm</button>
+                            <button class="key-pick-btn minor" data-key="D# minor">D#m</button>
+                            <button class="key-pick-btn minor" data-key="E minor">Em</button>
+                            <button class="key-pick-btn minor" data-key="F minor">Fm</button>
+                            <button class="key-pick-btn minor" data-key="F# minor">F#m</button>
+                            <button class="key-pick-btn minor" data-key="G minor">Gm</button>
+                            <button class="key-pick-btn minor" data-key="G# minor">G#m</button>
+                            <button class="key-pick-btn minor" data-key="A minor">Am</button>
+                            <button class="key-pick-btn minor" data-key="A# minor">A#m</button>
+                            <button class="key-pick-btn minor" data-key="B minor">Bm</button>
+                        </div>
+                        <span class="key-full" id="key-full">C minor</span>
+                        <select id="key-override" class="key-select hidden">
                             <option value="">Auto</option>
                             <option value="C major">C major</option>
                             <option value="C minor">C minor</option>
@@ -116,29 +233,76 @@
                     </div>
                 </div>
 
-                <!-- Vibe Input -->
-                <div class="control-group full-width">
-                    <label>VIBE / CONTEXT</label>
+                <!-- Vibe Section -->
+                <div class="vibe-section">
+                    <label class="section-label">VIBE</label>
                     <div class="vibe-input-wrapper">
-                        <input type="text" id="vibe-input" placeholder="e.g. 'Make it aggressive', 'Cyberpunk night drive'" maxlength="200">
-                        <span class="vibe-active-indicator" id="vibe-active-indicator" title="Custom vibe active">&#10038;</span>
+                        <input type="text" id="vibe-input" placeholder="Describe the mood..." maxlength="200">
+                        <span class="vibe-active-indicator" id="vibe-active-indicator">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                <polygon points="12,2 15,9 22,9 17,14 19,22 12,17 5,22 7,14 2,9 9,9"/>
+                            </svg>
+                        </span>
+                    </div>
+                    <!-- Quick vibe presets -->
+                    <div class="vibe-presets">
+                        <button class="vibe-chip" data-vibe="aggressive">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                            Aggressive
+                        </button>
+                        <button class="vibe-chip" data-vibe="chill">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
+                            Chill
+                        </button>
+                        <button class="vibe-chip" data-vibe="dark">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                            Dark
+                        </button>
+                        <button class="vibe-chip" data-vibe="uplifting">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                            Uplifting
+                        </button>
+                        <button class="vibe-chip" data-vibe="hypnotic">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                            Hypnotic
+                        </button>
+                        <button class="vibe-chip" data-vibe="mysterious">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.4 8 12 8 12s8-6.6 8-12a8 8 0 0 0-8-8z"/><circle cx="12" cy="10" r="3"/></svg>
+                            Mysterious
+                        </button>
+                        <button class="vibe-chip" data-vibe="energetic">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                            Energetic
+                        </button>
+                        <button class="vibe-chip" data-vibe="melancholic">
+                            <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 18a5 5 0 0 0-10 0"/><line x1="12" y1="2" x2="12" y2="9"/><line x1="4.22" y1="10.22" x2="5.64" y2="11.64"/><line x1="1" y1="18" x2="3" y2="18"/><line x1="21" y1="18" x2="23" y2="18"/><line x1="18.36" y1="11.64" x2="19.78" y2="10.22"/><line x1="23" y1="22" x2="1" y2="22"/></svg>
+                            Melancholic
+                        </button>
                     </div>
                     <div class="active-vibe-display" id="active-vibe-display">
                         <span class="active-vibe-label">ACTIVE</span>
                         <span class="active-vibe-text" id="active-vibe-text"></span>
-                        <button class="clear-vibe-btn" id="clear-vibe-btn" title="Clear vibe">&#10005;</button>
+                        <button class="clear-vibe-btn" id="clear-vibe-btn" title="Clear vibe">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"/>
+                                <line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                        </button>
                     </div>
                     <div class="input-footer">
-                        <span class="input-hint">Press Enter or click "Apply All Settings"</span>
                         <span class="char-count" id="vibe-char-count">0/200</span>
                     </div>
                 </div>
 
                 <!-- Instrument Rack -->
-                <div class="instrument-rack" id="instrument-rack">
+                <div class="instrument-rack collapsed" id="instrument-rack">
                     <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="instrument-categories">
                         <h3>INSTRUMENT RACK</h3>
-                        <span class="collapse-icon" aria-hidden="true">&#9660;</span>
+                        <span class="collapse-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </span>
                     </div>
                     <div class="instrument-categories" id="instrument-categories">
                         <!-- Populated by JS -->
@@ -146,7 +310,13 @@
                 </div>
 
                 <!-- Apply Button -->
-                <button id="apply-all-btn" class="primary-btn">Apply All Settings</button>
+                <button id="apply-all-btn" class="primary-btn">
+                    <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 11 12 14 22 4"/>
+                        <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+                    </svg>
+                    <span class="btn-text">Apply Settings</span>
+                </button>
             </div>
 
             <!-- Right Panel - Conductor & Timeline -->
@@ -154,7 +324,14 @@
                 <!-- Conductor Reasoning -->
                 <div class="reasoning-section">
                     <div class="panel-header">
-                        <h3>CONDUCTOR REASONING</h3>
+                        <h3>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            CONDUCTOR
+                        </h3>
                     </div>
                     <div class="reasoning-box" id="reasoning-box">
                         <p class="placeholder">Initializing engine...</p>
@@ -164,27 +341,119 @@
                     </div>
                 </div>
 
-                <!-- Stem Deck (combined timeline + mixer) -->
+                <!-- Stem Deck Timeline -->
                 <div class="stem-deck-section">
                     <div class="panel-header">
-                        <h3>STEM DECK</h3>
-                        <div class="loop-counter" id="loop-counter">LOOP: 0</div>
+                        <h3>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <line x1="3" y1="9" x2="21" y2="9"/>
+                                <line x1="9" y1="21" x2="9" y2="9"/>
+                            </svg>
+                            STEMS
+                        </h3>
+                        <div class="loop-counter" id="loop-counter">0</div>
                     </div>
+
                     <div class="stem-deck" id="stem-deck">
-                        <!-- Populated by JS -->
-                        <p class="placeholder">Start engine to see stems</p>
+                        <!-- Populated by JS for detailed stem controls -->
+                    </div>
+                </div>
+
+                <!-- Custom Stem Creator -->
+                <div class="custom-stem-section">
+                    <div class="panel-header">
+                        <h3>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                <path d="M2 17l10 5 10-5"/>
+                                <path d="M2 12l10 5 10-5"/>
+                            </svg>
+                            CUSTOM STEM
+                        </h3>
+                    </div>
+                    <div class="custom-stem-form">
+                        <div class="stem-form-row">
+                            <select id="custom-stem-instrument" class="stem-select">
+                                <option value="">Select instrument...</option>
+                            </select>
+                        </div>
+                        <div class="stem-form-row">
+                            <input type="text" id="custom-stem-prompt" class="stem-prompt-input"
+                                   placeholder="Describe the sound you want..." maxlength="200">
+                        </div>
+                        <div class="stem-form-row stem-form-row-split">
+                            <select id="custom-stem-model" class="stem-select stem-select-model">
+                                <option value="default">Default Model</option>
+                            </select>
+                            <button id="add-custom-stem-btn" class="add-stem-btn">
+                                <span class="btn-text">Add to Next</span>
+                                <span class="btn-loading" style="display:none">
+                                    <svg class="spinner" viewBox="0 0 24 24">
+                                        <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="60" stroke-dashoffset="20"/>
+                                    </svg>
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Audience Message Broadcast -->
+                <div class="broadcast-section">
+                    <div class="panel-header">
+                        <h3>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/>
+                                <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.4"/>
+                                <circle cx="12" cy="12" r="2"/>
+                                <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.4"/>
+                                <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
+                            </svg>
+                            BROADCAST
+                        </h3>
+                    </div>
+                    <div class="broadcast-form">
+                        <div class="broadcast-input-wrapper">
+                            <input type="text" id="audience-message-input" class="broadcast-input"
+                                   placeholder="Send a message to your audience..." maxlength="200">
+                            <span class="broadcast-char-count" id="broadcast-char-count">0/200</span>
+                        </div>
+                        <button id="broadcast-btn" class="broadcast-btn">
+                            <span class="broadcast-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/>
+                                    <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.4"/>
+                                    <circle cx="12" cy="12" r="2"/>
+                                    <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.4"/>
+                                    <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
+                                </svg>
+                            </span>
+                            <span class="broadcast-text">Broadcast</span>
+                            <span class="broadcast-pulse"></span>
+                        </button>
                     </div>
                 </div>
 
                 <!-- Export Section -->
                 <div class="export-section">
                     <div class="panel-header">
-                        <h3>EXPORT</h3>
+                        <h3>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            EXPORT
+                        </h3>
                     </div>
                     <div class="export-controls">
                         <button id="record-btn" class="record-btn">
-                            <span class="record-icon">&#9679;</span>
-                            <span id="record-label">Record to File</span>
+                            <span class="record-icon">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <circle cx="12" cy="12" r="8"/>
+                                </svg>
+                            </span>
+                            <span id="record-label">Record</span>
                         </button>
                         <select id="export-format">
                             <option value="wav">WAV</option>
@@ -192,7 +461,11 @@
                         </select>
                     </div>
                     <div class="recording-indicator" id="recording-indicator">
-                        <span class="rec-dot">&#9679;</span>
+                        <span class="rec-dot">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                                <circle cx="12" cy="12" r="8"/>
+                            </svg>
+                        </span>
                         <span id="recording-time">00:00</span>
                     </div>
                 </div>
@@ -205,7 +478,12 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Settings</h2>
-                <button class="close-btn" id="close-settings">&times;</button>
+                <button class="close-btn" id="close-settings">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
             </div>
             <div class="modal-body">
                 <div class="setting-group">
@@ -216,7 +494,12 @@
                     <label>LLM API Key</label>
                     <div class="password-input-wrapper">
                         <input type="password" id="llm-key" value="not-needed">
-                        <button type="button" class="toggle-password" id="toggle-password" aria-label="Show password">&#128065;</button>
+                        <button type="button" class="toggle-password" id="toggle-password" aria-label="Show password">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                        </button>
                     </div>
                 </div>
                 <div class="setting-group">
@@ -240,6 +523,22 @@
                     <label>Icecast Enabled</label>
                     <input type="checkbox" id="icecast-enabled">
                 </div>
+
+                <div class="settings-divider-wrapper">
+                    <h3 class="settings-divider">Models Config (Requires Restart)</h3>
+                </div>
+                <div id="models-list-container">
+                    <!-- Models injected here -->
+                </div>
+
+                <div class="settings-divider-wrapper">
+                    <h3 class="settings-divider">Security</h3>
+                </div>
+                <div class="setting-group">
+                    <label>Audience Password (Optional)</label>
+                    <input type="text" id="audience-password" placeholder="Leave empty for public access">
+                </div>
+
                 <p class="setting-hint">Press Enter to save settings</p>
             </div>
             <div class="modal-footer">
@@ -252,12 +551,36 @@
     <!-- Stop Confirmation Modal -->
     <div id="stop-modal" class="modal stop-modal">
         <div class="modal-content stop-modal-content">
-            <div class="stop-modal-icon">&#9888;</div>
+            <div class="stop-modal-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+            </div>
             <h2>Reset Engine?</h2>
             <p>This will stop playback and clear all current state. This action cannot be undone.</p>
             <div class="stop-modal-actions">
                 <button id="stop-cancel-btn" class="secondary-btn">Cancel</button>
                 <button id="stop-confirm-btn" class="danger-btn">Reset Engine</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- End Show Confirmation Modal -->
+    <div id="end-show-modal" class="modal end-show-modal">
+        <div class="modal-content end-show-modal-content">
+            <div class="end-show-modal-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="10"/>
+                    <rect x="9" y="9" width="6" height="6" rx="1"/>
+                </svg>
+            </div>
+            <h2>End Show?</h2>
+            <p>Your audience will see a waiting screen. You can start the show again at any time.</p>
+            <div class="end-show-modal-actions">
+                <button id="end-show-cancel-btn" class="secondary-btn">Keep Playing</button>
+                <button id="end-show-confirm-btn" class="danger-btn end-show-danger">End Show</button>
             </div>
         </div>
     </div>

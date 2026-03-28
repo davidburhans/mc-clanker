@@ -1,0 +1,66 @@
+{
+  "models": {
+    "foundation-1": {
+      "engine": "stable_audio_tools",
+      "repo_id": "RoyalCities/Foundation-1",
+      "filename": "Foundation_1.safetensors",
+      "config_filename": "model_config.json",
+      "description": "General purpose electronic sounds. Excellent for driving drums, thick bass, and sharp leads.",
+      "prompt_template": "{major_family}, {sub_family}, {timbre_tags}, {notation_tag}, {fx_tag}, {key}, {bpm} BPM, {bars} Bars",
+      "supported_families": [
+        "Drums",
+        "Percussion",
+        "Synth",
+        "Keys",
+        "Bass",
+        "Bowed Strings",
+        "Mallet",
+        "Wind",
+        "Guitar",
+        "Brass",
+        "Plucked Strings"
+      ],
+      "enabled": true
+    },
+    "infinite-pianos": {
+      "engine": "stable_audio_tools",
+      "repo_id": "RoyalCities/RC_Infinite_Pianos",
+      "filename": "RC_Infinite_Pianos_2024.ckpt",
+      "config_filename": "model_config.json",
+      "description": "Specialized piano model. BEST at: Chord Progressions with Melodies. OK at: Chord Progressions only. AVOID: Melody Only.",
+      "prompt_template": "{sub_family}, {timbre_tags} {notation_tag}, {key}, {fx_tag}, {bpm}BPM, {bars} bars",
+      "supported_families": [
+        "Keys",
+        "Piano",
+        "Mallet"
+      ],
+      "enabled": true
+    },
+    "vocal-textures": {
+      "engine": "stable_audio_tools",
+      "repo_id": "RoyalCities/Vocal_Textures_Main",
+      "filename": "RC_Vocal_Textures_Full_version.ckpt",
+      "config_filename": "model_config.json",
+      "description": "Specialized vocal textures. BEST at: Chord Progressions. AVOID: Melodies.",
+      "prompt_template": "{sub_family}, {notation_tag}, {key}, {bpm}BPM, {bars} bars",
+      "supported_families": [
+        "Vocal",
+        "Choir",
+        "Pad",
+        "Atmosphere"
+      ],
+      "enabled": false
+    },
+    "ace-step-samples": {
+      "engine": "ace_step",
+      "repo_id": "ACE-Step/ACE-Step",
+      "lora": "Text2Samples",
+      "description": "High-quality instrumental loops and effects with natural language prompts.",
+      "prompt_template": "{timbre_tags} {sub_family} {major_family} loop, {notation_tag}, {fx_tag}, {bpm} bpm, {key}",
+      "supported_families": [
+        "Any"
+      ],
+      "enabled": false
+    }
+  }
+}

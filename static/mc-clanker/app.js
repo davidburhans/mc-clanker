@@ -4,6 +4,7 @@ class DJSlopApp {
     constructor() {
         this.state = {
             isPlaying: false,
+            isShowStarted: false,
             isRecording: false,
             volume: 0.8,
             bpm: 120,
@@ -12,6 +13,7 @@ class DJSlopApp {
             keyOverride: null,
             vibe: '',
             vibeActive: false,
+            activeVibePreset: null,
             instruments: {},
             reasoning: '',
             currentStems: [],
@@ -19,7 +21,8 @@ class DJSlopApp {
             nextStems: [],
             isEngineRunning: false,
             lastActions: null,
-            stemMixerData: []
+            stemMixerData: [],
+            loopCount: 0
         };
 
         this.recordingStartTime = null;
@@ -30,7 +33,10 @@ class DJSlopApp {
         this.source = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
-        this.reconnectDelay = 2000; // ms between reconnect attempts
+        this.reconnectDelay = 2000;
+        this.prevFreqData = null;
+        this.vuLeft = null;
+        this.vuRight = null;
 
         this.init();
     }
@@ -43,7 +49,14 @@ class DJSlopApp {
         this.startPolling();
         this.animateVisualizer();
         this.bindInstrumentRackToggle();
+        this.bindKeyPicker();
+        this.bindShowModeToggle();
         this.resizeVisualizer();
+        this.bindVibePresets();
+        this.bindTempoPresets();
+        this.populateCustomStemInstruments();
+        this.populateCustomStemModels();
+        this.bindBroadcastEvents();
     }
 
     bindElements() {
@@ -60,6 +73,7 @@ class DJSlopApp {
         // DJ Controls
         this.bpmDisplay = document.getElementById('bpm-display');
         this.keyDisplay = document.getElementById('key-display');
+        this.keyFull = document.getElementById('key-full');
         this.bpmOverride = document.getElementById('bpm-override');
         this.keyOverride = document.getElementById('key-override');
         this.vibeInput = document.getElementById('vibe-input');
@@ -85,6 +99,11 @@ class DJSlopApp {
         this.stopConfirmBtn = document.getElementById('stop-confirm-btn');
         this.stopCancelBtn = document.getElementById('stop-cancel-btn');
 
+        // End Show Modal
+        this.endShowModal = document.getElementById('end-show-modal');
+        this.endShowConfirmBtn = document.getElementById('end-show-confirm-btn');
+        this.endShowCancelBtn = document.getElementById('end-show-cancel-btn');
+
         // Active Vibe Display
         this.activeVibeDisplay = document.getElementById('active-vibe-display');
         this.activeVibeText = document.getElementById('active-vibe-text');
@@ -100,19 +119,38 @@ class DJSlopApp {
         this.llmKey = document.getElementById('llm-key');
         this.llmModel = document.getElementById('llm-model');
         this.icecastEnabled = document.getElementById('icecast-enabled');
+        this.audiencePassword = document.getElementById('audience-password');
         this.togglePasswordBtn = document.getElementById('toggle-password');
-        
+
         // Phase 3: New Elements
         this.stemDeck = document.getElementById('stem-deck');
         this.loopCounter = document.getElementById('loop-counter');
+        this.headerLoopCounter = document.getElementById('header-loop-counter');
         this.cfgScale = document.getElementById('cfg-scale');
         this.cfgVal = document.getElementById('cfg-val');
         this.stepsRange = document.getElementById('steps-range');
         this.stepsVal = document.getElementById('steps-val');
 
+
+
+        // VU meters
+        this.vuLeftEl = document.getElementById('vu-left');
+        this.vuRightEl = document.getElementById('vu-right');
+
         // Visualizer
         this.visualizer = document.getElementById('visualizer');
         this.visualizerCtx = this.visualizer.getContext('2d');
+
+        // Show Control
+        this.startShowBtn = document.getElementById('start-show-btn');
+        this.showLiveIndicator = document.getElementById('show-live-indicator');
+        this.endShowBtn = document.getElementById('end-show-btn');
+        this.showStatusText = document.getElementById('show-status-text');
+        this.queueText = document.getElementById('queue-text');
+        this.showQueueStatus = document.getElementById('show-queue-status');
+
+        this.showStartTime = null;
+        this.queueTimerInterval = null;
     }
 
     bindEvents() {
@@ -122,6 +160,10 @@ class DJSlopApp {
         this.volumeSlider.addEventListener('input', (e) => this.setVolume(e.target.value));
         this.reconnectBtn = document.getElementById('reconnect-btn');
         this.reconnectBtn.addEventListener('click', () => this.reconnectStream());
+
+        // Show Control
+        this.startShowBtn.addEventListener('click', () => this.startShow());
+        this.endShowBtn.addEventListener('click', () => this.endShow());
 
         // DJ Controls - unified apply
         this.vibeInput.addEventListener('keydown', (e) => {
@@ -143,6 +185,13 @@ class DJSlopApp {
         this.stopCancelBtn.addEventListener('click', () => this.closeStopModal());
         this.stopModal.addEventListener('click', (e) => {
             if (e.target === this.stopModal) this.closeStopModal();
+        });
+
+        // End Show Modal
+        this.endShowConfirmBtn.addEventListener('click', () => this.confirmEndShow());
+        this.endShowCancelBtn.addEventListener('click', () => this.closeEndShowModal());
+        this.endShowModal.addEventListener('click', (e) => {
+            if (e.target === this.endShowModal) this.closeEndShowModal();
         });
 
         // Active Vibe Clear
@@ -191,6 +240,7 @@ class DJSlopApp {
             if (e.code === 'Escape') {
                 this.closeSettingsModal();
                 this.closeStopModal();
+                this.closeEndShowModal();
             }
         });
 
@@ -206,7 +256,7 @@ class DJSlopApp {
                 }
             });
             this.stemDeck.addEventListener('click', (e) => {
-                const btn = e.target.closest('.stem-btn');
+                const btn = e.target.closest('.stem-btn, .stem-remove-btn');
                 if (!btn) return;
                 const action = btn.dataset.action;
                 const index = parseInt(btn.dataset.stemIndex);
@@ -214,8 +264,41 @@ class DJSlopApp {
                 if (action === 'mute') this.toggleStemMute(index);
                 else if (action === 'solo') this.toggleStemSolo(index);
                 else if (action === 'download') this.downloadStem(index, set);
+                else if (action === 'remove-next') this.removeNextStem(index);
             });
         }
+    }
+
+    bindVibePresets() {
+        document.querySelectorAll('.vibe-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                // Remove selected class from all chips
+                document.querySelectorAll('.vibe-chip').forEach(c => c.classList.remove('selected'));
+                // Add selected class to clicked chip
+                chip.classList.add('selected');
+
+                const vibe = chip.dataset.vibe;
+                this.vibeInput.value = vibe;
+                this.vibeCharCount.textContent = `${vibe.length}/200`;
+                this.state.activeVibePreset = vibe;
+                this.applyAll();
+
+                // Remove selection after applying
+                setTimeout(() => {
+                    chip.classList.remove('selected');
+                }, 1500);
+            });
+        });
+    }
+
+    bindTempoPresets() {
+        document.querySelectorAll('.tempo-preset').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const bpm = btn.dataset.bpm;
+                this.bpmOverride.value = bpm;
+                this.applyAll();
+            });
+        });
     }
 
     bindInstrumentRackToggle() {
@@ -231,15 +314,64 @@ class DJSlopApp {
         }
     }
 
+    bindKeyPicker() {
+        const keyWheel = document.getElementById('key-display');
+        const keyPickerGrid = document.getElementById('key-picker-grid');
+        const keyPickBtns = document.querySelectorAll('.key-pick-btn');
+
+        if (keyWheel && keyPickerGrid) {
+            keyWheel.addEventListener('click', () => {
+                keyPickerGrid.classList.toggle('active');
+            });
+
+            keyPickBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const key = btn.dataset.key;
+                    if (key) {
+                        // Update selection visual
+                        keyPickBtns.forEach(b => b.classList.remove('selected'));
+                        btn.classList.add('selected');
+                        // Set the value
+                        this.keyOverride.value = key;
+                        // Trigger apply
+                        this.applyAll();
+                        // Close picker
+                        keyPickerGrid.classList.remove('active');
+                    }
+                });
+            });
+        }
+    }
+
+    bindShowModeToggle() {
+        const modeAmbient = document.getElementById('mode-ambient');
+        const modeLive = document.getElementById('mode-live');
+
+        if (modeAmbient && modeLive) {
+            modeAmbient.addEventListener('click', () => {
+                modeAmbient.classList.add('active');
+                modeLive.classList.remove('active');
+                // Could trigger ambient mode API call here
+            });
+
+            modeLive.addEventListener('click', () => {
+                modeLive.classList.add('active');
+                modeAmbient.classList.remove('active');
+            });
+        }
+    }
+
     toggleSection(header) {
         const rack = header.parentElement;
         const isCollapsed = rack.classList.toggle('collapsed');
         header.setAttribute('aria-expanded', !isCollapsed);
+        header.classList.toggle('expanded', !isCollapsed);
     }
 
     initAudio() {
         this.audioPlayer.volume = this.state.volume;
-        this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
+        // Don't set src here - only request stream when user clicks Play
+        // This prevents browser from connecting to stream before audio is actually playing
         this.audioPlayer.crossOrigin = 'anonymous';
 
         // Show connecting state
@@ -345,20 +477,150 @@ class DJSlopApp {
         }
 
         // Load mixer data
+        await this.loadModelsConfig();
         this.updateStemMixer();
+        await this.pollVRAM();
+    }
+
+
+    async loadModelsConfig() {
+        try {
+            // Fetch both models config and status
+            const [modelsRes, statusRes] = await Promise.all([
+                fetch("/api/models"),
+                fetch("/api/models/status")
+            ]);
+
+            const modelsData = modelsRes.ok ? await modelsRes.json() : { models: {} };
+            const statusData = statusRes.ok ? await statusRes.json() : { models: {} };
+
+            const container = document.getElementById("models-list-container");
+            if (!container) return;
+
+            container.innerHTML = "";
+            const models = modelsData.models || {};
+            const modelStates = statusData.models || {};
+
+            for (const [id, info] of Object.entries(models)) {
+                const div = document.createElement("div");
+                div.className = "model-item";
+
+                const modelState = modelStates[id] || {};
+                const state = modelState.state || "idle";
+                const isLoaded = modelState.is_loaded || false;
+
+                // State badge
+                const badge = document.createElement("span");
+                badge.className = `model-state-badge ${state}`;
+                badge.textContent = state;
+                badge.title = modelState.error || state;
+
+                // Model label
+                const label = document.createElement("label");
+                const families = info.supported_families ? info.supported_families.join(", ") : "Any";
+                label.textContent = id + " (" + info.engine + ")";
+                label.title = info.description + " | Supported: " + families;
+
+                // Action button
+                const actionBtn = document.createElement("button");
+                actionBtn.className = "model-action-btn";
+                actionBtn.dataset.modelId = id;
+
+                if (isLoaded) {
+                    actionBtn.textContent = "Unload";
+                    actionBtn.classList.add("unload");
+                } else {
+                    actionBtn.textContent = state === "loading" ? "Loading..." : "Load";
+                    actionBtn.classList.add("load");
+                    if (state === "loading") {
+                        actionBtn.disabled = true;
+                    }
+                }
+
+                actionBtn.onclick = async () => {
+                    const action = isLoaded ? "unload" : "load";
+                    actionBtn.disabled = true;
+                    actionBtn.textContent = action === "load" ? "Loading..." : "Unloading...";
+
+                    try {
+                        const res = await fetch(`/api/models/${id}/${action}`, { method: "POST" });
+                        if (res.ok) {
+                            this.showToast(`${id} ${action}ed`);
+                            await this.loadModelsConfig();
+                            await this.pollVRAM();
+                        } else {
+                            const err = await res.json();
+                            this.showToast(err.detail || `Failed to ${action} model`, "error");
+                            actionBtn.disabled = false;
+                            actionBtn.textContent = isLoaded ? "Unload" : "Load";
+                        }
+                    } catch (err) {
+                        this.showToast(`Error ${action}ing model`, "error");
+                        actionBtn.disabled = false;
+                        actionBtn.textContent = isLoaded ? "Unload" : "Load";
+                    }
+                };
+
+                // Enable checkbox
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.checked = info.enabled;
+                checkbox.onchange = async (e) => {
+                    try {
+                        const res = await fetch("/api/models", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ model_id: id, enabled: e.target.checked })
+                        });
+                        if (res.ok) {
+                            this.showToast(id + (e.target.checked ? " enabled" : " disabled") + ". Restart required.");
+                        } else {
+                            e.target.checked = !e.target.checked; // revert
+                            this.showToast("Failed to update model", "error");
+                        }
+                    } catch (err) {
+                        e.target.checked = !e.target.checked; // revert
+                        this.showToast("Error updating model", "error");
+                    }
+                };
+
+                div.appendChild(badge);
+                div.appendChild(label);
+                div.appendChild(actionBtn);
+                div.appendChild(checkbox);
+                container.appendChild(div);
+            }
+        } catch (e) {
+            console.error("Failed to load models config:", e);
+        }
     }
 
     updateUIFromState(data) {
         // Set Name
         this.state.current_set_name = data.current_set_name || 'Waiting for track...';
 
-        // BPM
+        // BPM - update both displays
         this.state.bpm = data.current_bpm || 120;
-        this.bpmDisplay.textContent = this.state.bpm;
+        if (this.bpmDisplay) {
+            const tempoValueEl = this.bpmDisplay.querySelector('.tempo-value');
+        if (tempoValueEl && tempoValueEl.textContent !== String(this.state.bpm)) {
+            tempoValueEl.textContent = this.state.bpm;
+            tempoValueEl.classList.remove('changing');
+            void tempoValueEl.offsetWidth; // Trigger reflow
+            tempoValueEl.classList.add('changing');
+            setTimeout(() => tempoValueEl.classList.remove('changing'), 400);
+        }
+        }
 
-        // Key
+        // Key - update wheel and full text
         this.state.key = data.current_key || 'C minor';
-        this.keyDisplay.textContent = this.state.key;
+        if (this.keyDisplay) {
+            const shortKey = this.shortenKey(this.state.key);
+            this.keyDisplay.textContent = shortKey;
+        }
+        if (this.keyFull) {
+            this.keyFull.textContent = this.state.key;
+        }
 
         // Reasoning
         this.state.reasoning = data.llm_reasoning || '';
@@ -375,10 +637,36 @@ class DJSlopApp {
         this.state.isPlaying = data.is_generating || false;
         this.updatePlayButton();
 
+        // Show started state
+        this.state.isShowStarted = data.is_show_started || false;
+        this.updateShowControls();
+
         // Update loop counter
-        if (this.loopCounter && data.loop_count !== undefined) {
-            this.loopCounter.textContent = `LOOP: ${data.loop_count}`;
+        if (data.loop_count !== undefined) {
+            const prevCount = this.state.loopCount;
+            this.state.loopCount = data.loop_count;
+            if (this.loopCounter) {
+                this.loopCounter.textContent = data.loop_count;
+                // Pulse animation when counter increments
+                if (data.loop_count > prevCount) {
+                    this.loopCounter.classList.remove('pulse');
+                    void this.loopCounter.offsetWidth; // Force reflow
+                    this.loopCounter.classList.add('pulse');
+                    setTimeout(() => this.loopCounter.classList.remove('pulse'), 500);
+                }
+            }
+            if (this.headerLoopCounter) {
+                this.headerLoopCounter.textContent = data.loop_count;
+                if (data.loop_count > prevCount) {
+                    this.headerLoopCounter.classList.remove('pulse');
+                    void this.headerLoopCounter.offsetWidth;
+                    this.headerLoopCounter.classList.add('pulse');
+                    setTimeout(() => this.headerLoopCounter.classList.remove('pulse'), 500);
+                }
+            }
         }
+
+
 
         // Action Log
         if (this.actionLog && data.last_actions) {
@@ -391,6 +679,19 @@ class DJSlopApp {
             }
         }
     }
+
+    shortenKey(key) {
+        if (!key) return '?';
+        const match = key.match(/^([A-G]#?)\s*(minor|major)?$/i);
+        if (!match) return key.substring(0, 2);
+        const [, note, mode] = match;
+        if (mode && mode.toLowerCase().startsWith('m')) {
+            return note + 'm';
+        }
+        return note;
+    }
+
+
 
     renderStemDeck() {
         // Current track name
@@ -471,6 +772,14 @@ class DJSlopApp {
                 <div class="stem-row-header">
                     <span class="stem-position-label">${position.toUpperCase()}</span>
                     ${timeInfo ? `<span class="stem-time">${timeInfo}</span>` : ''}
+                    ${position === 'next' ? `
+                    <button class="stem-remove-btn" data-action="remove-next" data-stem-index="${stem.index}" title="Remove from next loop">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                    </button>
+                    ` : ''}
                 </div>
                 <div class="stem-tags">${tags}</div>
                 ${hasControls ? `
@@ -530,6 +839,13 @@ class DJSlopApp {
             categoryEl.appendChild(list);
             this.instrumentCategories.appendChild(categoryEl);
 
+            // Add collapse toggle to category header
+            header.addEventListener('click', (e) => {
+                if (e.target.classList.contains('category-checkbox')) return;
+                const isCollapsed = categoryEl.classList.toggle('collapsed');
+                header.classList.toggle('expanded', !isCollapsed);
+            });
+
             // Category checkbox toggle
             header.querySelector('.category-checkbox').addEventListener('change', (e) => {
                 const checked = e.target.checked;
@@ -570,6 +886,26 @@ class DJSlopApp {
         this.setStatus('connecting');
         this.reconnectAttempts = 0; // Reset reconnect counter on manual play
 
+        // Visual feedback
+        const vizContainer = document.querySelector('.visualizer-container');
+        if (vizContainer) vizContainer.classList.add('playing');
+
+        // Ensure AudioContext is running before playback (required for Chrome)
+        if (this.audioContext) {
+            if (this.audioContext.state === 'suspended') {
+                this.audioContext.resume();
+            }
+            // If analyser was set up with a suspended context, reconnect the audio
+            if (this.source && this.analyser) {
+                try {
+                    this.source.disconnect();
+                } catch (e) {}
+                try {
+                    this.source.connect(this.analyser);
+                } catch (e) {}
+            }
+        }
+
         // Refresh the audio stream source before playing
         this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
         this.audioPlayer.load();
@@ -602,6 +938,10 @@ class DJSlopApp {
             console.error('Pause failed:', e);
         });
         this.audioPlayer.pause();
+
+        // Visual feedback
+        const vizContainer = document.querySelector('.visualizer-container');
+        if (vizContainer) vizContainer.classList.remove('playing');
     }
 
     stop() {
@@ -630,15 +970,147 @@ class DJSlopApp {
         this.audioPlayer.pause();
         this.audioPlayer.currentTime = 0;
         this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
+
+        // Visual feedback
+        const vizContainer = document.querySelector('.visualizer-container');
+        if (vizContainer) vizContainer.classList.remove('playing');
+
         this.showToast('Engine reset');
     }
 
     clearVibe() {
         this.state.vibe = '';
         this.state.vibeActive = false;
+        this.state.activeVibePreset = null;
         this.vibeActiveIndicator.classList.remove('active');
         this.activeVibeText.textContent = '';
         this.activeVibeDisplay.classList.remove('visible');
+        // Notify backend to clear the vibe
+        this.applyState({ user_override: "" }).catch(e => {
+            console.error('Clear vibe failed:', e);
+        });
+    }
+
+    async startShow() {
+        try {
+            // Visual feedback - button loading state
+            if (this.startShowBtn) {
+                this.startShowBtn.disabled = true;
+                const btnText = this.startShowBtn.querySelector('span');
+                if (btnText) btnText.textContent = 'STARTING...';
+            }
+
+            await fetch('/api/show/start', { method: 'POST' });
+            this.state.isShowStarted = true;
+            this.updateShowControls();
+            this.startShowTimer();
+
+            // Update status text on DJ side
+            if (this.showStatusText) this.showStatusText.textContent = 'Audience Connected';
+
+            this.showToast('Show started - Audience now connected');
+
+            // Add a brief visual flash to the show control bar
+            const showControlBar = document.getElementById('show-control-bar');
+            if (showControlBar) {
+                showControlBar.classList.add('show-started-flash');
+                setTimeout(() => showControlBar.classList.remove('show-started-flash'), 1000);
+            }
+        } catch (e) {
+            console.error('Start show failed:', e);
+            this.showToast('Failed to start show', 'error');
+        } finally {
+            // Reset button state
+            if (this.startShowBtn) {
+                this.startShowBtn.disabled = false;
+                const btnText = this.startShowBtn.querySelector('span');
+                if (btnText) btnText.textContent = 'START SHOW';
+            }
+        }
+    }
+
+    async endShow() {
+        // Show confirmation modal instead of immediately ending
+        this.openEndShowModal();
+    }
+
+    openEndShowModal() {
+        if (this.endShowModal) {
+            this.endShowModal.classList.add('active');
+        }
+    }
+
+    closeEndShowModal() {
+        if (this.endShowModal) {
+            this.endShowModal.classList.remove('active');
+        }
+    }
+
+    async confirmEndShow() {
+        this.closeEndShowModal();
+        this.stopShowTimer();
+
+        // Visual feedback - update status immediately
+        if (this.showStatusText) this.showStatusText.textContent = 'Ending broadcast...';
+
+        try {
+            await fetch('/api/show/stop', { method: 'POST' });
+            this.state.isShowStarted = false;
+            this.updateShowControls();
+            this.showToast('Show ended - Audience sees waiting screen');
+        } catch (e) {
+            console.error('End show failed:', e);
+            this.showToast('Failed to end show', 'error');
+        }
+    }
+
+    startShowTimer() {
+        this.showStartTime = Date.now();
+
+        if (this.showQueueStatus) {
+            this.showQueueStatus.style.display = 'flex';
+        }
+
+        this.queueTimerInterval = setInterval(() => {
+            if (!this.showStartTime) return;
+
+            const elapsed = Math.floor((Date.now() - this.showStartTime) / 1000);
+            const mins = Math.floor(elapsed / 60).toString().padStart(2, '0');
+            const secs = (elapsed % 60).toString().padStart(2, '0');
+
+            if (this.queueText) {
+                this.queueText.textContent = `${mins}:${secs} on air`;
+            }
+        }, 1000);
+    }
+
+    stopShowTimer() {
+        if (this.queueTimerInterval) {
+            clearInterval(this.queueTimerInterval);
+            this.queueTimerInterval = null;
+        }
+        this.showStartTime = null;
+
+        if (this.showQueueStatus) {
+            this.showQueueStatus.style.display = 'none';
+        }
+    }
+
+    updateShowControls() {
+        if (this.state.isShowStarted) {
+            this.startShowBtn.classList.add('hidden');
+            this.showLiveIndicator.classList.remove('hidden');
+            // Visual feedback - pulse the show live badge
+            const badge = this.showLiveIndicator.querySelector('.show-live-badge');
+            if (badge) {
+                badge.classList.add('just-started');
+                setTimeout(() => badge.classList.remove('just-started'), 2000);
+            }
+        } else {
+            this.startShowBtn.classList.remove('hidden');
+            this.showLiveIndicator.classList.add('hidden');
+            this.stopShowTimer();
+        }
     }
 
     updatePlayButton() {
@@ -691,7 +1163,10 @@ class DJSlopApp {
         // Apply loading state
         this.applyAllBtn.disabled = true;
         this.applyAllBtn.classList.add('loading');
-        this.applyAllBtn.textContent = 'Applying...';
+        const btnText = this.applyAllBtn.querySelector('.btn-text');
+        const btnIcon = this.applyAllBtn.querySelector('.btn-icon');
+        if (btnText) btnText.textContent = 'Applying...';
+        if (btnIcon) btnIcon.style.display = 'none';
 
         this.applyState(updates)
             .then(() => {
@@ -730,7 +1205,10 @@ class DJSlopApp {
             .finally(() => {
                 this.applyAllBtn.disabled = false;
                 this.applyAllBtn.classList.remove('loading');
-                this.applyAllBtn.textContent = 'Apply All Settings';
+                const btnText = this.applyAllBtn.querySelector('.btn-text');
+                const btnIcon = this.applyAllBtn.querySelector('.btn-icon');
+                if (btnText) btnText.textContent = 'Apply Settings';
+                if (btnIcon) btnIcon.style.display = '';
             });
     }
 
@@ -755,7 +1233,8 @@ class DJSlopApp {
     async toggleStemMute(index) {
         try {
             const resp = await fetch(`/api/stems/${index}/mute`, { method: 'POST' });
-            if (resp.ok) this.updateStemMixer();
+            if (resp.ok) await this.loadModelsConfig();
+        this.updateStemMixer();
         } catch (e) {
             console.error('Failed to toggle mute:', e);
         }
@@ -764,7 +1243,8 @@ class DJSlopApp {
     async toggleStemSolo(index) {
         try {
             const resp = await fetch(`/api/stems/${index}/solo`, { method: 'POST' });
-            if (resp.ok) this.updateStemMixer();
+            if (resp.ok) await this.loadModelsConfig();
+        this.updateStemMixer();
         } catch (e) {
             console.error('Failed to toggle solo:', e);
         }
@@ -950,7 +1430,8 @@ class DJSlopApp {
             base_url: url,
             api_key: this.llmKey.value,
             model: this.llmModel.value,
-            icecast_enabled: this.icecastEnabled.checked
+            icecast_enabled: this.icecastEnabled.checked,
+            audience_password: this.audiencePassword.value
         };
 
         try {
@@ -1044,6 +1525,7 @@ class DJSlopApp {
     // Polling
     startPolling() {
         this.pollTimer = setInterval(() => this.pollState(), 2000);
+        this.vramPollTimer = setInterval(() => this.pollVRAM(), 5000);
     }
 
     async pollState() {
@@ -1063,11 +1545,13 @@ class DJSlopApp {
                     JSON.stringify(data.previous_stems) !== JSON.stringify(this.state.prevStems) ||
                     JSON.stringify(data.next_stems) !== JSON.stringify(this.state.nextStems) ||
                     data.is_generating !== this.state.isPlaying ||
+                    data.is_show_started !== this.state.isShowStarted ||
                     data.is_running !== this.state.isEngineRunning;
 
                 if (hasChanged) {
                     this.updateUIFromState(data);
                     // Also refresh mixer data (volume, mute, solo)
+                    await this.loadModelsConfig();
                     this.updateStemMixer();
                 }
 
@@ -1087,9 +1571,89 @@ class DJSlopApp {
         }
     }
 
+    async pollVRAM() {
+        try {
+            const response = await fetch('/api/vram');
+            if (response.ok) {
+                const data = await response.json();
+                this.updateVRAMDisplay(data);
+            }
+        } catch (e) {
+            console.error('Failed to poll VRAM:', e);
+        }
+
+        try {
+            const response = await fetch('/api/download-progress');
+            if (response.ok) {
+                const data = await response.json();
+                this.updateDownloadProgress(data);
+            }
+        } catch (e) {
+            console.error('Failed to poll download progress:', e);
+        }
+    }
+
+    updateVRAMDisplay(data) {
+        let vramEl = document.getElementById('vram-meter');
+        if (!vramEl) {
+            // Create VRAM meter if it doesn't exist
+            vramEl = document.createElement('div');
+            vramEl.id = 'vram-meter';
+            vramEl.className = 'vram-meter';
+
+            // Find a good place to insert - after status indicator
+            const statusIndicator = document.getElementById('status-indicator');
+            if (statusIndicator && statusIndicator.parentNode) {
+                statusIndicator.parentNode.insertBefore(vramEl, statusIndicator.nextSibling);
+            }
+        }
+
+        const totalMB = data.total_mb || 0;
+        const maxVRAM = 32 * 1024; // Assume 32GB max for percentage
+
+        vramEl.innerHTML = `
+            <div class="vram-bar-container">
+                <div class="vram-bar" style="width: ${Math.min((totalMB / maxVRAM) * 100, 100)}%"></div>
+            </div>
+            <span class="vram-text">${totalMB.toFixed(0)} MB</span>
+        `;
+    }
+
+    updateDownloadProgress(data) {
+        let container = document.getElementById('download-progress-container');
+        const downloads = data.downloads || {};
+
+        // Only show if there are active downloads
+        const activeDownloads = Object.entries(downloads).filter(([id, d]) => d.status === 'downloading');
+
+        if (activeDownloads.length === 0) {
+            if (container) {
+                container.remove();
+            }
+            return;
+        }
+
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'download-progress-container';
+            container.className = 'download-progress-container';
+            document.body.appendChild(container);
+        }
+
+        container.innerHTML = activeDownloads.map(([id, d]) => `
+            <div class="download-item">
+                <div class="download-filename">${d.filename || id}</div>
+                <div class="download-bar-container">
+                    <div class="download-bar" style="width: ${d.progress || 0}%"></div>
+                </div>
+                <div class="download-percent">${Math.round(d.progress || 0)}%</div>
+            </div>
+        `).join('');
+    }
+
     // Visualizer
     animateVisualizer() {
-        if (!this.analyser) {
+        if (!this.analyser && this.audioPlayer) {
             this.setupAnalyser();
         }
 
@@ -1102,6 +1666,7 @@ class DJSlopApp {
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 256;
+            this.analyser.smoothingTimeConstant = 0.8;
 
             this.source = this.audioContext.createMediaElementSource(this.audioPlayer);
             this.source.connect(this.analyser);
@@ -1112,19 +1677,19 @@ class DJSlopApp {
     }
 
     resizeVisualizer() {
-        const container = this.visualizer.parentElement;
+        const container = this.visualizer?.parentElement;
+        if (!container) return;
         this.visualizer.width = container.clientWidth;
         this.visualizer.height = container.clientHeight;
     }
 
     drawVisualizer() {
-        // Don't resize here - only resize on window resize event
         const ctx = this.visualizerCtx;
         const width = this.visualizer.width;
         const height = this.visualizer.height;
 
         // Clear with slight fade for trail effect
-        ctx.fillStyle = 'rgba(6, 6, 10, 0.25)';
+        ctx.fillStyle = 'rgba(5, 5, 8, 0.25)';
         ctx.fillRect(0, 0, width, height);
 
         if (!this.analyser) {
@@ -1134,32 +1699,28 @@ class DJSlopApp {
                 const phase = (i / 48) * Math.PI * 2;
                 const barHeight = 15 + Math.sin(time * 1.5 + phase) * 12 + Math.sin(time * 0.7 + phase * 0.5) * 8;
 
-                // Gradient per bar
                 const gradient = ctx.createLinearGradient(0, height, 0, height - barHeight - 30);
                 gradient.addColorStop(0, 'rgba(255, 170, 0, 0.9)');
                 gradient.addColorStop(0.5, 'rgba(255, 136, 0, 0.6)');
-                gradient.addColorStop(1, 'rgba(0, 240, 255, 0.15)');
+                gradient.addColorStop(1, 'rgba(0, 229, 255, 0.15)');
 
                 ctx.fillStyle = gradient;
                 const x = (width / 48) * i + 2;
                 const y = height - barHeight - 30;
 
-                // Rounded top bars with enhanced glow
                 ctx.shadowBlur = 15;
                 ctx.shadowColor = 'rgba(255, 170, 0, 0.6)';
                 ctx.beginPath();
                 ctx.roundRect(x, y, (width / 48) - 4, barHeight, 3);
                 ctx.fill();
                 ctx.shadowBlur = 0;
+            }
 
-                // Top highlight
-                if (barHeight > 18) {
-                    ctx.shadowBlur = 10;
-                    ctx.shadowColor = 'rgba(255, 255, 200, 0.8)';
-                    ctx.fillStyle = 'rgba(255, 220, 150, 0.9)';
-                    ctx.fillRect(x + 2, y, (width / 48) - 8, 2);
-                    ctx.shadowBlur = 0;
-                }
+            // Update VU meters with placeholder animation
+            if (this.vuLeftEl && this.vuRightEl) {
+                const vuLevel = 20 + Math.sin(time * 2) * 15 + Math.random() * 5;
+                this.vuLeftEl.style.height = vuLevel + '%';
+                this.vuRightEl.style.height = (vuLevel + Math.sin(time * 1.5) * 8) + '%';
             }
             return;
         }
@@ -1172,14 +1733,23 @@ class DJSlopApp {
         const barWidth = width / barCount;
         const gap = 3;
 
-        // Calculate average for ambient glow
-        let avgValue = 0;
-        for (let i = 0; i < bufferLength; i++) {
-            avgValue += dataArray[i];
-        }
-        avgValue = avgValue / bufferLength / 255;
+        // Calculate average for VU meters
+        let leftSum = 0, rightSum = 0;
+        const half = Math.floor(bufferLength / 2);
+        for (let i = 0; i < half; i++) leftSum += dataArray[i];
+        for (let i = half; i < bufferLength; i++) rightSum += dataArray[i];
+        const leftAvg = (leftSum / half / 255) * 100;
+        const rightAvg = (rightSum / half / 255) * 100;
+
+        // Update VU meters
+        if (this.vuLeftEl) this.vuLeftEl.style.height = leftAvg + '%';
+        if (this.vuRightEl) this.vuRightEl.style.height = rightAvg + '%';
 
         // Draw center beam effect
+        let avgValue = 0;
+        for (let i = 0; i < bufferLength; i++) avgValue += dataArray[i];
+        avgValue = avgValue / bufferLength / 255;
+
         if (this.state.isPlaying && avgValue > 0.3) {
             const beamGradient = ctx.createRadialGradient(
                 width / 2, height / 2, 0,
@@ -1196,7 +1766,6 @@ class DJSlopApp {
             const dataIndex = Math.floor((i / barCount) * bufferLength);
             const value = dataArray[dataIndex];
 
-            // Smooth the values with previous frame (if stored)
             const smoothed = this.prevFreqData ? this.prevFreqData[i] * 0.7 + value * 0.3 : value;
             if (!this.prevFreqData) this.prevFreqData = new Uint8Array(barCount);
             this.prevFreqData[i] = value;
@@ -1206,45 +1775,219 @@ class DJSlopApp {
             const x = barWidth * i + gap;
             const y = height - barHeight - 30;
 
-            // Multi-stop gradient for each bar
             const gradient = ctx.createLinearGradient(0, y + barHeight, 0, y);
             gradient.addColorStop(0, 'rgba(255, 170, 0, 1)');
             gradient.addColorStop(0.4, 'rgba(255, 136, 0, 0.9)');
-            gradient.addColorStop(0.7, 'rgba(0, 240, 255, 0.8)');
-            gradient.addColorStop(1, 'rgba(0, 240, 255, 0.3)');
+            gradient.addColorStop(0.7, 'rgba(0, 229, 255, 0.8)');
+            gradient.addColorStop(1, 'rgba(0, 229, 255, 0.3)');
 
             ctx.fillStyle = gradient;
-
-            // Enhanced glow
             ctx.shadowBlur = 15;
             ctx.shadowColor = 'rgba(255, 170, 0, 0.7)';
 
-            // Draw bar with rounded top
             ctx.beginPath();
             ctx.roundRect(x, y, barWidth - gap * 2, barHeight, [4, 4, 0, 0]);
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            // Top highlight glow with bloom effect
             if (barHeight > 20) {
                 ctx.shadowBlur = 12;
                 ctx.shadowColor = 'rgba(255, 170, 0, 0.9)';
                 ctx.fillStyle = 'rgba(255, 200, 100, 0.9)';
                 ctx.fillRect(x + 2, y, barWidth - gap * 2 - 4, 2);
-
-                // Secondary bloom
-                ctx.shadowBlur = 20;
-                ctx.shadowColor = 'rgba(255, 170, 0, 0.4)';
-                ctx.fillRect(x + 4, y + 2, barWidth - gap * 2 - 8, 1);
                 ctx.shadowBlur = 0;
             }
+        }
+    }
 
-            // Reflection effect
-            const reflectionGradient = ctx.createLinearGradient(0, height - 20, 0, height);
-            reflectionGradient.addColorStop(0, 'rgba(0, 240, 255, 0.2)');
-            reflectionGradient.addColorStop(1, 'rgba(0, 240, 255, 0)');
-            ctx.fillStyle = reflectionGradient;
-            ctx.fillRect(x, height - 20, barWidth - gap * 2, 15);
+    // === CUSTOM STEM CREATOR ===
+
+    async populateCustomStemInstruments() {
+        try {
+            const response = await fetch('/api/instruments');
+            if (response.ok) {
+                const instruments = await response.json();
+                const select = document.getElementById('custom-stem-instrument');
+                if (!select) return;
+
+                // Flatten all instruments into options
+                select.innerHTML = '<option value="">Select instrument...</option>';
+                for (const [category, items] of Object.entries(instruments)) {
+                    if (category === 'Custom' && items.length === 0) continue;
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = category;
+                    items.forEach(item => {
+                        const option = document.createElement('option');
+                        option.value = item;
+                        option.textContent = item;
+                        optgroup.appendChild(option);
+                    });
+                    select.appendChild(optgroup);
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load instruments:', e);
+        }
+    }
+
+    async populateCustomStemModels() {
+        try {
+            const response = await fetch('/api/models');
+            if (response.ok) {
+                const data = await response.json();
+                const select = document.getElementById('custom-stem-model');
+                if (!select) return;
+
+                select.innerHTML = '<option value="default">Default Model</option>';
+                const models = data.models || {};
+                for (const [id, info] of Object.entries(models)) {
+                    if (info.enabled !== false) {
+                        const option = document.createElement('option');
+                        option.value = id;
+                        option.textContent = id;
+                        select.appendChild(option);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load models:', e);
+        }
+    }
+
+    async createCustomStem() {
+        const instrumentSelect = document.getElementById('custom-stem-instrument');
+        const promptInput = document.getElementById('custom-stem-prompt');
+        const modelSelect = document.getElementById('custom-stem-model');
+        const btn = document.getElementById('add-custom-stem-btn');
+
+        const instrument = instrumentSelect.value;
+        const prompt = promptInput.value.trim();
+        const modelId = modelSelect.value || 'default';
+
+        if (!instrument || !prompt) {
+            this.showToast('Please select an instrument and enter a prompt', 'error');
+            return;
+        }
+
+        // Show loading state
+        btn.classList.add('loading');
+        const btnText = btn.querySelector('.btn-text');
+        const btnLoading = btn.querySelector('.btn-loading');
+        if (btnText) btnText.style.display = 'none';
+        if (btnLoading) btnLoading.style.display = 'inline';
+
+        try {
+            const response = await fetch('/api/stems/custom', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instrument, prompt, model_id: modelId })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                this.showToast(`Custom stem added at position ${data.stem_index}`);
+                promptInput.value = '';
+                instrumentSelect.value = '';
+                // Refresh stem deck to show new stem
+                await this.updateStemMixer();
+            } else {
+                const err = await response.json();
+                this.showToast(err.detail || 'Failed to create custom stem', 'error');
+            }
+        } catch (e) {
+            console.error('Failed to create custom stem:', e);
+            this.showToast('Failed to create custom stem', 'error');
+        } finally {
+            btn.classList.remove('loading');
+            if (btnText) btnText.style.display = '';
+            if (btnLoading) btnLoading.style.display = 'none';
+        }
+    }
+
+    async removeNextStem(index) {
+        try {
+            const response = await fetch(`/api/stems/next/${index}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                this.showToast('Stem removed from next loop');
+                await this.updateStemMixer();
+            } else {
+                const err = await response.json();
+                this.showToast(err.detail || 'Failed to remove stem', 'error');
+            }
+        } catch (e) {
+            console.error('Failed to remove next stem:', e);
+            this.showToast('Failed to remove stem', 'error');
+        }
+    }
+
+    // === AUDIENCE MESSAGE BROADCAST ===
+
+    async sendAudienceMessage() {
+        const input = document.getElementById('audience-message-input');
+        const btn = document.getElementById('broadcast-btn');
+
+        const message = input.value.trim();
+        if (!message) {
+            this.showToast('Please enter a message', 'error');
+            return;
+        }
+
+        // Disable button during send
+        btn.disabled = true;
+        btn.classList.add('sending');
+
+        try {
+            const response = await fetch('/api/message/audience', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            });
+
+            if (response.ok) {
+                this.showToast('Message broadcast to audience');
+                input.value = '';
+                document.getElementById('broadcast-char-count').textContent = '0/200';
+            } else {
+                const err = await response.json();
+                this.showToast(err.detail || 'Failed to send message', 'error');
+            }
+        } catch (e) {
+            console.error('Failed to send audience message:', e);
+            this.showToast('Failed to send message', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.classList.remove('sending');
+        }
+    }
+
+    bindBroadcastEvents() {
+        const messageInput = document.getElementById('audience-message-input');
+        const charCount = document.getElementById('broadcast-char-count');
+        const broadcastBtn = document.getElementById('broadcast-btn');
+        const addStemBtn = document.getElementById('add-custom-stem-btn');
+
+        if (messageInput && charCount) {
+            messageInput.addEventListener('input', () => {
+                charCount.textContent = `${messageInput.value.length}/200`;
+            });
+
+            messageInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.sendAudienceMessage();
+                }
+            });
+        }
+
+        if (broadcastBtn) {
+            broadcastBtn.addEventListener('click', () => this.sendAudienceMessage());
+        }
+
+        if (addStemBtn) {
+            addStemBtn.addEventListener('click', () => this.createCustomStem());
         }
     }
 }

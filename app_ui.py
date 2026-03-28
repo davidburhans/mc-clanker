@@ -1,4 +1,3 @@
-import gradio as gr
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +18,11 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
+    print("FASTAPI LIFESPAN: Initializing database...")
+    from db import DatabaseManager
+    db_manager = DatabaseManager.get_instance()
+    db_manager.create_tables()
+
     print("FASTAPI LIFESPAN: Starting framework loop...")
     framework_thread = threading.Thread(target=run_framework_loop, daemon=True)
     framework_thread.start()
@@ -33,206 +37,156 @@ def cleanup():
 
 atexit.register(cleanup)
 
-# Initial reasoning state to reflect loading
-state.llm_reasoning = "⚙️ Initializing Engine... (Loading Foundation-1 Model, ~20s)"
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import Request, Response
+import base64
+import re
 
-# 2. Build the Gradio UI
-with gr.Blocks(title="LLM Composer - Soundtrack for Life") as demo:
-    gr.Markdown("# 🎵 Soundtrack for Life - LLM Composer Dashboard")
 
-    with gr.Row():
-        with gr.Column(scale=2):
-            gr.Markdown("### 📻 Live Radio")
-            # Embed HTML5 Audio player pointing to our FastAPI stream, with timestamp to bust cache
-            gr.HTML(
-                f'<audio id="radio_player" src="/stream.mp3?t={time.time()}" controls autoplay style="width: 100%; border-radius: 8px;"></audio>'
-            )
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
 
-            gr.Markdown("### 🧠 Conductor's Reasoning")
-            reasoning_box = gr.Textbox(
-                label="Strategy & Thoughts", interactive=False, lines=4
-            )
+        # Import here to avoid circular imports
+        from auth import decode_token
+        from db import DatabaseManager
+        from models import Show
 
-            gr.Markdown("### 🎛️ Stem Timeline")
-            with gr.Row():
-                prev_stems_box = gr.JSON(label="Previous Stems")
-                stems_box = gr.JSON(label="Currently Playing")
-                next_stems_box = gr.JSON(label="Up Next (Generating...)")
+        auth_header = request.headers.get("Authorization")
+        current_user = None
 
-        with gr.Column(scale=1):
-            gr.Markdown("### 🎚️ DJ Controls")
-            with gr.Row():
-                bpm_box = gr.Number(label="Current Master BPM", interactive=False)
-                key_box = gr.Textbox(label="Current Master Key", interactive=False)
+        # Try JWT Bearer token first
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            payload = decode_token(token)
+            if payload and "sub" in payload:
+                user_id = int(payload["sub"])
+                db_manager = DatabaseManager.get_instance()
+                with db_manager.session() as session:
+                    user = session.query(type("User", (), {"id": int, "username": str, "email": str, "is_active": bool, "to_dict": lambda s: {"id": s.id, "username": s.username, "email": s.email}}) ).filter_by(id=user_id).first()
+                    if user and user.is_active:
+                        # Attach user to request state
+                        request.state.user = user
+                        current_user = user
 
-            gr.Markdown("---")
-            with gr.Accordion("⚙️ LLM Settings", open=False):
-                llm_url_input = gr.Textbox(
-                    label="API Base URL", value=state.llm_base_url
-                )
-                llm_key_input = gr.Textbox(
-                    label="API Key", value=state.llm_api_key, type="password"
-                )
-                llm_model_input = gr.Textbox(label="Model Name", value=state.llm_model)
-                save_settings_btn = gr.Button("Apply Settings")
+        # If not JWT, try HTTP Basic auth with env vars (backwards compatibility)
+        dj_pass = getattr(state, "dj_password", "")
+        aud_pass = getattr(state, "audience_password", "")
 
-                def save_llm_settings(url, key, model):
-                    with state.lock:
-                        state.llm_base_url = url
-                        state.llm_api_key = key
-                        state.llm_model = model
-                    return gr.Info(
-                        "LLM Settings Applied! Will take effect on next loop."
+        if current_user is None:
+            if not dj_pass and not aud_pass:
+                # No auth configured
+                return await call_next(request)
+
+            provided_pass = None
+            if auth_header and auth_header.startswith("Basic "):
+                try:
+                    decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                    if ":" in decoded:
+                        _, provided_pass = decoded.split(":", 1)
+                except:
+                    pass
+
+            if provided_pass is None:
+                # Check if this route requires auth
+                is_dj_route = path.startswith("/dj") or \
+                              (path.startswith("/api/") and request.method == "POST") or \
+                              path.startswith("/api/llm-config") or \
+                              path.startswith("/api/stems")
+                is_audience_route = path == "/" or \
+                                    path == "/index.html" or \
+                                    path == "/styles.css" or \
+                                    path == "/app.js" or \
+                                    path.startswith("/stream.mp3") or \
+                                    (path.startswith("/api/") and request.method == "GET")
+
+                # If auth is required for this route but no credentials provided, reject
+                if (is_dj_route and dj_pass) or (is_audience_route and aud_pass):
+                    return Response(
+                        "Unauthorized",
+                        status_code=401,
+                        headers={"WWW-Authenticate": 'Basic realm="Restricted"'},
                     )
 
-                save_settings_btn.click(
-                    fn=save_llm_settings,
-                    inputs=[llm_url_input, llm_key_input, llm_model_input],
-                )
+                # Create a pseudo-user for backwards compat when env vars are set
+                class CompatUser:
+                    id = 0
+                    username = "djCompat"
+                    email = "compat@local"
+                    is_active = True
+                    def to_dict(self):
+                        return {"id": 0, "username": "djCompat", "email": "compat@local"}
 
-            gr.Markdown("#### Global Overrides")
-            vibe_override = gr.Textbox(
-                label="Vibe / Context Prompt",
-                placeholder="e.g. 'Make it aggressive', 'Cyberpunk'",
+                request.state.user = CompatUser()
+                current_user = CompatUser()
+
+        def needs_auth(realm="Restricted"):
+            return Response(
+                "Unauthorized",
+                status_code=401,
+                headers={"WWW-Authenticate": f'Basic realm="{realm}"'},
             )
 
-            with gr.Row():
-                bpm_override = gr.Dropdown(
-                    choices=[100, 110, 120, 128, 130, 140, 150],
-                    label="Force Target BPM",
-                )
-                key_override = gr.Dropdown(
-                    choices=[
-                        "C major",
-                        "C minor",
-                        "D major",
-                        "D minor",
-                        "E major",
-                        "E minor",
-                        "F major",
-                        "F minor",
-                        "G major",
-                        "G minor",
-                        "A major",
-                        "A minor",
-                        "B major",
-                        "B minor",
-                    ],
-                    label="Force Target Key",
-                )
+        # Check for per-show audience password in path
+        # Pattern: /api/shows/{id}/playback/* or /api/shows/{id}/audio
+        show_password_match = re.match(r"^/api/shows/(\d+)/(playback|audio)(\/.*)?$", path)
+        if show_password_match:
+            show_id = int(show_password_match.group(1))
+            db_manager = DatabaseManager.get_instance()
+            with db_manager.session() as session:
+                show = session.query(Show).filter(Show.id == show_id).first()
+                if show and show.audience_password_hash:
+                    # Extract password from Basic auth
+                    provided_pass = None
+                    if auth_header and auth_header.startswith("Basic "):
+                        try:
+                            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                            if ":" in decoded:
+                                _, provided_pass = decoded.split(":", 1)
+                        except:
+                            pass
 
-            submit_btn = gr.Button("Submit Override", variant="primary")
+                    if provided_pass:
+                        from auth import verify_password
+                        if not verify_password(provided_pass, show.audience_password_hash):
+                            return needs_auth(f"Show {show_id}")
+                    else:
+                        return needs_auth(f"Show {show_id}")
+                elif show:
+                    # Show exists but no password - allow access
+                    pass
+                else:
+                    # Show not found - let the route handle 404
+                    pass
 
-            start_btn = gr.Button("▶️ Start Engine", variant="primary")
-            reset_btn = gr.Button("⚠️ Reset Engine", variant="stop")
+        # Check for DJ routes (require auth if env var is set)
+        dj_pass = getattr(state, "dj_password", "")
+        is_dj_route = path.startswith("/dj") or \
+                      (path.startswith("/api/") and request.method == "POST") or \
+                      path.startswith("/api/llm-config") or \
+                      path.startswith("/api/stems")
 
-            def start_engine():
-                with state.lock:
-                    state.is_generating = True
-                gr.Info("Engine Started!")
-                return gr.update(interactive=False)
+        is_audience_route = path == "/" or \
+                            path == "/index.html" or \
+                            path == "/styles.css" or \
+                            path == "/app.js" or \
+                            path.startswith("/stream.mp3") or \
+                            (path.startswith("/api/") and request.method == "GET")
 
-            def reset_system():
-                state.reset()
-                return (
-                    gr.update(interactive=True),
-                    gr.update(value=""),
-                    gr.update(value=None),
-                    gr.update(value=None),
-                )
+        # Legacy env-var password check (only if no JWT user)
+        if current_user and current_user.id == 0:  # Compat user from env vars
+            if is_dj_route and dj_pass:
+                # Already verified above if provided_pass == dj_pass
+                pass
+            elif is_audience_route and aud_pass:
+                # Already verified above
+                pass
 
-            start_btn.click(fn=start_engine, outputs=[start_btn])
-            reset_btn.click(
-                fn=reset_system,
-                outputs=[start_btn, vibe_override, bpm_override, key_override],
-            )
+        return await call_next(request)
 
-            gr.Markdown("#### Instrument Rack")
-
-            category_checkboxes = []
-            for category, items in state.categorized_instruments.items():
-                with gr.Accordion(
-                    category,
-                    open=(category == "Electronic & Dance" or category == "Rock & Pop"),
-                ):
-                    cb = gr.CheckboxGroup(choices=items, value=items, label=category)
-                    category_checkboxes.append(cb)
-
-            gr.Markdown("#### Add Custom Instrument")
-            with gr.Row():
-                custom_inst_input = gr.Textbox(
-                    show_label=False, placeholder="e.g. Kazoo, 8-bit Synth, Didgeridoo"
-                )
-                add_inst_btn = gr.Button("Add")
-
-            def add_custom(new_inst):
-                if new_inst:
-                    updated_cats = state.add_custom_instrument(new_inst.strip())
-                    return gr.update(
-                        choices=updated_cats["Custom"], value=updated_cats["Custom"]
-                    ), ""
-                return gr.update(), ""
-
-            add_inst_btn.click(
-                fn=add_custom,
-                inputs=[custom_inst_input],
-                outputs=[category_checkboxes[-1], custom_inst_input],
-            )
-
-            def submit_overrides(vibe, bpm, key, *categories):
-                all_selected = []
-                for cat_list in categories:
-                    all_selected.extend(cat_list)
-
-                with state.lock:
-                    if vibe:
-                        state.user_override = vibe
-                    if bpm:
-                        state.target_bpm_override = int(bpm)
-                        if not state.is_generating:
-                            state.current_bpm = int(bpm)
-                    if key:
-                        state.target_key_override = key
-                        if not state.is_generating:
-                            state.current_key = key
-                    state.available_instruments = all_selected
-                return gr.update(value=""), gr.update(value=None), gr.update(value=None)
-
-            submit_btn.click(
-                fn=submit_overrides,
-                inputs=[vibe_override, bpm_override, key_override]
-                + category_checkboxes,
-                outputs=[vibe_override, bpm_override, key_override],
-            )
-
-    def update_ui():
-        with state.lock:
-            return (
-                state.llm_reasoning,
-                state.previous_stems,
-                state.active_stems,
-                state.next_stems,
-                state.current_bpm,
-                state.current_key,
-                gr.update(interactive=not state.is_generating),
-            )
-
-    timer = gr.Timer(value=1.0)
-    timer.tick(
-        fn=update_ui,
-        outputs=[
-            reasoning_box,
-            prev_stems_box,
-            stems_box,
-            next_stems_box,
-            bpm_box,
-            key_box,
-            start_btn,
-        ],
-    )
-
-# 3. Build FastAPI App and Mount Gradio
+# 3. Build FastAPI App
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(AuthMiddleware)
 
 # Register API routes for DJ UI
 app.include_router(api_router)
@@ -274,6 +228,20 @@ def audio_stream_generator():
     except Exception as e:
         print(f"WARNING: Could not verify ffmpeg capabilities: {e}")
 
+    # Wait for actual audio data before starting FFmpeg
+    # This prevents the browser from timing out waiting for MP3 frames
+    # when is_generating=false (only silence being produced)
+    try:
+        first_chunk = client_q.get(timeout=300.0)
+        if first_chunk is None:
+            print("DEBUG: audio_stream_generator received poison pill before first chunk")
+            state.remove_audio_client(client_q)
+            return
+    except queue.Empty:
+        print("DEBUG: audio_stream_generator timed out waiting for first audio chunk")
+        state.remove_audio_client(client_q)
+        return
+
     # ffmpeg tuned for low-latency streaming
     ffmpeg_cmd = [
         ffmpeg_exe,
@@ -303,16 +271,15 @@ def audio_stream_generator():
         stderr=subprocess.PIPE,
     )
 
-    # Pre-feed some silence to ffmpeg so it can start encoding immediately
-    # This prevents the browser from timing out waiting for first MP3 frame
-    # 2048 samples * 2 channels * 2 bytes = 8192 bytes of silence
-    silence_chunk = bytes(8192)
+    # Pre-feed the first chunk we already received
     try:
-        process.stdin.write(silence_chunk)
+        process.stdin.write(first_chunk)
         process.stdin.flush()
-        print("DEBUG: Pre-fed silence to ffmpeg")
+        print("DEBUG: Pre-fed first audio chunk to ffmpeg")
     except Exception as e:
-        print(f"Warning: Could not pre-feed silence to ffmpeg: {e}")
+        print(f"Warning: Could not pre-feed first chunk to ffmpeg: {e}")
+        state.remove_audio_client(client_q)
+        return
 
     def feeder():
         try:
@@ -386,11 +353,19 @@ def stream_mp3():
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0",
+            "Accept-Ranges": "bytes",
         },
     )
 
 
-app = gr.mount_gradio_app(app, demo, path="/")
+
+# Mount static files for Audience UI at root
+audience_dir = os.path.join(
+    os.path.abspath(os.path.dirname(__file__)), "static", "audience"
+)
+if os.path.exists(audience_dir):
+    app.mount("/", StaticFiles(directory=audience_dir, html=True), name="audience_ui")
+
 
 if __name__ == "__main__":
     class CustomServer(uvicorn.Server):

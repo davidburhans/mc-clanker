@@ -1,26 +1,48 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=mcclanker
+      - POSTGRES_PASSWORD=change-me-in-production
+      - POSTGRES_DB=mcclanker
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcclanker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   mc-clanker:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "7860:7860"
+      - "0.0.0.0:7860:7860"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
-      - NVIDIA_DISABLE_REQUIRE=1
       - LLM_BASE_URL=http://192.168.0.203:1234/v1
       - LLM_API_KEY=not-needed
       - LLM_MODEL=local-model
       - ICECAST_ENABLED=false
       - EXPORT_DIR=/exports
       - DISABLE_LOCAL_AUDIO=1
+      - DATABASE_URL=postgresql://mcclanker:change-me-in-production@postgres:5432/mcclanker
+      - JWT_SECRET=change-me-in-production-use-strong-secret
+      - SHOWS_DIR=/exports/shows
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface:rw
       - ./exports:/exports:rw
+      - ./models_config.json:/app/models_config.json:rw
+      - ./static:/app/static:rw
+      - ./data:/app/data:rw
     devices:
       - nvidia.com/gpu=all
-      - /dev/snd:/dev/snd
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   # Optional Icecast server for streaming output
@@ -33,3 +55,6 @@ services:
   #     - ICECAST_SOURCE_PASSWORD=sourcepass
   #     - ICECAST_ADMIN_PASSWORD=adminpass
   #     - ICECAST_MAX_SOURCES=10
+
+volumes:
+  postgres_data:

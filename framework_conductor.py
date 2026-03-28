@@ -23,8 +23,12 @@ CRITICAL DJ & MUSIC THEORY RULES:
 6. STEM FRESHNESS: Stems that have been playing for more than 5-10 loops become stale and boring. You should prefer removing or replacing older stems (higher age values) to keep the mix fresh and evolving.
 7. Provide a 1-sentence 'reasoning' explaining your DJ choice based on these music theory principles.
 
+CRITICAL OVERRIDE RULE:
+- If an OVERRIDE directive is provided in the prompt, you MUST incorporate that vibe/mood/style into ALL your musical decisions. The override is the user's creative intent and must be honored. Choose instruments, timbres, and FX that match the requested vibe.
+
 DJ ACTION RULES:
 - For 'add' actions: You MUST provide a valid musical selection for EVERY instrument field (major_family, sub_family, timbre_tags, etc.). You are strictly FORBIDDEN from using `null` or empty values for these fields when adding a stem.
+- For 'add' actions: You MUST also provide a `model_id` from the available models list to generate the stem.
 - For 'retain' or 'remove' actions: You only need to provide the `stem_index`. Other instrument fields should be `null`.
 
 Output a valid JSON object matching the requested schema EXACTLY. Do not output any thinking or extra text outside the JSON.
@@ -41,11 +45,14 @@ Recent Track History:
 Available Instrument Types:
 {instruments}
 
+Available AI Generator Models:
+{models}
+
 YOUR TASK:
 Provide the next set of DJ actions.
 Instead of generating a full tracklist, you must define an array of `actions`:
 - `retain`: Keep an active stem playing exactly as it is (REQUIRED for flow). You must provide its exact `stem_index`.
-- `add`: Introduce a NEW stem. Provide the full instrument parameters (major_family, sub_family, etc.).
+- `add`: Introduce a NEW stem. Provide the full instrument parameters (major_family, sub_family, etc.) AND a `model_id`.
 - `remove`: Stop an active stem from playing. Provide its `stem_index`.
 
 To keep the groove flowing, you SHOULD `retain` most of the 'Active Stems'. You should never have complete turn over of stems.
@@ -58,7 +65,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         self._cached_client = None
         self._cached_config = None
 
-    def get_next_state(self, current_bpm, current_key, active_stems, user_override="", available_instruments=None, stem_history=None, llm_config=None):
+    def get_next_state(self, current_bpm, current_key, active_stems, user_override="", available_instruments=None, stem_history=None, llm_config=None, available_models=None):
         if available_instruments is None:
             available_instruments = ["Any"]
         if stem_history is None:
@@ -76,6 +83,11 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         for idx, s in enumerate(active_stems):
             age = s.get('_age', 0)
             simple_stems.append(f"Index {idx} (age {age}): {s.get('prompt', 'Unknown')}")
+
+        models_str = "None provided"
+        if available_models:
+            models_list = [f"- {m['id']}: {m['description']} (Supported Families: {m.get('supported_families', ['Any'])})" for m in available_models]
+            models_str = "\n".join(models_list)
 
         # Handle client caching
         if llm_config and llm_config.get('base_url'):
@@ -99,13 +111,17 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             stems="\n".join(simple_stems) if simple_stems else "None",
             history=history_str if history_str else "None",
             instruments=", ".join(available_instruments),
+            models=models_str,
             stem_count=stem_count,
             density_directive=density_directive
         )
         
         if user_override:
             user_prompt += f"\nOVERRIDE: {user_override}"
-            
+            print(f"DEBUG: Vibe appended to prompt: '{user_override}'")
+        else:
+            print(f"DEBUG: No vibe to append (user_override is empty)")
+
         print(f"DEBUG: Calling LLM ({model_name})...")
         try:
             response = client.chat.completions.create(
@@ -145,6 +161,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                                 "description": "Add a new musical element to the mix.",
                                                 "properties": {
                                                     "action_type": { "type": "string", "const": "add" },
+                                                    "model_id": { "type": "string", "description": "The ID of the model to use for generation." },
                                                     "major_family": { "type": "string", "enum": ["Drums", "Percussion", "Synth", "Keys", "Bass", "Bowed Strings", "Mallet", "Wind", "Guitar", "Brass", "Vocal", "Plucked Strings"] },
                                                     "sub_family": { "type": "string", "enum": ["Drum Kit", "Electronic Drums", "Acoustic Drums", "Kick Drum", "Snare Drum", "Hi-Hats", "Cymbals", "Percussion", "Claps", "Shaker", "Tambourine", "808 Drums", "Synth Lead", "Synth Bass", "Digital Piano", "Pluck", "Grand Piano", "Bell", "Pad", "Atmosphere", "Digital Strings", "FM Synth", "Violin", "Digital Organ", "Supersaw", "Wavetable Bass", "Rhodes Piano", "Cello", "Texture", "Flute", "Reese Bass", "Wavetable Synth", "Electric Bass", "Marimba", "Synthetic", "Electric Guitar", "Sub Bass", "Trumpet", "Pan Flute", "Picked Bass", "Digital Bass", "Brass", "Saxophone", "Choir", "Harp", "Woodwinds", "Church Organ", "Pipe Organ", "Church Bell", "Koto", "Felt Piano", "Harpsichord", "Steel Drums", "Tubular Bells", "Organ", "Analog Bass", "Sitar", "Fiddle", "Piccolo", "World Winds", "Nylon Guitar", "Alto Sax", "Acoustic Guitar", "Soprano Sax", "FM Bass", "Celesta", "Clavinet", "Celtic Harp", "Concert Harp", "CP Piano", "Guitar", "Hammond Organ", "Tack Piano", "Wurlitzer Piano", "Music Box", "Analog Synth", "Kalimba", "Glockenspiel", "Vibraphone", "Ocarina", "Xylophone", "Viola", "Bass Trombone", "Tenor Trombone", "Tenor Sax", "Bassoon", "Irish Flute", "French Horn", "Synth", "Piano", "Clarinet", "Flugelhorn", "Baritone Sax", "Tuba", "Oboe"] },
                                                     "timbre_tags": { 
@@ -156,7 +173,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                                                     "fx_tag": { "type": "string", "enum": ["Low Reverb", "Medium Reverb", "High Reverb", "Plate Reverb", "Low Delay", "Medium Delay", "High Delay", "Ping Pong Delay", "Stereo Delay", "Cross Delay", "Mono Delay", "Low Distortion", "Medium Distortion", "High Distortion", "Phaser", "Low Phaser", "Medium Phaser", "High Phaser", "Bitcrush", "High Bitcrush", "Dry", "Wet"] },
                                                     "bars": { "type": "integer", "enum": [4, 8] }
                                                 },
-                                                "required": ["action_type", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
+                                                "required": ["action_type", "model_id", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
                                                 "additionalProperties": False
                                             },
                                             {
@@ -202,4 +219,3 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                 "actions": fallback_actions,
                 "reasoning": f"LLM FAILED ({e}). Automatically retaining current groove."
             }
-

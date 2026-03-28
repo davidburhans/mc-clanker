@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="MC CLANKER — AI-Powered Live Radio">
+    <meta name="theme-color" content="#06060a">
+    <title>MC CLANKER // LIVE</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600;700;800&family=Fira+Code:wght@400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link id="main-css" rel="stylesheet" href="styles.css">
+    <script>document.getElementById('main-css').href += '?v=' + Date.now();</script>
+</head>
+<body>
+    <!-- Dynamic Background Elements -->
+    <div class="glow-bg" id="glow-bg"></div>
+    <canvas id="particles-bg" class="particles-bg"></canvas>
+
+    <!-- Scanline overlay for CRT texture -->
+    <div class="scanlines"></div>
+
+    <!-- Noise grain texture -->
+    <div class="grain"></div>
+
+    <div class="audience-container">
+        <!-- Header -->
+        <header class="audience-header" id="header">
+            <div class="header-inner">
+                <div class="logo-block">
+                    <div class="logo-decoration">
+                        <span class="logo-bar"></span>
+                        <span class="logo-bar"></span>
+                        <span class="logo-bar"></span>
+                    </div>
+                    <h1 class="logo">MC CLANKER</h1>
+                    <span class="tagline">AI-POWERED LIVE RADIO</span>
+                </div>
+
+                <div class="status-block">
+                    <div class="signal-bars" id="signal-bars">
+                        <span class="bar"></span>
+                        <span class="bar"></span>
+                        <span class="bar"></span>
+                        <span class="bar"></span>
+                    </div>
+                    <div class="status-pill" id="status-indicator">
+                        <span class="status-led"></span>
+                        <span class="status-label">OFFLINE</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="header-eq">
+                <div class="eq-bar" style="--delay: 0"></div>
+                <div class="eq-bar" style="--delay: 1"></div>
+                <div class="eq-bar" style="--delay: 2"></div>
+                <div class="eq-bar" style="--delay: 3"></div>
+                <div class="eq-bar" style="--delay: 4"></div>
+                <div class="eq-bar" style="--delay: 5"></div>
+                <div class="eq-bar" style="--delay: 6"></div>
+                <div class="eq-bar" style="--delay: 7"></div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content" id="main">
+            <!-- DJ Message Banner -->
+            <div class="dj-message-banner" id="dj-message-banner">
+                <div class="dj-message-inner">
+                    <div class="dj-message-badge">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/>
+                            <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.4"/>
+                            <circle cx="12" cy="12" r="2"/>
+                            <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.4"/>
+                            <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
+                        </svg>
+                        <span>DJ MESSAGE</span>
+                    </div>
+                    <p class="dj-message-text" id="dj-message-text"></p>
+                </div>
+                <button class="dj-message-close" id="dj-message-close">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Visualizer / Now Playing Area -->
+            <section class="visualizer-section">
+                <div class="visualizer-wrapper">
+                <div class="visualizer-controls">
+                    <select id="visualizer-mode-select" class="viz-select">
+                        <option value="pulse">Neon Pulse</option>
+                        <option value="osc">Oscilloscope</option>
+                        <option value="bars">Retro EQ</option>
+                        <option value="starfield">Starfield</option>
+                    </select>
+                </div>
+                <!-- Radial Visualizer -->
+                    <canvas id="visualizer" class="radial-visualizer"></canvas>
+
+                    <!-- Circular VU Meter overlay -->
+                    <div class="vu-overlay" id="vu-overlay">
+                        <svg viewBox="0 0 200 200" class="vu-svg">
+                            <defs>
+                                <linearGradient id="vuGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                    <stop offset="0%" stop-color="#00ff88"/>
+                                    <stop offset="50%" stop-color="#ffaa00"/>
+                                    <stop offset="100%" stop-color="#ff3b5c"/>
+                                </linearGradient>
+                            </defs>
+                            <circle cx="100" cy="100" r="85" class="vu-track"/>
+                            <circle cx="100" cy="100" r="85" class="vu-fill" id="vu-fill"/>
+                            <circle cx="100" cy="100" r="70" class="vu-center"/>
+                            <text x="100" y="95" class="vu-label">SIGNAL</text>
+                            <text x="100" y="115" class="vu-status" id="vu-status">---</text>
+                        </svg>
+                    </div>
+
+                    <!-- Waiting Overlay -->
+                    <div class="waiting-overlay" id="waiting-overlay">
+                        <div class="waiting-content">
+                            <div class="waiting-icon">
+                                <div class="waiting-radar">
+                                    <div class="radar-ring"></div>
+                                    <div class="radar-ring"></div>
+                                    <div class="radar-ring"></div>
+                                    <div class="radar-sweep"></div>
+                                    <div class="radar-center"></div>
+                                </div>
+                            </div>
+                            <div class="waiting-text" id="waiting-text">STANDBY MODE</div>
+                            <div class="waiting-subtext" id="waiting-subtext">DJ is warming up the decks</div>
+                            <div class="waiting-timer" id="waiting-timer">
+                                <span class="timer-value">00:00</span>
+                                <span class="timer-label">in queue</span>
+                            </div>
+                            <div class="signal-loader">
+                                <span class="signal-bar"></span>
+                                <span class="signal-bar"></span>
+                                <span class="signal-bar"></span>
+                                <span class="signal-bar"></span>
+                                <span class="signal-bar"></span>
+                            </div>
+                            <div class="waiting-footer">
+                                <span class="waiting-hint" id="waiting-hint">Tune in soon for an AI-generated experience</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Going Live Transition Overlay -->
+                    <div class="going-live-overlay" id="going-live-overlay">
+                        <div class="going-live-bg"></div>
+                        <div class="going-live-content">
+                            <div class="going-live-icon">
+                                <div class="live-burst">
+                                    <div class="burst-ring"></div>
+                                    <div class="burst-ring"></div>
+                                    <div class="burst-ring"></div>
+                                    <div class="burst-core"></div>
+                                </div>
+                            </div>
+                            <div class="going-live-countdown" id="going-live-countdown">3</div>
+                            <div class="going-live-text">GOING LIVE</div>
+                            <div class="going-live-text going-live-text-2">IN 3</div>
+                            <div class="going-live-subtext">Prepare to experience the sound</div>
+                        </div>
+                    </div>
+
+                    <!-- Now Playing Info -->
+                    <div class="now-playing-block">
+                        <div class="track-badges">
+                            <div class="badge badge-bpm" id="bpm-badge">
+                                <span class="badge-value">---</span>
+                                <span class="badge-unit">BPM</span>
+                            </div>
+                            <div class="badge badge-key" id="key-badge">
+                                <span class="badge-value">---</span>
+                            </div>
+                        </div>
+
+                        <div class="track-display">
+                            <span class="track-label">NOW PLAYING</span>
+                            <h2 class="track-title" id="current-track-name">Initializing stream...</h2>
+                        </div>
+
+                        <div class="waveform-decoration">
+                            <span></span><span></span><span></span><span></span><span></span>
+                            <span></span><span></span><span></span><span></span><span></span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Stems Panel -->
+            <section class="stems-section" id="stems-section">
+                <div class="stems-header">
+                    <div class="stems-title-block">
+                        <div class="stems-indicator"></div>
+                        <h3 class="stems-title">ACTIVE STEMS</h3>
+                    </div>
+                    <span class="stem-count" id="stem-count">
+                        <span class="count-number">0</span>
+                        <span class="count-label">STEMS</span>
+                    </span>
+                </div>
+
+                <div class="stems-grid" id="stems-grid">
+                    <div class="empty-state">
+                        <div class="empty-icon">
+                            <svg viewBox="0 0 48 48" fill="none">
+                                <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2"/>
+                                <path d="M24 14v10M24 34v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <p class="empty-text">Awaiting generation</p>
+                        <div class="empty-pulse"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer / Transport -->
+        <footer class="audience-footer" id="footer">
+            <div class="transport-left">
+                <button id="play-btn" class="transport-btn play" title="Play/Pause" aria-label="Play or Pause">
+                    <span class="btn-glow"></span>
+                    <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                    <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="6" y="4" width="4" height="16"/>
+                        <rect x="14" y="4" width="4" height="16"/>
+                    </svg>
+                </button>
+
+                <div class="volume-block">
+                    <div class="volume-icon">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                        </svg>
+                    </div>
+                    <div class="volume-slider-wrapper">
+                        <input type="range" id="volume-slider" min="0" max="100" value="80">
+                        <div class="volume-fill" id="volume-fill"></div>
+                    </div>
+                    <span class="volume-value" id="volume-value">80</span>
+                </div>
+            </div>
+
+            <div class="stream-info">
+                <div class="stream-indicator">
+                    <span class="stream-dot"></span>
+                    <span class="stream-text">MP3 STREAM</span>
+                </div>
+                <div class="bitrate-display">128kbps</div>
+            </div>
+
+            <a href="/dj" class="dj-link">
+                <span class="dj-link-text">DJ DASHBOARD</span>
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/>
+                </svg>
+            </a>
+        </footer>
+    </div>
+
+    <audio id="audio-player" crossorigin="anonymous"></audio>
+    <script src="app.js"></script>
+</body>
+</html>

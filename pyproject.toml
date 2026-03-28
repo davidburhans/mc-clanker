@@ -1,0 +1,23 @@
+[project]
+name = "mc-clanker"
+version = "0.1.0"
+description = "AI-Powered Continuous Music Generator - A professional DJ-style interface for real-time music generation using Foundation-1"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "stable-audio-tools==0.0.19",
+    "scipy",
+    "sounddevice",
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "huggingface_hub",
+    "safetensors",
+    "openai",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]

@@ -14,6 +14,9 @@ dist/
 build/
 *.egg
 
+# uv
+uv.lock
+
 # Environment
 .env
 .env.local
@@ -50,3 +53,7 @@ app.log
 
 # Docker
 .dockerignore
+
+# Testing
+.coverage
+.pytest_cache/

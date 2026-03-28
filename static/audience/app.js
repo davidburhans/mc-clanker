@@ -1,0 +1,975 @@
+// MC Clanker - Audience Interface - Analog Warmth Meets Neon Pulse
+
+class AudienceApp {
+    constructor() {
+        this.audioPlayer = document.getElementById('audio-player');
+        this.playBtn = document.getElementById('play-btn');
+        this.volumeSlider = document.getElementById('volume-slider');
+        this.volumeValue = document.getElementById('volume-value');
+        this.volumeFill = document.getElementById('volume-fill');
+        this.statusIndicator = document.getElementById('status-indicator');
+        this.signalBars = document.getElementById('signal-bars');
+        this.trackName = document.getElementById('current-track-name');
+        this.stemsGrid = document.getElementById('stems-grid');
+        this.stemCount = document.getElementById('stem-count');
+        this.visualizer = document.getElementById('visualizer');
+        this.ctx = this.visualizer.getContext('2d');
+        this.particlesCanvas = document.getElementById('particles-bg');
+        this.particlesCtx = this.particlesCanvas ? this.particlesCanvas.getContext('2d') : null;
+        this.particles = [];
+        if (this.particlesCanvas) this.initParticles();
+        this.vuFill = document.getElementById('vu-fill');
+        this.vuStatus = document.getElementById('vu-status');
+        this.waitingOverlay = document.getElementById('waiting-overlay');
+        this.goingLiveOverlay = document.getElementById('going-live-overlay');
+        this.waitingText = document.getElementById('waiting-text');
+        this.waitingSubtext = document.getElementById('waiting-subtext');
+        this.waitingTimer = document.getElementById('waiting-timer');
+        this.waitingHint = document.getElementById('waiting-hint');
+
+        // DJ Message Banner
+        this.djMessageBanner = document.getElementById('dj-message-banner');
+        this.djMessageText = document.getElementById('dj-message-text');
+        this.djMessageClose = document.getElementById('dj-message-close');
+        this.currentDjMessage = '';
+        this.djMessageTimeout = null;
+
+        if (this.djMessageClose) {
+            this.djMessageClose.addEventListener('click', () => this.hideDjMessage());
+        }
+
+        // Visualizer Mode Selection
+        this.vizSelect = document.getElementById('visualizer-mode-select');
+        this.currentVizMode = 'pulse';
+        if (this.vizSelect) {
+            this.vizSelect.addEventListener('change', (e) => {
+                this.currentVizMode = e.target.value;
+                if (this.currentVizMode === 'starfield') this.initStarfield();
+            });
+        }
+
+        this.isPlaying = false;
+        this.isShowStarted = false;
+        this.isTransitioning = false;
+        this.waitingRotationInterval = null;
+        this.waitingStartTime = null;
+        this.waitingTimerInterval = null;
+        this.audioContext = null;
+        this.analyser = null;
+        this.currentStems = [];
+        this.lastVolume = 80;
+
+        this.init();
+    }
+
+    init() {
+        // Initialize audio player
+        this.audioPlayer.volume = this.volumeSlider.value / 100;
+        // Don't set src here - only request stream when show is playing
+        // This prevents browser from connecting to stream before audio is actually available
+        this.updateVolumeFill(this.volumeSlider.value);
+
+        // Event listeners
+        this.playBtn.addEventListener('click', () => this.togglePlay());
+        this.volumeSlider.addEventListener('input', (e) => {
+            this.audioPlayer.volume = e.target.value / 100;
+            this.volumeValue.textContent = e.target.value;
+            this.updateVolumeFill(e.target.value);
+        });
+
+        this.audioPlayer.addEventListener('playing', () => this.setStatus('connected'));
+        this.audioPlayer.addEventListener('waiting', () => this.setStatus('connecting'));
+        this.audioPlayer.addEventListener('error', () => this.setStatus('disconnected'));
+        this.audioPlayer.addEventListener('pause', () => {
+            if (this.isPlaying) this.setStatus('paused');
+        });
+
+        // Polling - faster for show state changes
+        setInterval(() => this.pollState(), 1000);
+        window.addEventListener('resize', () => this.resizeCanvas());
+        this.resizeCanvas();
+        this.animate();
+
+        // Entrance animations timing
+        setTimeout(() => {
+            document.querySelectorAll('.stem-card').forEach((card, i) => {
+                card.style.animationDelay = `${0.6 + i * 0.08}s`;
+            });
+        }, 500);
+
+        // Initial state - show waiting overlay
+        this.updateShowState(false);
+        this.startWaitingSubtextRotation();
+    }
+
+    updateVolumeFill(value) {
+        this.volumeFill.style.width = `${value}%`;
+    }
+
+    togglePlay() {
+        if (!this.isShowStarted) return;
+
+        if (this.isPlaying) {
+            this.audioPlayer.pause();
+            this.isPlaying = false;
+            this.playBtn.classList.remove('playing');
+            this.setStatus('paused');
+        } else {
+            // Resume AudioContext if suspended (Chrome autoplay policy)
+            if (this.audioContext && this.audioContext.state === 'suspended') {
+                this.audioContext.resume();
+            }
+
+            this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
+            this.audioPlayer.play().catch(e => console.error("Play error:", e));
+            this.isPlaying = true;
+            this.playBtn.classList.add('playing');
+            this.setupAudio();
+        }
+    }
+
+    setupAudio() {
+        if (!this.audioContext) {
+            try {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                this.analyser = this.audioContext.createAnalyser();
+                this.analyser.fftSize = 256;
+                this.analyser.smoothingTimeConstant = 0.8;
+                const source = this.audioContext.createMediaElementSource(this.audioPlayer);
+                source.connect(this.analyser);
+                this.analyser.connect(this.audioContext.destination);
+            } catch (e) {
+                console.error("Analyser setup failed:", e);
+            }
+        } else if (this.audioContext.state === 'suspended') {
+            // If context was suspended, resume it and reconnect source
+            this.audioContext.resume();
+        }
+    }
+
+    setStatus(status) {
+        this.statusIndicator.className = `status-pill ${status}`;
+        const labels = {
+            'connected': 'LIVE',
+            'disconnected': 'OFFLINE',
+            'connecting': 'SYNC',
+            'paused': 'PAUSED',
+            'waiting': 'STANDBY'
+        };
+        this.statusIndicator.querySelector('.status-label').textContent = labels[status] || status.toUpperCase();
+
+        // Update signal bars
+        if (status === 'connected') {
+            this.signalBars.classList.add('active');
+        } else {
+            this.signalBars.classList.remove('active');
+        }
+
+        // Update VU status
+        if (status === 'connected' && this.isPlaying) {
+            this.vuStatus.textContent = 'LIVE';
+        } else if (status === 'paused') {
+            this.vuStatus.textContent = 'HOLD';
+        } else if (status === 'connecting') {
+            this.vuStatus.textContent = 'SYNC';
+        } else {
+            this.vuStatus.textContent = '---';
+        }
+    }
+
+    async pollState() {
+        try {
+            const res = await fetch('/api/state');
+            if (res.ok) {
+                const data = await res.json();
+                this.updateTrackInfo(data);
+                this.updateStems(data.active_stems || []);
+                this.updateShowState(data.is_show_started || false);
+
+                // Check for new DJ message
+                if (data.audience_message && data.audience_message !== this.currentDjMessage) {
+                    this.currentDjMessage = data.audience_message;
+                    this.showDjMessage(data.audience_message);
+                }
+            }
+        } catch (e) {
+            console.error("State fetch error:", e);
+        }
+    }
+
+    showDjMessage(message) {
+        if (!this.djMessageBanner || !this.djMessageText) return;
+
+        // Clear any existing timeout
+        if (this.djMessageTimeout) {
+            clearTimeout(this.djMessageTimeout);
+        }
+
+        // Set message and show banner
+        this.djMessageText.textContent = message;
+        this.djMessageBanner.classList.add('active');
+
+        // Auto-hide after 10 seconds
+        this.djMessageTimeout = setTimeout(() => {
+            this.hideDjMessage();
+        }, 10000);
+    }
+
+    hideDjMessage() {
+        if (!this.djMessageBanner) return;
+
+        this.djMessageBanner.classList.remove('active');
+        this.currentDjMessage = '';
+
+        if (this.djMessageTimeout) {
+            clearTimeout(this.djMessageTimeout);
+            this.djMessageTimeout = null;
+        }
+    }
+
+    updateShowState(isShowStarted) {
+        const wasStarted = this.isShowStarted;
+        this.isShowStarted = isShowStarted;
+
+        if (!isShowStarted) {
+            // Show ended - trigger graceful ending transition
+            this.stopWaitingTimer();
+
+            if (wasStarted && this.isPlaying) {
+                // Show was running - play ending animation first
+                this.triggerGoingOffline().then(() => {
+                    this.waitingOverlay.classList.add('active');
+                    this.playBtn.classList.add('disabled');
+                    if (this.waitingText) this.waitingText.textContent = 'STANDBY MODE';
+                    if (this.waitingSubtext) this.waitingSubtext.textContent = 'DJ is warming up the decks';
+                    if (this.waitingHint) this.waitingHint.textContent = 'Tune in soon for an AI-generated experience';
+                    this.startWaitingTimer();
+                    // Reset so next show start will trigger animation again
+                    this.wasShowStarted = false;
+                });
+            } else {
+                // Initial state or already stopped
+                this.waitingOverlay.classList.add('active');
+                this.playBtn.classList.add('disabled');
+                if (this.waitingText) this.waitingText.textContent = 'STANDBY MODE';
+                if (this.waitingSubtext) this.waitingSubtext.textContent = 'DJ is warming up the decks';
+                if (this.waitingHint) this.waitingHint.textContent = 'Tune in soon for an AI-generated experience';
+                this.startWaitingTimer();
+                this.wasShowStarted = false;
+            }
+
+            // Pause and reset audio
+            if (this.isPlaying) {
+                this.audioPlayer.pause();
+                this.isPlaying = false;
+                this.playBtn.classList.remove('playing');
+            }
+            this.setStatus('waiting');
+        } else {
+            // Show started!
+            this.stopWaitingTimer();
+
+            if (!wasStarted) {
+                // Transitioning from waiting to live - trigger going live animation
+                this.triggerGoingLive();
+            } else {
+                // Already was started (e.g., reconnection) - just remove overlay
+                this.waitingOverlay.classList.remove('active');
+                this.playBtn.classList.remove('disabled');
+            }
+        }
+    }
+
+    triggerGoingLive() {
+        this.isTransitioning = true;
+
+        // Stop the waiting subtext rotation
+        if (this.waitingRotationInterval) {
+            clearInterval(this.waitingRotationInterval);
+            this.waitingRotationInterval = null;
+        }
+
+        // Stop the waiting timer
+        this.stopWaitingTimer();
+
+        // Hide waiting overlay immediately
+        this.waitingOverlay.classList.remove('active');
+
+        // Show going live overlay with animation
+        if (this.goingLiveOverlay) {
+            this.goingLiveOverlay.classList.add('active');
+        }
+
+        // Countdown sequence
+        const countdownEl = document.getElementById('going-live-countdown');
+        const text2El = this.goingLiveOverlay?.querySelector('.going-live-text-2');
+        let count = 3;
+
+        // Initial state
+        if (countdownEl) {
+            countdownEl.textContent = count;
+        }
+        if (text2El) {
+            text2El.textContent = 'IN 3';
+        }
+
+        const countdownInterval = setInterval(() => {
+            if (count > 1) {
+                count--;
+                if (countdownEl) {
+                    countdownEl.textContent = count;
+                    // Re-trigger animation
+                    countdownEl.style.animation = 'none';
+                    countdownEl.offsetHeight; // Trigger reflow
+                    countdownEl.style.animation = 'countdownPop 1s ease-out forwards';
+                }
+                if (text2El) {
+                    text2El.textContent = `IN ${count}`;
+                    text2El.style.animation = 'none';
+                    text2El.offsetHeight;
+                    text2El.style.animation = 'goingLiveTextSlide 0.6s ease-out forwards';
+                }
+            } else {
+                clearInterval(countdownInterval);
+            }
+        }, 800);
+
+        // After animation completes, remove overlays and start playing
+        setTimeout(() => {
+            if (this.goingLiveOverlay) {
+                this.goingLiveOverlay.classList.remove('active');
+            }
+
+            // Resume AudioContext if suspended (Chrome autoplay policy)
+            if (this.audioContext && this.audioContext.state === 'suspended') {
+                this.audioContext.resume();
+            }
+
+            // Auto-start playing when show begins
+            this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
+            this.audioPlayer.play().catch(e => console.error("Auto-play error:", e));
+            this.isPlaying = true;
+            this.playBtn.classList.remove('disabled');
+            this.playBtn.classList.add('playing');
+            this.setStatus('connected');
+
+            this.isTransitioning = false;
+            this.wasShowStarted = true;
+        }, 2500);
+    }
+
+    triggerGoingOffline() {
+        return new Promise((resolve) => {
+            this.isTransitioning = true;
+
+            // Add signing-off class for visual effect
+            this.waitingOverlay.classList.add('signing-off');
+
+            // Update UI to show ending state
+            if (this.waitingText) this.waitingText.textContent = 'SIGNING OFF';
+
+            // Rotating subtext during sign-off
+            const subtexts = ['Broadcast ending...', 'Wrapping up...', 'Final transmission...', 'Thank you for listening...'];
+            let subtextIndex = 0;
+            if (this.waitingSubtext) this.waitingSubtext.textContent = subtexts[subtextIndex];
+            const subtextInterval = setInterval(() => {
+                subtextIndex = (subtextIndex + 1) % subtexts.length;
+                if (this.waitingSubtext) this.waitingSubtext.textContent = subtexts[subtextIndex];
+            }, 600);
+
+            // Fade out the visualizer
+            const vizWrapper = document.querySelector('.visualizer-wrapper');
+            if (vizWrapper) vizWrapper.classList.add('ending');
+
+            // After transition, clean up and resolve
+            setTimeout(() => {
+                clearInterval(subtextInterval);
+                this.waitingOverlay.classList.remove('signing-off');
+                if (vizWrapper) vizWrapper.classList.remove('ending');
+                this.isTransitioning = false;
+                resolve();
+            }, 2000);
+        });
+    }
+
+    startWaitingSubtextRotation() {
+        // Rotating subtexts for waiting state - more themed to DJ broadcast
+        const waitingSubtexts = [
+            'DJ is warming up the decks',
+            'Tuning the frequency',
+            'Calibrating oscillators',
+            'Syncing waveforms',
+            'Loading audio buffer',
+            'Preparing the mix',
+            'Warming up tubes',
+            'Setting up the vibe'
+        ];
+        let index = 0;
+        this.waitingRotationInterval = setInterval(() => {
+            if (this.waitingSubtext && !this.isShowStarted && !this.isTransitioning) {
+                index = (index + 1) % waitingSubtexts.length;
+                this.waitingSubtext.textContent = waitingSubtexts[index];
+            }
+        }, 3500);
+    }
+
+    startWaitingTimer() {
+        this.waitingStartTime = Date.now();
+
+        // Show the timer element
+        if (this.waitingTimer) {
+            this.waitingTimer.classList.add('active');
+        }
+
+        // Update timer display
+        this.waitingTimerInterval = setInterval(() => {
+            if (!this.waitingStartTime) return;
+
+            const elapsed = Math.floor((Date.now() - this.waitingStartTime) / 1000);
+            const mins = Math.floor(elapsed / 60).toString().padStart(2, '0');
+            const secs = (elapsed % 60).toString().padStart(2, '0');
+
+            const timerValue = this.waitingTimer?.querySelector('.timer-value');
+            if (timerValue) {
+                timerValue.textContent = `${mins}:${secs}`;
+            }
+        }, 1000);
+    }
+
+    stopWaitingTimer() {
+        if (this.waitingTimerInterval) {
+            clearInterval(this.waitingTimerInterval);
+            this.waitingTimerInterval = null;
+        }
+        if (this.waitingTimer) {
+            this.waitingTimer.classList.remove('active');
+        }
+        this.waitingStartTime = null;
+    }
+
+    updateTrackInfo(data) {
+        this.trackName.textContent = data.current_set_name || 'Waiting for stream...';
+
+        const bpmBadge = document.getElementById('bpm-badge');
+        const keyBadge = document.getElementById('key-badge');
+        if (bpmBadge && data.current_bpm) {
+            bpmBadge.querySelector('.badge-value').textContent = data.current_bpm;
+        }
+        if (keyBadge && data.current_key) {
+            keyBadge.querySelector('.badge-value').textContent = data.current_key;
+        }
+    }
+
+    parseStemPrompt(prompt) {
+        const parts = prompt.split(',').map(p => p.trim());
+        return {
+            major_family: parts[0] || 'Unknown',
+            sub_family: parts[1] || 'Unknown',
+            timbre_tags: parts.slice(2, 5).filter(p => p && !this.isStyleTag(p)),
+            notation: parts.find(p => this.isNotationTag(p)) || 'melody',
+            fx: parts.find(p => this.isFxTag(p)) || 'Dry',
+            key: parts[parts.length - 1] || ''
+        };
+    }
+
+    isStyleTag(tag) {
+        const styleTags = ['melody', 'arp', 'chord progression', 'top melody', 'triplets', 'simple', 'complex', 'rising', 'falling', 'strummed', 'sustained', 'catchy', 'epic', 'slow', 'fast'];
+        return styleTags.some(s => tag.toLowerCase().includes(s));
+    }
+
+    isNotationTag(tag) {
+        const notationTags = ['melody', 'arp', 'chord progression', 'top melody', 'triplets', 'simple', 'complex', 'rising', 'falling', 'strummed', 'sustained', 'catchy', 'epic', 'slow', 'fast'];
+        return notationTags.some(n => tag.toLowerCase().includes(n));
+    }
+
+    isFxTag(tag) {
+        const fxTags = ['reverb', 'delay', 'distortion', 'phaser', 'bitcrush', 'dry', 'wet'];
+        return fxTags.some(f => tag.toLowerCase().includes(f));
+    }
+
+    getStemClass(majorFamily) {
+        const family = (majorFamily || '').toLowerCase();
+        if (family.includes('drum') || family.includes('percussion')) return 'drums';
+        if (family.includes('bass')) return 'bass';
+        if (family.includes('synth') || family.includes('pad') || family.includes('lead')) return 'synth';
+        if (family.includes('vocal') || family.includes('voice') || family.includes('choir')) return 'vocal';
+        if (family.includes('keys') || family.includes('piano') || family.includes('organ')) return 'keys';
+        if (family.includes('guitar')) return 'guitar';
+        if (family.includes('brass') || family.includes('trumpet') || family.includes('sax')) return 'brass';
+        if (family.includes('string') || family.includes('violin') || family.includes('cello')) return 'strings';
+        if (family.includes('wind') || family.includes('flute') || family.includes('saxophone')) return 'wind';
+        if (family.includes('mallet') || family.includes('bell') || family.includes('marimba')) return 'mallet';
+        if (family.includes('pluck') || family.includes('harp') || family.includes('koto')) return 'plucked';
+        return '';
+    }
+
+    getAgeClass(age) {
+        if (age === undefined || age <= 2) return 'fresh';
+        if (age <= 5) return 'aging';
+        return 'stale';
+    }
+
+    extractTimbreTags(prompt) {
+        const knownTimbreTags = [
+            'Acoustic', 'Electronic', 'Groovy', 'Driving', 'Upper Mids', 'Mids', 'Highs',
+            'Warm', 'Wide', 'Bright', 'Low Mids', 'Thick', 'Airy', 'Rich', 'Tight',
+            'Full', 'Bass', 'Gritty', 'Clean', 'Retro', 'Saw', 'Snappy', 'Pluck', 'Crisp',
+            'Focused', 'Metallic', 'Chiptune', 'Dark', 'Shiny', 'Analog', 'Square',
+            'Present', 'Silky', 'Sparkly', 'Ambient', 'Near', 'Thin', 'Soft', 'Spacey',
+            'Smooth', 'Cold', 'Buzzy', 'Big', 'Subdued', 'Plucked', 'Far', 'Overdriven',
+            'Sub Bass', 'Deep', 'Woody', 'Dubstep', 'Round', 'Biting', 'Sine', 'Hollow',
+            'Fat', 'Punchy', 'Staccato', 'Nasal', 'Vintage', 'Growl', 'Intimate', 'Pulse',
+            'Harsh', 'Pitch Bend', 'Knock', 'Triangle', 'Bitcrush', 'Atmosphere',
+            'Formant Vocal', 'Ensemble', 'Acid', 'Muddy', 'Glassy', 'Breathy', 'Muffled',
+            'Laser', 'White Noise', 'Steel', 'Veiled', 'Rubbery', 'Mono', 'Reese',
+            'Synthetic Vox', 'Sub', 'Rumble', 'Noisy', 'Distant', 'Spiccato', 'Small',
+            'Bell', 'Boomy', 'Crispy', 'Bitcrushed', '808', 'Lead', 'Filter', 'Digital',
+            'Synthetic Choir', 'Nylon', 'Organ', 'Supersaw', 'Pizzicato', 'Armosphere',
+            'Pad', 'Choir', 'Siren', 'FX', 'Heavy', 'Electric Guitar', 'Dreamy', 'Tiny'
+        ];
+
+        const parts = prompt.split(',').map(p => p.trim());
+        return parts.filter(p =>
+            knownTimbreTags.some(t => t.toLowerCase() === p.toLowerCase())
+        ).slice(0, 3);
+    }
+
+    formatNotation(notation) {
+        if (!notation) return '';
+        return notation.split(' ').map(w =>
+            w.charAt(0).toUpperCase() + w.slice(1)
+        ).join(' ');
+    }
+
+    formatFx(fx) {
+        if (!fx) return '';
+        return fx.replace(/([A-Z])/g, ' $1').trim();
+    }
+
+    renderStemCard(stem, index) {
+        const parsed = this.parseStemPrompt(stem.prompt || '');
+        const age = stem._age || stem.age || 0;
+        const stemClass = this.getStemClass(parsed.major_family);
+        const ageClass = this.getAgeClass(age);
+        const timbreTags = this.extractTimbreTags(stem.prompt || '');
+
+        return `
+            <div class="stem-card ${ageClass}" style="animation-delay: ${0.6 + index * 0.08}s">
+                <div class="stem-card-header">
+                    <span class="stem-family ${stemClass}">${parsed.major_family}</span>
+                    <span class="stem-age">LOOP ${age}</span>
+                </div>
+                <div class="stem-name">${parsed.sub_family}</div>
+                <div class="stem-tags">
+                    ${timbreTags.map(t => `<span class="tag timbre">${t}</span>`).join('')}
+                    <span class="tag notation">${this.formatNotation(parsed.notation)}</span>
+                    <span class="tag fx">${this.formatFx(parsed.fx)}</span>
+                </div>
+                <div class="stem-footer">
+                    <span class="stem-bars"><span>${stem.bars || 8}</span> BARS</span>
+                </div>
+            </div>
+        `;
+    }
+
+    updateStems(stems) {
+        const newPrompts = stems.map(s => s.prompt).join('|');
+        const oldPrompts = this.currentStems.map(s => s.prompt).join('|');
+
+        if (newPrompts === oldPrompts) return;
+
+        this.currentStems = stems;
+
+        if (this.stemCount) {
+            this.stemCount.querySelector('.count-number').textContent = stems.length;
+        }
+
+        if (stems.length === 0) {
+            this.stemsGrid.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">
+                        <svg viewBox="0 0 48 48" fill="none">
+                            <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2"/>
+                            <path d="M24 14v10M24 34v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    </div>
+                    <p class="empty-text">Awaiting generation</p>
+                    <div class="empty-pulse"></div>
+                </div>
+            `;
+        } else {
+            this.stemsGrid.innerHTML = stems.map((stem, i) => this.renderStemCard(stem, i)).join('');
+        }
+    }
+
+    resizeCanvas() {
+        const parent = this.visualizer.parentElement;
+        this.visualizer.width = parent.clientWidth;
+        this.visualizer.height = parent.clientHeight;
+        
+        if (this.particlesCanvas) {
+            this.particlesCanvas.width = window.innerWidth;
+            this.particlesCanvas.height = window.innerHeight;
+            this.initParticles(); // Reinit on resize
+        }
+    }
+
+    initParticles() {
+        if (!this.particlesCanvas) return;
+        this.particles = [];
+        const numParticles = 80;
+        for (let i = 0; i < numParticles; i++) {
+            this.particles.push({
+                x: Math.random() * this.particlesCanvas.width,
+                y: Math.random() * this.particlesCanvas.height,
+                size: Math.random() * 2 + 1,
+                speedX: (Math.random() - 0.5) * 0.5,
+                speedY: (Math.random() - 0.5) * 0.5,
+                hue: Math.random() > 0.5 ? 190 : 35, // Mix of cyan and amber
+                baseAlpha: Math.random() * 0.5 + 0.1
+            });
+        }
+    }
+
+    drawParticles(bassEnergy) {
+        if (!this.particlesCtx || !this.particlesCanvas) return;
+        
+        const w = this.particlesCanvas.width;
+        const h = this.particlesCanvas.height;
+        
+        this.particlesCtx.clearRect(0, 0, w, h);
+        
+        // Only draw normal particles if we are not in starfield mode
+        if (this.currentVizMode === 'starfield') return;
+        
+        // Boost particle speed and size based on bass energy
+        const speedBoost = 1 + (bassEnergy * 3);
+        const sizeBoost = 1 + (bassEnergy * 2);
+        
+        this.particles.forEach(p => {
+            p.x += p.speedX * speedBoost;
+            p.y += p.speedY * speedBoost;
+            
+            // Wrap around
+            if (p.x < 0) p.x = w;
+            if (p.x > w) p.x = 0;
+            if (p.y < 0) p.y = h;
+            if (p.y > h) p.y = 0;
+            
+            const pulseAlpha = Math.min(1, p.baseAlpha + (bassEnergy * 0.5));
+            
+            this.particlesCtx.beginPath();
+            this.particlesCtx.arc(p.x, p.y, p.size * sizeBoost, 0, Math.PI * 2);
+            this.particlesCtx.fillStyle = `hsla(${p.hue}, 100%, 60%, ${pulseAlpha})`;
+            this.particlesCtx.shadowBlur = p.size * 3 * sizeBoost;
+            this.particlesCtx.shadowColor = `hsla(${p.hue}, 100%, 50%, 0.8)`;
+            this.particlesCtx.fill();
+        });
+    }
+
+    initStarfield() {
+        if (!this.particlesCanvas) return;
+        this.stars = [];
+        const numStars = 200;
+        for (let i = 0; i < numStars; i++) {
+            this.stars.push({
+                x: Math.random() * 2000 - 1000,
+                y: Math.random() * 2000 - 1000,
+                z: Math.random() * 2000
+            });
+        }
+    }
+
+    animate() {
+        requestAnimationFrame(() => this.animate());
+
+        const width = this.visualizer.width;
+        const height = this.visualizer.height;
+        const cx = width / 2;
+        const cy = height / 2;
+
+        // Clear with fade trail effect
+        this.ctx.fillStyle = 'rgba(5, 5, 8, 0.15)';
+        this.ctx.fillRect(0, 0, width, height);
+
+        if (!this.analyser || !this.isPlaying) {
+            // Ambient mode router
+            if (this.currentVizMode === 'starfield') {
+                const emptyData = new Uint8Array(64);
+                this.drawStarfieldVisualizer(emptyData, cx, cy, width, height, 0);
+            } else if (this.currentVizMode === 'osc') {
+                const emptyTimeData = new Uint8Array(128);
+                emptyTimeData.fill(128); // 128 is the center flatline
+                this.drawOscilloscope(emptyTimeData, cx, cy, width, height, 0);
+            } else if (this.currentVizMode === 'bars') {
+                const emptyData = new Uint8Array(64);
+                this.drawRetroBars(emptyData, width, height, 0);
+            } else {
+                this.drawAmbientRadial(cx, cy, Math.min(width, height) / 2);
+            }
+            return;
+        }
+
+        const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        this.analyser.getByteFrequencyData(dataArray);
+
+        // Calculate bass energy (first ~5 bins for sub/kick)
+        let bassSum = 0;
+        for (let i = 0; i < 5; i++) {
+            bassSum += dataArray[i];
+        }
+        const currentBass = (bassSum / 5) / 255;
+        
+        // Smooth the bass energy so it pulses to the beat instead of jittering
+        this.lastBass = this.lastBass || 0;
+        this.lastBass = this.lastBass * 0.85 + currentBass * 0.15;
+        const bassEnergy = this.lastBass;
+        
+        // Draw particles with smoothed bass energy
+        this.drawParticles(bassEnergy);
+
+        const timeData = new Uint8Array(this.analyser.frequencyBinCount);
+        this.analyser.getByteTimeDomainData(timeData);
+
+        // Visualizer Mode Router
+        switch(this.currentVizMode) {
+            case 'pulse':
+                this.drawNeonPulse(dataArray, cx, cy, width, height, bassEnergy);
+                break;
+            case 'osc':
+                this.drawOscilloscope(timeData, cx, cy, width, height, bassEnergy);
+                break;
+            case 'bars':
+                this.drawRetroBars(dataArray, width, height, bassEnergy);
+                break;
+            case 'starfield':
+                this.drawStarfieldVisualizer(dataArray, cx, cy, width, height, bassEnergy);
+                break;
+            default:
+                this.drawNeonPulse(dataArray, cx, cy, width, height, bassEnergy);
+        }
+
+        // Update VU meter (remains consistent across modes)
+        const avgValue = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+        const vuPercent = avgValue / 255;
+        const circumference = 400;
+        const offset = circumference - (vuPercent * circumference * 0.75);
+        if (this.vuFill) this.vuFill.style.strokeDashoffset = offset;
+
+        // Update VU label based on level
+        if (this.vuStatus) {
+            if (vuPercent > 0.7) {
+                this.vuStatus.textContent = 'HOT';
+            } else if (vuPercent > 0.4) {
+                this.vuStatus.textContent = 'OK';
+            } else if (vuPercent > 0.1) {
+                this.vuStatus.textContent = 'LOW';
+            }
+        }
+
+        this.ctx.shadowBlur = 0;
+    }
+
+    drawNeonPulse(dataArray, cx, cy, width, height, bassEnergy) {
+        const centerRadius = 60 + (bassEnergy * 15);
+        const maxRadius = Math.min(width, height) / 2 - 40;
+        const barCount = 128; // Increased density for pulse
+
+        for (let i = 0; i < barCount; i++) {
+            const dataIndex = Math.floor(i * dataArray.length / barCount);
+            const value = dataArray[dataIndex];
+            const percent = value / 255;
+
+            const angle = (i / barCount) * Math.PI * 2 - Math.PI / 2;
+            const barLength = (maxRadius - centerRadius) * Math.pow(percent, 1.2);
+
+            const x1 = cx + Math.cos(angle) * centerRadius;
+            const y1 = cy + Math.sin(angle) * centerRadius;
+            const x2 = cx + Math.cos(angle) * (centerRadius + barLength);
+            const y2 = cy + Math.sin(angle) * (centerRadius + barLength);
+
+            const hue = i < barCount/2 ? 35 + (i / (barCount/2)) * 30 : 190;
+            const lightness = 50 + percent * 30;
+            const alpha = 0.5 + percent * 0.5;
+
+            this.ctx.strokeStyle = `hsla(${hue}, 100%, ${lightness}%, ${alpha})`;
+            this.ctx.lineWidth = 3 + (percent * 3);
+            this.ctx.lineCap = 'round';
+
+            this.ctx.shadowBlur = 15 + (percent * 15);
+            this.ctx.shadowColor = `hsla(${hue}, 100%, 50%, 0.8)`;
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(x1, y1);
+            this.ctx.lineTo(x2, y2);
+            this.ctx.stroke();
+        }
+    }
+
+    drawOscilloscope(timeData, cx, cy, width, height, bassEnergy) {
+        this.ctx.lineWidth = 4 + (bassEnergy * 4);
+        this.ctx.lineJoin = 'round';
+        this.ctx.lineCap = 'round';
+        this.ctx.strokeStyle = `hsla(190, 100%, 60%, ${0.8 + bassEnergy * 0.2})`;
+        this.ctx.shadowBlur = 20 + (bassEnergy * 20);
+        this.ctx.shadowColor = 'rgba(0, 212, 255, 0.8)';
+
+        this.ctx.beginPath();
+        const sliceWidth = width * 1.0 / timeData.length;
+        let x = 0;
+
+        for (let i = 0; i < timeData.length; i++) {
+            const v = timeData[i] / 128.0;
+            const y = v * cy;
+
+            if (i === 0) {
+                this.ctx.moveTo(x, y);
+            } else {
+                this.ctx.lineTo(x, y);
+            }
+            x += sliceWidth;
+        }
+
+        this.ctx.lineTo(width, cy);
+        this.ctx.stroke();
+        
+        // Add a secondary faint echo line
+        this.ctx.lineWidth = 2;
+        this.ctx.strokeStyle = `hsla(35, 100%, 60%, ${0.4 + bassEnergy * 0.4})`;
+        this.ctx.shadowColor = 'rgba(255, 149, 0, 0.5)';
+        this.ctx.beginPath();
+        x = 0;
+        for (let i = 0; i < timeData.length; i++) {
+            const v = timeData[timeData.length - 1 - i] / 128.0; // Reversed
+            const y = v * cy;
+            if (i === 0) this.ctx.moveTo(x, y);
+            else this.ctx.lineTo(x, y);
+            x += sliceWidth;
+        }
+        this.ctx.stroke();
+    }
+
+    drawRetroBars(dataArray, width, height, bassEnergy) {
+        const barWidth = 12;
+        const gap = 4;
+        const numBars = Math.floor(width / (barWidth + gap));
+        
+        const startX = (width - (numBars * (barWidth + gap))) / 2;
+        const baseY = height - 40;
+        
+        for (let i = 0; i < numBars; i++) {
+            const dataIndex = Math.floor(i * dataArray.length / numBars);
+            const value = dataArray[dataIndex];
+            const percent = value / 255;
+            
+            const maxBarHeight = height * 0.7;
+            const barHeight = Math.max(4, maxBarHeight * percent);
+            
+            const x = startX + i * (barWidth + gap);
+            const y = baseY - barHeight;
+            
+            // Draw digital segments
+            const numSegments = Math.floor(barHeight / 8);
+            for(let s = 0; s < numSegments; s++) {
+                const segPercent = s / (maxBarHeight / 8);
+                const hue = 120 - (segPercent * 120); // Green to Yellow to Red
+                
+                const segY = baseY - (s * 8) - 6;
+                
+                this.ctx.fillStyle = `hsla(${hue}, 100%, 50%, 0.8)`;
+                this.ctx.shadowBlur = 5;
+                this.ctx.shadowColor = `hsla(${hue}, 100%, 50%, 0.5)`;
+                this.ctx.fillRect(x, segY, barWidth, 6);
+            }
+        }
+    }
+
+    drawStarfieldVisualizer(dataArray, cx, cy, width, height, bassEnergy) {
+        if (!this.stars) this.initStarfield();
+        if (!this.particlesCtx) return;
+        
+        const w = this.particlesCanvas.width;
+        const h = this.particlesCanvas.height;
+        
+        this.particlesCtx.clearRect(0, 0, w, h);
+        
+        // Draw deep space frequency rings on main canvas
+        this.ctx.shadowBlur = 30;
+        const ringCount = 8;
+        for(let r=0; r<ringCount; r++) {
+            const val = dataArray[r * 4] / 255;
+            this.ctx.beginPath();
+            this.ctx.arc(cx, cy, 40 + (r * 30 * (1 + bassEnergy)), 0, Math.PI * 2);
+            this.ctx.strokeStyle = `rgba(0, ${150 + (val*105)}, 255, ${0.1 + val*0.2})`;
+            this.ctx.lineWidth = 2 + (val * 5);
+            this.ctx.stroke();
+        }
+
+        // Move and draw stars on particle canvas corresponding to music intensity
+        const speed = 4 + (bassEnergy * 20);
+        
+        this.particlesCtx.fillStyle = 'white';
+        this.stars.forEach(star => {
+            star.z -= speed;
+            if (star.z <= 0) {
+                star.x = Math.random() * 2000 - 1000;
+                star.y = Math.random() * 2000 - 1000;
+                star.z = 2000;
+            }
+            
+            const sx = (star.x / star.z) * w + (w / 2);
+            const sy = (star.y / star.z) * h + (h / 2);
+            
+            const size = (1 - star.z / 2000) * 3;
+            const alpha = 1 - (star.z / 2000);
+            
+            // Color stars based on their quadrant
+            let hue = 190;
+            if (sx > w/2 && sy > h/2) hue = 35; // Amber
+            if (sx < w/2 && sy < h/2) hue = 280; // Purple
+            
+            this.particlesCtx.beginPath();
+            this.particlesCtx.arc(sx, sy, size, 0, Math.PI * 2);
+            this.particlesCtx.fillStyle = `hsla(${hue}, 100%, 80%, ${alpha})`;
+            this.particlesCtx.shadowBlur = size * 4;
+            this.particlesCtx.shadowColor = `hsla(${hue}, 100%, 60%, ${alpha})`;
+            this.particlesCtx.fill();
+        });
+    }
+
+    drawAmbientRadial(cx, cy, radius) {
+        const time = Date.now() * 0.001;
+        const barCount = 48;
+        
+        // Call drawParticles with 0 bass energy
+        this.drawParticles(0);
+
+        for (let i = 0; i < barCount; i++) {
+            const angle = (i / barCount) * Math.PI * 2 - Math.PI / 2;
+            const phase = Math.sin(time * 0.5 + i * 0.2); // Slower, more organic
+            const barLength = 10 + phase * 12;
+
+            const x1 = cx + Math.cos(angle) * 55;
+            const y1 = cy + Math.sin(angle) * 55;
+            const x2 = cx + Math.cos(angle) * (55 + barLength);
+            const y2 = cy + Math.sin(angle) * (55 + barLength);
+
+            const alpha = 0.1 + phase * 0.15;
+            this.ctx.strokeStyle = `rgba(0, 212, 255, ${alpha})`; // Cool cyan idle
+            this.ctx.lineWidth = 3;
+            this.ctx.lineCap = 'round';
+            
+            this.ctx.shadowBlur = 8;
+            this.ctx.shadowColor = `rgba(0, 212, 255, ${alpha * 2})`;
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(x1, y1);
+            this.ctx.lineTo(x2, y2);
+            this.ctx.stroke();
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.app = new AudienceApp();
+});
