@@ -1,0 +1,1 @@
+"""Loop iteration plugin for Claude Code."""
