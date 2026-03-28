@@ -4,7 +4,7 @@
 
 **Purpose**: Bulk-generate Conductor prompt/response pairs for fine-tuning a smaller "slop jockey" LLM that replicates the Conductor's DJ decision-making.
 
-**Goal**: 10s of thousands of novel, coherent interactions simulating diverse points in a DJ session lifecycle.
+**Goal**: 100,000+ novel, coherent interactions simulating diverse points in a DJ session lifecycle.
 
 ---
 
