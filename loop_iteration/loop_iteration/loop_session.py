@@ -4,11 +4,24 @@
 import asyncio
 import logging
 import os
+import select
 import subprocess
 import sys
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def is_escape_pressed() -> bool:
+    """Check if Escape key has been pressed (non-blocking)."""
+    if not sys.stdin.isatty():
+        return False
+
+    # Check if Escape key is in stdin buffer
+    if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+        ch = sys.stdin.read(1)
+        return ch == '\x1b'  # Escape character
+    return False
 
 async def run_loop(prompt: str, count: Optional[int] = None, context=None):
     """Run loop iterations with memory wipe.
@@ -41,6 +54,11 @@ async def run_loop(prompt: str, count: Optional[int] = None, context=None):
     logger.info(f"Starting loop: prompt='{prompt}', count={count}")
 
     while True:
+        # Check escape before each iteration
+        if is_escape_pressed():
+            logger.info("Escape pressed, stopping loop")
+            break
+
         iteration += 1
         logger.info(f"Iteration {iteration} starting")
 
