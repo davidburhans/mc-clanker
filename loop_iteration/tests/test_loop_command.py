@@ -21,3 +21,13 @@ def test_parse_empty_raises():
     """Should raise ValueError when no prompt provided."""
     with pytest.raises(ValueError):
         parse_loop_args([])
+
+def test_parse_zero_count_raises():
+    """Should raise ValueError when count is zero."""
+    with pytest.raises(ValueError):
+        parse_loop_args(['0', 'some prompt'])
+
+def test_parse_negative_count_raises():
+    """Should raise ValueError when count is negative."""
+    with pytest.raises(ValueError):
+        parse_loop_args(['-1', 'some prompt'])

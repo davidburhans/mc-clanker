@@ -13,7 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 def is_escape_pressed() -> bool:
-    """Check if Escape key has been pressed (non-blocking)."""
+    """Check if Escape key has been pressed (non-blocking).
+
+    Note: This only works on Unix-like systems (Linux/macOS) due to
+    select.select() limitations on Windows stdin.
+    """
     if not sys.stdin.isatty():
         return False
 
@@ -121,7 +125,15 @@ async def run_iteration(prompt: str, iteration_num: int, context):
             env={**os.environ, 'CLAUDE_NO_INTERACT': '1'}
         )
 
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=300.0  # 5 minute timeout per iteration
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Iteration {iteration_num} timed out after 300s, continuing")
+            proc.kill()
+            return
 
         if proc.returncode != 0:
             stderr_decoded = stderr.decode('utf-8', errors='replace') if stderr else ''

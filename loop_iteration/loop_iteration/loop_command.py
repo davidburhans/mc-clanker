@@ -21,12 +21,15 @@ def parse_loop_args(args: list[str]) -> dict:
     # Check if first arg is a number (iteration count)
     count = None
     prompt_args = args
-    if args[0].isdigit():
+    if args[0].isdigit() or (args[0].startswith('-') and args[0][1:].isdigit()):
         count = int(args[0])
         prompt_args = args[1:]
 
     if not prompt_args:
         raise ValueError("/loop requires a prompt")
+
+    if count is not None and count < 1:
+        raise ValueError("/loop count must be a positive integer")
 
     # Strip quotes if present
     prompt = ' '.join(prompt_args)
