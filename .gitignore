@@ -57,3 +57,7 @@ app.log
 # Testing
 .coverage
 .pytest_cache/
+
+# Database
+data/*.db
+data/*.db-*
