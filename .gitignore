@@ -62,3 +62,7 @@ app.log
 data/*.db
 data/*.db-*
 .worktrees/
+
+# Data outputs (batch generation, simulation runs)
+data/
+sim_data/
