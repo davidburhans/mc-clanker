@@ -86,6 +86,34 @@ async def update_state(update: StateUpdate):
 
 The daemon thread polls `state.is_generating` and acts accordingly.
 
+### 3. Using Sub-Agents Thoughtfully
+
+The Task tool launches specialized agents for complex, multi-step work. Use them judiciously — they work best for focused, independent tasks.
+
+**When to use sub-agents:**
+- Exploring unfamiliar codebases or debugging complex issues across many files
+- Multi-step tasks with independent workstreams that can proceed in parallel
+- Research tasks that require gathering information from multiple sources
+- When the main session would otherwise wait on I/O (file searches, web fetches)
+
+**When NOT to use sub-agents:**
+- Simple, focused tasks (one file, one function) — just do it directly
+- Tasks requiring shared state or sequential coordination — the overhead rarely pays off
+- Quick lookups or confirmations — Glob/Grep/Read are faster
+
+**Using the Task tool:**
+
+```python
+# Launch independent agents in parallel when tasks have no dependencies
+Task(description="Run API tests", subagent_type="Bash", prompt="...")
+Task(description="Review auth logic", subagent_type="code-reviewer", prompt="...")
+
+# Use specialized agents for domain-specific work
+Task(description="Explore error handling patterns", subagent_type="Explore", ...)
+```
+
+**Rule of thumb:** If you're about to use 3+ tool calls to accomplish something, consider whether an agent would be more efficient. If the task requires understanding how multiple files interact, use the Explore agent. If it requires running commands (tests, builds), use the Bash agent.
+
 ---
 
 ## Code Organization

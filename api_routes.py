@@ -5,6 +5,7 @@ import threading
 import os
 import time
 import json
+import uuid
 
 from framework_state import state
 
@@ -56,6 +57,53 @@ class CustomStemCreate(BaseModel):
 
 class AudienceMessage(BaseModel):
     message: str
+
+
+# =============================================================================
+# JOB MODELS
+# =============================================================================
+
+class JobSubmission(BaseModel):
+    """Request model for submitting a generation job."""
+    session_id: uuid.UUID
+    instrument: str
+    prompt: str
+    major_family: Optional[str] = None
+    model_id: str = "foundation-1"
+    key: Optional[str] = None
+    bpm: Optional[int] = None
+    timbre_tags: List[str] = []
+    bars: int = 4
+
+
+class JobResponse(BaseModel):
+    """Response model for job status."""
+    id: str
+    session_id: str
+    instrument: str
+    prompt: str
+    major_family: Optional[str]
+    model_id: str
+    key: Optional[str]
+    bpm: Optional[int]
+    timbre_tags: List[str]
+    bars: int
+    status: str
+    priority: int
+    created_at: Optional[str]
+    started_at: Optional[str]
+    completed_at: Optional[str]
+    audio_path: Optional[str]
+    duration_seconds: Optional[float]
+    error_message: Optional[str]
+    worker_id: Optional[str]
+    expires_at: Optional[str]
+
+
+class AudioResponse(BaseModel):
+    """Response model for audio streaming."""
+    audio_url: str
+    duration_seconds: Optional[float]
 
 
 # State endpoint
@@ -1143,4 +1191,338 @@ async def get_audience_token(show_id: int, request: Request):
         return {
             "message": "Audience password is set for this show. Share the password with your audience.",
             "has_password": bool(show.audience_password_hash)
+        }
+
+
+# =============================================================================
+# JOB API ENDPOINTS (Phase 2: Async Framework Loop)
+# =============================================================================
+
+@router.post("/api/jobs", status_code=201)
+async def submit_job(job: JobSubmission):
+    """
+    Submit a stem generation job to the queue.
+
+    The job will be processed by a worker, and the audio will be stored in Garage.
+    Use GET /api/jobs/{job_id} to poll for completion.
+    """
+    from datetime import datetime, timedelta
+    from models.generator_job import GeneratorJob
+
+    db_manager = DatabaseManager.get_instance()
+
+    # Calculate expiration (24 hours from now)
+    expires_at = datetime.utcnow() + timedelta(hours=24)
+
+    with db_manager.session() as session:
+        # Create new job
+        new_job = GeneratorJob(
+            session_id=job.session_id,
+            instrument=job.instrument,
+            prompt=job.prompt,
+            major_family=job.major_family,
+            model_id=job.model_id,
+            key=job.key,
+            bpm=job.bpm,
+            timbre_tags=job.timbre_tags,
+            bars=job.bars,
+            status="pending",
+            expires_at=expires_at,
+        )
+        session.add(new_job)
+        session.flush()
+        session.refresh(new_job)
+
+        job_id = str(new_job.id)
+
+    # Notify workers that a new job is available (if using LISTEN/NOTIFY)
+    # This is optional - workers can also poll the queue
+
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "message": "Job submitted successfully"
+    }
+
+
+@router.get("/api/jobs/{job_id}")
+async def get_job(job_id: uuid.UUID):
+    """
+    Get job status and audio path if completed.
+
+    Returns the full job object including status, audio_path (if completed),
+    or error_message (if failed).
+    """
+    from models.generator_job import GeneratorJob
+
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
+
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        return job.to_dict()
+
+
+@router.get("/api/audio/{job_id}")
+async def get_audio(job_id: uuid.UUID):
+    """
+    Stream audio from Garage for a completed job.
+
+    Redirects to a presigned URL for the audio file.
+    The job must be in 'completed' status with a valid audio_path.
+    """
+    from models.generator_job import GeneratorJob
+    from datetime import datetime, timedelta
+
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
+
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job.status != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job is not completed. Current status: {job.status}"
+            )
+
+        if not job.audio_path:
+            raise HTTPException(status_code=404, detail="Audio path not found")
+
+        # Refresh expiration on access
+        job.expires_at = datetime.utcnow() + timedelta(hours=1)
+        session.commit()
+
+        # For now, return the audio_path directly
+        # In production, this would generate a presigned URL from Garage
+        # and redirect to it
+        return {
+            "audio_path": job.audio_path,
+            "duration_seconds": job.duration_seconds,
+            "message": "Audio available at audio_path. In production, this would redirect to a presigned Garage URL."
+        }
+
+
+@router.delete("/api/jobs/{job_id}")
+async def cancel_job(job_id: uuid.UUID):
+    """
+    Cancel a pending job.
+
+    Only jobs in 'pending' status can be cancelled.
+    """
+    from models.generator_job import GeneratorJob
+
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
+
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job.status != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot cancel job with status '{job.status}'. Only pending jobs can be cancelled."
+            )
+
+        job.status = "expired"
+        session.commit()
+
+        return {"status": "ok", "message": "Job cancelled"}
+
+
+@router.get("/api/jobs")
+async def list_jobs(
+    session_id: Optional[uuid.UUID] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """
+    List jobs with optional filtering by session_id and status.
+    """
+    from models.generator_job import GeneratorJob
+
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        query = session.query(GeneratorJob)
+
+        if session_id:
+            query = query.filter(GeneratorJob.session_id == session_id)
+
+        if status:
+            query = query.filter(GeneratorJob.status == status)
+
+        total = query.count()
+        jobs = query.order_by(GeneratorJob.created_at.desc()).limit(limit).offset(offset).all()
+
+        return {
+            "jobs": [job.to_dict() for job in jobs],
+            "total": total,
+            "limit": limit,
+            "offset": offset
+        }
+
+
+# =============================================================================
+# SESSION ROUTING ENDPOINTS (Phase 3: Session Affinity)
+# =============================================================================
+
+from uuid import UUID
+from datetime import datetime, timedelta
+from pydantic import BaseModel
+
+
+class SessionHeartbeatRequest(BaseModel):
+    server_id: str
+
+
+class SessionServerResponse(BaseModel):
+    session_id: UUID
+    server_id: str
+    created_at: datetime
+    last_heartbeat: datetime
+
+
+@router.post("/api/sessions/{session_id}/heartbeat")
+async def session_heartbeat(session_id: UUID, request: SessionHeartbeatRequest):
+    """
+    Update session routing heartbeat.
+
+    When a DJ session is running on a server, it should call this endpoint
+    periodically to maintain the routing entry. Uses ON CONFLICT to handle
+    both insert and update in a single query.
+    """
+    db_manager = DatabaseManager.get_instance()
+
+    # Use raw SQL for ON CONFLICT support (SQLAlchemy's upsert is more verbose)
+    # For SQLite compatibility, we use INSERT OR REPLACE pattern
+    with db_manager.session() as session:
+        # Check if the database supports ON CONFLICT (PostgreSQL)
+        dialect = db_manager.engine.dialect.name
+
+        if dialect == 'postgresql':
+            # PostgreSQL: use ON CONFLICT DO UPDATE
+            from sqlalchemy import text
+            session.execute(text("""
+                INSERT INTO session_routing (session_id, server_id, last_heartbeat)
+                VALUES (:session_id, :server_id, NOW())
+                ON CONFLICT (session_id) DO UPDATE SET
+                    server_id = EXCLUDED.server_id,
+                    last_heartbeat = NOW()
+            """), {"session_id": str(session_id), "server_id": request.server_id})
+        else:
+            # SQLite fallback: try update first, then insert if no rows affected
+            from sqlalchemy import text
+            result = session.execute(text("""
+                UPDATE session_routing
+                SET server_id = :server_id, last_heartbeat = :heartbeat
+                WHERE session_id = :session_id
+            """), {"session_id": str(session_id), "server_id": request.server_id, "heartbeat": datetime.utcnow()})
+
+            if result.rowcount == 0:
+                session.execute(text("""
+                    INSERT INTO session_routing (session_id, server_id, last_heartbeat)
+                    VALUES (:session_id, :server_id, :heartbeat)
+                """), {"session_id": str(session_id), "server_id": request.server_id, "heartbeat": datetime.utcnow()})
+
+    return {"status": "ok", "session_id": str(session_id), "server_id": request.server_id}
+
+
+@router.get("/api/sessions/{session_id}/server", response_model=SessionServerResponse)
+async def get_session_server(session_id: UUID):
+    """
+    Get which server handles a given session.
+
+    Used by the session affinity middleware to determine if a request
+    should be redirected to a different server.
+    """
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        from sqlalchemy import text
+        result = session.execute(text("""
+            SELECT session_id, server_id, created_at, last_heartbeat
+            FROM session_routing
+            WHERE session_id = :session_id
+        """), {"session_id": str(session_id)}).fetchone()
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="Session not found in routing table")
+
+        return {
+            "session_id": result[0],
+            "server_id": result[1],
+            "created_at": result[2],
+            "last_heartbeat": result[3]
+        }
+
+
+async def register_session(session_id: UUID, server_id: str):
+    """
+    Register a new session on this server.
+
+    Called when a new DJ session starts on this server.
+    This is a helper function used internally by the framework.
+    """
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        from sqlalchemy import text
+        session.execute(text("""
+            INSERT INTO session_routing (session_id, server_id, last_heartbeat)
+            VALUES (:session_id, :server_id, NOW())
+            ON CONFLICT (session_id) DO UPDATE SET
+                server_id = EXCLUDED.server_id,
+                last_heartbeat = NOW()
+        """), {"session_id": str(session_id), "server_id": server_id})
+
+
+@router.delete("/api/sessions/{session_id}/routing")
+async def delete_session_routing(session_id: UUID):
+    """
+    Remove a session from the routing table.
+
+    Called when a DJ session ends to clean up the routing entry.
+    """
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        from sqlalchemy import text
+        session.execute(text("""
+            DELETE FROM session_routing WHERE session_id = :session_id
+        """), {"session_id": str(session_id)})
+
+    return {"status": "ok", "session_id": str(session_id)}
+
+
+@router.get("/api/sessions/{session_id}/heartbeat")
+async def get_session_heartbeat(session_id: UUID):
+    """
+    Get the last heartbeat time for a session.
+
+    Used for debugging and monitoring session health.
+    """
+    db_manager = DatabaseManager.get_instance()
+
+    with db_manager.session() as session:
+        from sqlalchemy import text
+        result = session.execute(text("""
+            SELECT last_heartbeat FROM session_routing WHERE session_id = :session_id
+        """), {"session_id": str(session_id)}).fetchone()
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="Session not found in routing table")
+
+        return {
+            "session_id": str(session_id),
+            "last_heartbeat": result[0],
+            "is_stale": (datetime.utcnow() - result[0]) > timedelta(minutes=5)
         }

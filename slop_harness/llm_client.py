@@ -1,46 +1,119 @@
 """Async LLM client with retry and exponential backoff.
 
 Targets OpenAI-compatible APIs (LM Studio, Ollama, etc.).
+Uses openai.AsyncOpenAI for identical plumbing to the mc-clanker app.
 """
 import asyncio
 import os
 from typing import Any
 
-import aiohttp
+from openai import AsyncOpenAI
+
+
+# Shared response_format schema — identical to framework_conductor_async.py
+RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "dj_action_state",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "master_bpm": {"type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150]},
+                "master_key": {"type": "string", "enum": ["C major", "C minor", "C# major", "C# minor", "D major", "D minor", "D# major", "D# minor", "E major", "E minor", "F major", "F minor", "F# major", "F# minor", "G major", "G minor", "G# major", "G# minor", "A major", "A minor", "A# major", "A# minor", "B major", "B minor"]},
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "anyOf": [
+                            {
+                                "type": "object",
+                                "description": "Retain an existing stem to keep the groove flowing.",
+                                "properties": {
+                                    "action_type": {"type": "string", "const": "retain"},
+                                    "stem_index": {"type": "integer", "description": "Index of the active stem to keep."}
+                                },
+                                "required": ["action_type", "stem_index"],
+                                "additionalProperties": False
+                            },
+                            {
+                                "type": "object",
+                                "description": "Add a new musical element to the mix.",
+                                "properties": {
+                                    "action_type": {"type": "string", "const": "add"},
+                                    "model_id": {"type": "string"},
+                                    "major_family": {"type": "string"},
+                                    "sub_family": {"type": "string"},
+                                    "timbre_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+                                    "notation_tag": {"type": "string"},
+                                    "fx_tag": {"type": "string"},
+                                    "bars": {"type": "integer", "enum": [4, 8]}
+                                },
+                                "required": ["action_type", "model_id", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
+                                "additionalProperties": False
+                            },
+                            {
+                                "type": "object",
+                                "description": "Remove a stem to refresh the mix or change the arrangement.",
+                                "properties": {
+                                    "action_type": {"type": "string", "const": "remove"},
+                                    "stem_index": {"type": "integer"}
+                                },
+                                "required": ["action_type", "stem_index"],
+                                "additionalProperties": False
+                            }
+                        ]
+                    }
+                },
+                "reasoning": {"type": "string"},
+                "name": {"type": "string"}
+            },
+            "required": ["master_bpm", "master_key", "actions", "reasoning", "name"],
+            "additionalProperties": False
+        }
+    }
+}
 
 
 class LLMClient:
-    """Async LLM caller with exponential backoff retry."""
+    """Async LLM caller with exponential backoff retry — same client as mc-clanker app."""
 
     def __init__(
         self,
         base_url: str | None = None,
         model: str | None = None,
     ):
-        self.base_url = base_url or os.environ.get(
+        self.base_url = (base_url or os.environ.get(
             "LLM_BASE_URL", "http://localhost:1234/v1"
-        ).rstrip("/")
+        )).rstrip("/")
         self.model = model or os.environ.get("LLM_MODEL", "local-model")
-        self._session: aiohttp.ClientSession | None = None
+        self._client: AsyncOpenAI | None = None
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+    def _get_client(self) -> AsyncOpenAI:
+        if self._client is None:
+            self._client = AsyncOpenAI(
+                base_url=self.base_url,
+                api_key="not-needed",
+                timeout=60.0,
+            )
+        return self._client
 
     async def close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
     async def call(
         self,
         messages: list[dict[str, str]],
         max_retries: int = 3,
+        extra_body: dict | None = None,
     ) -> str:
         """Call the LLM with exponential backoff retry.
 
         Args:
             messages: List of {"role": ..., "content": ...} message dicts
+            extra_body: Optional dict passed as extra_body to the API (e.g.,
+                {"chat_template_kwargs": {"enable_thinking": False}} for Qwen3.5-27B)
 
         Returns:
             The assistant's raw text content (usually JSON string)
@@ -48,46 +121,34 @@ class LLMClient:
         Raises:
             Exception: After max_retries consecutive failures
         """
-        session = await self._get_session()
-        url = f"{self.base_url}/chat/completions"
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 2048,
-        }
-
+        client = self._get_client()
         backoff = 1.0
         last_error: Exception | None = None
 
         for attempt in range(max_retries):
             try:
-                async with await session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120),
-                ) as response:
-                    if response.status == 429 or response.status == 503:
-                        # Retry with backoff
+                response = await client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,  # type: ignore[arg-type]
+                    temperature=0.7,
+                    response_format=RESPONSE_FORMAT,  # type: ignore[arg-type]
+                    extra_body=extra_body,
+                )
+                content = response.choices[0].message.content  # type: ignore[assignment]
+                if content is None:
+                    raise Exception("LLM returned empty content")
+                return content
+
+            except Exception as e:
+                last_error = e
+                err_str = str(e).lower()
+                # Retry on rate limit or service unavailable
+                if "429" in err_str or "503" in err_str or "rate_limit" in err_str:
+                    if attempt < max_retries - 1:
                         await asyncio.sleep(backoff)
                         backoff *= 2
                         continue
-
-                    if response.status != 200:
-                        text = await response.text()
-                        raise Exception(
-                            f"LLM API error {response.status}: {text[:200]}"
-                        )
-
-                    data = await response.json()
-                    return data["choices"][0]["message"]["content"]
-
-            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(backoff)
-                    backoff *= 2
-                    continue
+                # Other errors: no retry
                 break
 
         raise Exception(

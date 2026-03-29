@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import threading
 import queue
@@ -8,12 +8,51 @@ import struct
 import uvicorn
 import os
 import subprocess
+import socket
+import uuid
 
 from framework_state import state
 from framework_main import run_framework_loop
 from api_routes import router as api_router
 import atexit
 from contextlib import asynccontextmanager
+
+
+# =============================================================================
+# SERVER ID CONFIGURATION (Phase 3: Session Affinity)
+# =============================================================================
+def get_server_id() -> str:
+    """
+    Get or generate the unique server ID for this instance.
+
+    Priority:
+    1. SERVER_ID environment variable (useful in Kubernetes/docker-compose)
+    2. HOSTNAME environment variable (common in container environments)
+    3. Generate a UUID and store it in a local file (for persistent IDs)
+    """
+    # Check environment variables first
+    server_id = os.environ.get("SERVER_ID")
+    if server_id:
+        return server_id
+
+    hostname = os.environ.get("HOSTNAME")
+    if hostname:
+        return f"server-{hostname}"
+
+    # Try to use hostname
+    try:
+        hostname = socket.gethostname()
+        return f"server-{hostname}"
+    except Exception:
+        pass
+
+    # Fall back to a generated UUID (not persistent across restarts)
+    return f"server-{uuid.uuid4().hex[:8]}"
+
+
+# Global server ID - set at module load time
+current_server_id = get_server_id()
+print(f"SESSION AFFINITY: This server's ID is: {current_server_id}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -184,9 +223,118 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         return await call_next(request)
 
+
+class SessionAffinityMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware for session affinity - redirects requests to the correct server.
+
+    When a session is handled by a different server, this middleware redirects
+    the request to that server. This ensures sticky sessions even when the
+    load balancer doesn't support cookie-based affinity.
+    """
+
+    # Paths that should NOT be redirected (no session affinity needed)
+    EXEMPT_PATHS = {
+        "/",
+        "/dj",
+        "/dj/",
+        "/stream.mp3",
+        "/index.html",
+        "/styles.css",
+        "/app.js",
+        "/api/health",
+        "/api/state",
+    }
+
+    # Path prefixes that should NOT be redirected
+    EXEMPT_PREFIXES = (
+        "/static/",
+        "/dj/static/",
+    )
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Skip exempt paths
+        if path in self.EXEMPT_PATHS:
+            return await call_next(request)
+
+        # Skip exempt prefixes
+        if any(path.startswith(prefix) for prefix in self.EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # Extract session_id from path parameters
+        # Pattern: /api/sessions/{session_id}/...
+        session_id = None
+        path_parts = path.split("/")
+
+        # Check if this looks like a session route
+        # /api/sessions/{uuid}/... or /sessions/{uuid}/...
+        if len(path_parts) >= 3:
+            if path_parts[1] == "api" and path_parts[2] == "sessions":
+                session_id = path_parts[3] if len(path_parts) > 3 else None
+            elif path_parts[1] == "sessions":
+                session_id = path_parts[2] if len(path_parts) > 2 else None
+
+        if not session_id:
+            # Not a session route, skip
+            return await call_next(request)
+
+        # Validate that session_id looks like a UUID
+        try:
+            uuid.UUID(session_id)
+        except ValueError:
+            # Not a valid UUID, skip
+            return await call_next(request)
+
+        # Look up which server handles this session
+        from db import DatabaseManager
+        from sqlalchemy import text
+
+        db_manager = DatabaseManager.get_instance()
+
+        try:
+            with db_manager.session() as session:
+                result = session.execute(
+                    text("""
+                        SELECT server_id FROM session_routing
+                        WHERE session_id = :session_id
+                    """),
+                    {"session_id": session_id}
+                ).fetchone()
+
+                if result is None:
+                    # No routing entry yet, let the request proceed
+                    # (session might not have started yet)
+                    return await call_next(request)
+
+                routing_server_id = result[0]
+
+                # If this server is not the routing server, redirect
+                if routing_server_id != current_server_id:
+                    # Build redirect URL
+                    # Use the scheme from the request, or default to http
+                    scheme = request.url.scheme or "http"
+                    redirect_url = f"{scheme}://{routing_server_id}/{'/'.join(path_parts[1:])}"
+
+                    # Preserve query string
+                    if request.url.query:
+                        redirect_url += f"?{request.url.query}"
+
+                    print(f"SESSION AFFINITY: Redirecting {path} to {redirect_url}")
+                    return RedirectResponse(url=redirect_url, status_code=307)
+
+        except Exception as e:
+            # If there's a database error, log it but don't block the request
+            print(f"SESSION AFFINITY: Error looking up routing: {e}")
+
+        return await call_next(request)
+
+
 # 3. Build FastAPI App
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(AuthMiddleware)
+app.add_middleware(SessionAffinityMiddleware)
 
 # Register API routes for DJ UI
 app.include_router(api_router)

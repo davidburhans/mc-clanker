@@ -69,6 +69,12 @@ def parse_args() -> argparse.Namespace:
         default=float(os.environ.get("VIBE_PROB", "0.05")),
         help="Probability of vibe override (0.0-1.0)",
     )
+    parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        default=False,
+        help="Pass enable_thinking=True to the model (Qwen3.5-27B only)",
+    )
     return parser.parse_args()
 
 
@@ -78,6 +84,7 @@ async def generate_one(
     interaction_id: int,
     vibe_prob: float,
     semaphore: asyncio.Semaphore,
+    extra_body: dict | None,
 ) -> dict | None:
     """Generate a single interaction. Returns the JSON dict or None on failure."""
     # Build deterministic seed
@@ -98,7 +105,7 @@ async def generate_one(
     # Call LLM with semaphore limiting
     async with semaphore:
         try:
-            response = await client.call(messages)
+            response = await client.call(messages, extra_body=extra_body)
         except Exception as e:
             logger.error(f"LLM call failed for batch={batch_id} i={interaction_id}: {e}")
             return None
@@ -113,12 +120,13 @@ async def run_batch(
     writer: DatasetWriter,
     vibe_prob: float,
     concurrent: int,
+    extra_body: dict | None,
 ) -> int:
     """Run one batch. Returns number of successfully written records."""
     semaphore = asyncio.Semaphore(concurrent)
 
     async def safe_generate(i: int):
-        result = await generate_one(client, batch_id, i, vibe_prob, semaphore)
+        result = await generate_one(client, batch_id, i, vibe_prob, semaphore, extra_body)
         return result
 
     tasks = [safe_generate(i) for i in range(batch_size)]
@@ -160,6 +168,14 @@ async def main_async(args: argparse.Namespace) -> None:
     logger.info(f"  Output:    {args.output_dir}")
     logger.info(f"  Concurrent: {args.concurrent}")
     logger.info(f"  Vibe prob: {args.vibe_prob}")
+    logger.info(f"  Thinking:  {'enabled' if args.enable_thinking else 'disabled'}")
+
+    extra_body = None
+    if args.enable_thinking:
+        extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
+    else:
+        # Default: disable thinking for Qwen3.5-27B
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
     checkpoint_path = os.path.join(args.output_dir, "checkpoint.json")
     os.makedirs(args.output_dir, exist_ok=True)
@@ -188,6 +204,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 writer=writer,
                 vibe_prob=args.vibe_prob,
                 concurrent=args.concurrent,
+                extra_body=extra_body,
             )
 
             ckpt.increment(written)

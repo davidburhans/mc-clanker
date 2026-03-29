@@ -1,0 +1,24 @@
+# requirements-worker.txt - Worker process dependencies
+# These are the dependencies needed for the generator worker container
+
+# Async PostgreSQL client
+asyncpg>=0.28.0
+
+# S3-compatible storage client
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Audio processing
+scipy>=1.12.0
+numpy>=1.26.0
+
+# Stable audio tools for generation
+stable-audio-tools==0.0.19
+
+# Hugging Face utilities
+huggingface_hub>=0.20.0
+safetensors>=0.4.0
+
+# Web server (for optional health check server)
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0

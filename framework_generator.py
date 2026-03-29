@@ -378,6 +378,61 @@ class GeneratorRegistry:
 
         return model_id
 
+    def generate_stem(
+        self,
+        model_id: str = None,
+        prompt: str = None,
+        key: str = None,
+        bpm: int = 120,
+        bars: int = 4,
+        cfg_scale: float = 7.0,
+        steps: int = 50
+    ) -> np.ndarray:
+        """
+        Generate a single audio stem.
+
+        This is a convenience wrapper around generate_batch for single stem
+        generation, commonly used by the worker process.
+
+        Args:
+            model_id: Model ID to use (defaults to first enabled model)
+            prompt: Text prompt for generation
+            key: Musical key (e.g., "C minor")
+            bpm: Tempo in beats per minute
+            bars: Loop length in bars (4 beats per bar)
+            cfg_scale: Classifier-free guidance scale
+            steps: Number of diffusion steps
+
+        Returns:
+            numpy array of shape (samples, channels) with float32 values in [-1, 1]
+
+        Raises:
+            RuntimeError: If no models are available
+        """
+        # Calculate duration from bars and bpm
+        beats_per_second = bpm / 60.0
+        duration = bars / beats_per_second
+
+        # Build request dict
+        request = [{
+            'prompt': prompt or '',
+            'duration': duration,
+            'model_id': model_id,
+        }]
+
+        # Call generate_batch and return first result
+        results, sample_rate = self.generate_batch(
+            requests=request,
+            bpm=bpm,
+            cfg_scale=cfg_scale,
+            steps=steps
+        )
+
+        if not results or results[0] is None:
+            raise RuntimeError("Generation failed: no audio returned")
+
+        return results[0]
+
 
 # Keep Generator alias for backwards compatibility if needed
 Generator = GeneratorRegistry

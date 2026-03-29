@@ -14,12 +14,37 @@ services:
       retries: 5
     restart: unless-stopped
 
-  mc-clanker:
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  garage:
+    image: debian-slim/garage:latest
+    ports:
+      - "3900:3900"
+    volumes:
+      - garage_data:/data
+    command: server --data-dir /data --http-port 3900 --s3-port 3901
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3900/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  web:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "0.0.0.0:7860:7860"
+      - "8000:8000"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
@@ -32,6 +57,11 @@ services:
       - DATABASE_URL=postgresql://mcclanker:change-me-in-production@postgres:5432/mcclanker
       - JWT_SECRET=change-me-in-production-use-strong-secret
       - SHOWS_DIR=/exports/shows
+      - GARAGE_ENDPOINT=http://garage:3900
+      - GARAGE_ACCESS_KEY=GarageAccessKey
+      - GARAGE_SECRET_KEY=GarageSecretKey
+      - GARAGE_BUCKET=mcclanker
+      - GARAGE_BUCKET_REGION=garage
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface:rw
       - ./exports:/exports:rw
@@ -43,6 +73,29 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      garage:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      - WORKER_ID=worker-${HOSTNAME:-1}
+      - DATABASE_URL=postgresql://mcclanker:change-me-in-production@postgres:5432/mcclanker
+      - GARAGE_ENDPOINT=http://garage:3900
+      - GARAGE_ACCESS_KEY=GarageAccessKey
+      - GARAGE_SECRET_KEY=GarageSecretKey
+      - GARAGE_BUCKET=mcclanker
+      - GARAGE_BUCKET_REGION=garage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+    deploy:
+      replicas: 3
     restart: unless-stopped
 
   # Optional Icecast server for streaming output
@@ -50,7 +103,7 @@ services:
   # icecast:
   #   image: insomniaicecast/icecast
   #   ports:
-  #     - "8000:8000"
+  #     - "8001:8000"
   #   environment:
   #     - ICECAST_SOURCE_PASSWORD=sourcepass
   #     - ICECAST_ADMIN_PASSWORD=adminpass
@@ -58,3 +111,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
+  garage_data:
