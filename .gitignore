@@ -66,3 +66,6 @@ data/*.db-*
 # Data outputs (batch generation, simulation runs)
 data/
 sim_data/
+
+# Environment file (contains secrets)
+.env

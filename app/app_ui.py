@@ -60,6 +60,20 @@ async def lifespan(app: FastAPI):
     db_manager = DatabaseManager.get_instance()
     db_manager.create_tables()
 
+    print("FASTAPI LIFESPAN: Running onboarding checks...")
+    try:
+        from app.onboarding import run_onboarding_checks
+        results = await run_onboarding_checks()
+        failed_required = [r for r in results if not r.passed and r.category == "required"]
+        if failed_required:
+            print(f"WARNING: {len(failed_required)} required onboarding checks failed:")
+            for r in failed_required:
+                print(f"  - {r.name}: {r.message}")
+        else:
+            print("All required onboarding checks passed")
+    except Exception as e:
+        print(f"WARNING: Onboarding check error (non-fatal): {e}")
+
     print("FASTAPI LIFESPAN: Starting framework loop...")
     framework_thread = threading.Thread(target=run_framework_loop, daemon=True)
     framework_thread.start()
@@ -327,6 +341,54 @@ def redirect_to_dj_slash():
     from fastapi.responses import RedirectResponse
 
     return RedirectResponse(url="/dj/")
+
+
+@app.get("/setup")
+def serve_setup():
+    """Serve the setup/onboarding wizard."""
+    import pathlib
+    setup_path = os.path.join(
+        os.path.abspath(os.path.dirname(__file__)), "static", "mc-clanker", "setup.html"
+    )
+    if os.path.exists(setup_path):
+        from fastapi.responses import FileResponse
+        return FileResponse(setup_path, media_type="text/html")
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("Setup page not found", status_code=404)
+
+
+@app.get("/api/onboarding")
+async def onboarding_check():
+    """Proxy to onboarding module — checks config and returns status."""
+    from app.onboarding import run_onboarding_checks
+    from fastapi.responses import JSONResponse
+    results = await run_onboarding_checks()
+    required_failed = [r for r in results if not r.passed and r.category == "required"]
+    return JSONResponse({
+        "ready": len(required_failed) == 0,
+        "checks": [r._asdict() for r in results],
+    })
+
+
+@app.post("/api/setup/config")
+async def save_setup_config(request: Request):
+    """Persist config to /app/.env and restart services."""
+    from app.onboarding import write_env_file, restart_services
+    from fastapi.responses import JSONResponse
+
+    body = await request.json()
+    # Filter out empty strings
+    values = {k: v for k, v in body.items() if v and v != ""}
+    if not values:
+        return JSONResponse({"status": "ok", "restarting": False})
+
+    try:
+        write_env_file(values)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+    restart_services()
+    return JSONResponse({"status": "ok", "restarting": True})
 
 
 def audio_stream_generator():

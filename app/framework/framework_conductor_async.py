@@ -8,6 +8,7 @@ This is the async version of framework_conductor.py
 """
 
 import json
+import os
 import re
 from typing import Optional, Dict, Any, List
 from openai import AsyncOpenAI
@@ -60,11 +61,11 @@ class ConductorLLMAsync:
 
     def __init__(
         self,
-        api_base: str = "http://192.168.0.203:1234/v1",
+        api_base: str = None,
         model_name: str = "local-model",
         api_key: str = "not-needed"
     ):
-        self.api_base = api_base
+        self.api_base = api_base or os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
         self.model_name = model_name
         self.api_key = api_key
         self._async_client: Optional[AsyncOpenAI] = None

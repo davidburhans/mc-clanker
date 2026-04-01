@@ -3,8 +3,8 @@ import json
 from openai import OpenAI
 
 class Conductor:
-    def __init__(self, api_base="http://192.168.0.203:1234/v1", model_name="local-model"):
-        self.api_base = api_base
+    def __init__(self, api_base=None, model_name="local-model"):
+        self.api_base = api_base or os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
         self.model_name = model_name
         self.api_key = os.environ.get("OPENAI_API_KEY", "not-needed")
         

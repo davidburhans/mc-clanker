@@ -536,7 +536,7 @@ class TestStateDefaults:
         """Test default LLM configuration values."""
         state = GlobalState()
 
-        assert state.llm_base_url == "http://192.168.0.203:1234/v1"
+        assert state.llm_base_url == "http://localhost:1234/v1"
         assert state.llm_api_key == "not-needed"
         assert state.llm_model == "local-model"
 

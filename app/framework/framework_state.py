@@ -73,7 +73,7 @@ class GlobalState:
         self.target_key_override = None
         self.should_reset = False
 
-        self.llm_base_url = "http://192.168.0.203:1234/v1"
+        self.llm_base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
         self.llm_api_key = "not-needed"
         self.llm_model = "local-model"
 

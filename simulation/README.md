@@ -25,7 +25,7 @@ Single-interaction pairs (from slop_harness) teach the Conductor to respond corr
 pip install -e slop_harness/
 
 # Run 2048 concurrent jockeys, 8 performances each
-export LLM_BASE_URL=http://192.168.0.203:1234/v1
+export LLM_BASE_URL=http://localhost:1234/v1
 export LLM_MODEL=your-model
 python -m simulation.cli
 

@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup // MC Clanker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;700;800&family=Fira+Code:wght@400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #03030a;
+            --bg-card: #0a0a14;
+            --bg-input: #0f0f1a;
+            --border: #1a1a2e;
+            --border-glow: #00f0ff33;
+            --cyan: #00f0ff;
+            --cyan-dim: #00f0ff66;
+            --cyan-glow: 0 0 20px #00f0ff44;
+            --green: #00ff88;
+            --green-dim: #00ff8844;
+            --red: #ff3366;
+            --red-dim: #ff336644;
+            --amber: #ffaa00;
+            --amber-dim: #ffaa0044;
+            --text: #e0e0f0;
+            --text-dim: #8888aa;
+            --font-display: 'Exo 2', sans-serif;
+            --font-mono: 'Fira Code', monospace;
+            --font-ui: 'Syne', sans-serif;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-ui);
+            overflow-x: hidden;
+        }
+
+        /* Atmosphere */
+        .floating-particles {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+        .particle {
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: var(--cyan);
+            border-radius: 50%;
+            opacity: 0.3;
+            animation: float-particle linear infinite;
+        }
+        @keyframes float-particle {
+            0% { transform: translateY(100vh) scale(1); opacity: 0; }
+            10% { opacity: 0.3; }
+            90% { opacity: 0.3; }
+            100% { transform: translateY(-10vh) scale(0.5); opacity: 0; }
+        }
+        .scanlines {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 1;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0,0,0,0.03) 2px,
+                rgba(0,0,0,0.03) 4px
+            );
+        }
+        .grain {
+            position: fixed;
+            inset: -50%;
+            pointer-events: none;
+            z-index: 1;
+            width: 200%;
+            height: 200%;
+            opacity: 0.04;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            animation: grain-shift 0.5s steps(1) infinite;
+        }
+        @keyframes grain-shift {
+            0% { transform: translate(0, 0); }
+            20% { transform: translate(-2%, -2%); }
+            40% { transform: translate(2%, 1%); }
+            60% { transform: translate(-1%, 2%); }
+            80% { transform: translate(1%, -1%); }
+            100% { transform: translate(0, 0); }
+        }
+
+        /* Layout */
+        .container {
+            position: relative;
+            z-index: 10;
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 48px 24px 80px;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 48px;
+            animation: fade-up 0.6s ease-out;
+        }
+        .logo-badge {
+            width: 56px;
+            height: 56px;
+            background: linear-gradient(135deg, #0a1a2a, #0a2a3a);
+            border: 1px solid var(--cyan-dim);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--cyan-glow);
+            flex-shrink: 0;
+        }
+        .logo-badge svg { width: 32px; height: 32px; }
+        .header-text {}
+        .header-title {
+            font-family: var(--font-display);
+            font-size: 1.75rem;
+            font-weight: 800;
+            color: var(--cyan);
+            letter-spacing: 0.05em;
+            line-height: 1;
+            text-shadow: 0 0 30px var(--cyan-dim);
+        }
+        .header-sub {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-top: 4px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        /* Alert banner */
+        .alert-banner {
+            background: linear-gradient(135deg, #1a0a0a, #2a0f0f);
+            border: 1px solid var(--red-dim);
+            border-radius: 8px;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 36px;
+            animation: fade-up 0.6s ease-out 0.1s both;
+        }
+        .alert-banner svg { width: 24px; height: 24px; color: var(--red); flex-shrink: 0; }
+        .alert-banner-text {}
+        .alert-banner-title {
+            font-family: var(--font-display);
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--red);
+            letter-spacing: 0.08em;
+        }
+        .alert-banner-body {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        /* All-good banner */
+        .success-banner {
+            background: linear-gradient(135deg, #0a1a0a, #0f2a0f);
+            border: 1px solid var(--green-dim);
+            border-radius: 8px;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 36px;
+            animation: fade-up 0.6s ease-out 0.1s both;
+        }
+        .success-banner svg { width: 24px; height: 24px; color: var(--green); flex-shrink: 0; }
+        .success-banner-text {}
+        .success-banner-title {
+            font-family: var(--font-display);
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--green);
+            letter-spacing: 0.08em;
+        }
+        .success-banner-body {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        /* Check cards */
+        .checks-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            margin-bottom: 36px;
+        }
+        .check-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px 24px;
+            animation: fade-up 0.5s ease-out both;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .check-card.pass { border-color: var(--green-dim); }
+        .check-card.fail { border-color: var(--red-dim); }
+        .check-card.warn { border-color: var(--amber-dim); }
+
+        .check-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .check-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .check-icon svg { width: 18px; height: 18px; }
+        .check-card.pass .check-icon { background: var(--green-dim); color: var(--green); }
+        .check-card.fail .check-icon { background: var(--red-dim); color: var(--red); }
+        .check-card.warn .check-icon { background: var(--amber-dim); color: var(--amber); }
+
+        .check-meta {}
+        .check-category {
+            font-size: 0.65rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            font-weight: 600;
+        }
+        .check-name {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: 0.03em;
+        }
+
+        .check-message {
+            font-size: 0.82rem;
+            color: var(--text-dim);
+            margin-bottom: 14px;
+            padding-left: 48px;
+            font-family: var(--font-mono);
+        }
+
+        .check-inputs {
+            padding-left: 48px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .check-inputs.single { grid-template-columns: 1fr; }
+        .input-group { display: flex; flex-direction: column; gap: 5px; }
+        .input-group.full { grid-column: 1 / -1; }
+        .input-label {
+            font-size: 0.68rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            font-weight: 600;
+        }
+        .input-field {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 12px;
+            color: var(--text);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            width: 100%;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            outline: none;
+        }
+        .input-field:focus {
+            border-color: var(--cyan-dim);
+            box-shadow: 0 0 0 3px var(--border-glow);
+        }
+        .input-field::placeholder { color: var(--text-dim); opacity: 0.5; }
+
+        .check-hint {
+            margin-top: 10px;
+            padding-left: 48px;
+            font-size: 0.72rem;
+            color: var(--amber);
+            font-family: var(--font-mono);
+        }
+
+        /* Deploy button */
+        .deploy-section {
+            animation: fade-up 0.5s ease-out 0.4s both;
+        }
+        .deploy-btn {
+            width: 100%;
+            padding: 16px 32px;
+            background: linear-gradient(135deg, #003344, #004455);
+            border: 1px solid var(--cyan-dim);
+            border-radius: 8px;
+            color: var(--cyan);
+            font-family: var(--font-display);
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+        }
+        .deploy-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, var(--cyan), #0088aa);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .deploy-btn:hover {
+            border-color: var(--cyan);
+            box-shadow: 0 0 30px var(--cyan-dim), inset 0 0 20px var(--cyan-dim);
+            transform: translateY(-1px);
+        }
+        .deploy-btn:hover::before { opacity: 0.1; }
+        .deploy-btn:active { transform: translateY(0); }
+        .deploy-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .deploy-btn span { position: relative; z-index: 1; }
+
+        .deploy-btn.loading {
+            pointer-events: none;
+        }
+        .deploy-btn.loading::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(0,240,255,0.1), transparent);
+            animation: shimmer 1.5s infinite;
+        }
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .deploy-hint {
+            text-align: center;
+            margin-top: 12px;
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            font-family: var(--font-mono);
+        }
+
+        /* Loading spinner */
+        .spinner {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--cyan-dim);
+            border-top-color: var(--cyan);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Success state */
+        .success-state {
+            display: none;
+            text-align: center;
+            padding: 60px 20px;
+            animation: fade-up 0.5s ease-out;
+        }
+        .success-state.visible { display: block; }
+        .success-icon {
+            width: 80px;
+            height: 80px;
+            background: var(--green-dim);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            box-shadow: 0 0 40px var(--green-dim);
+        }
+        .success-icon svg { width: 40px; height: 40px; color: var(--green); }
+        .success-title {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--green);
+            margin-bottom: 8px;
+        }
+        .success-body { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 32px; }
+
+        @keyframes fade-up {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .check-inputs { grid-template-columns: 1fr; }
+            .check-message, .check-hint, .check-inputs { padding-left: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="floating-particles" id="particles"></div>
+    <div class="scanlines"></div>
+    <div class="grain"></div>
+
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9 18V5l12-2v13"/>
+                    <circle cx="6" cy="18" r="3"/>
+                    <circle cx="18" cy="16" r="3"/>
+                </svg>
+            </div>
+            <div class="header-text">
+                <div class="header-title">MC CLANKER</div>
+                <div class="header-sub">AI-Powered Continuous Music Generator</div>
+            </div>
+        </div>
+
+        <!-- Alert / Success banners -->
+        <div class="alert-banner" id="alert-banner" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <div class="alert-banner-text">
+                <div class="alert-banner-title">SETUP REQUIRED</div>
+                <div class="alert-banner-body">Configure your AI engine to start DJing</div>
+            </div>
+        </div>
+
+        <div class="success-banner" id="success-banner" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+            <div class="success-banner-text">
+                <div class="success-banner-title">ALL SYSTEMS READY</div>
+                <div class="success-banner-body">Your AI engine is configured and ready to rock</div>
+            </div>
+        </div>
+
+        <!-- Check cards -->
+        <div class="checks-list" id="checks-list">
+            <!-- Populated by JS -->
+        </div>
+
+        <!-- Deploy button -->
+        <div class="deploy-section" id="deploy-section">
+            <button class="deploy-btn" id="deploy-btn">
+                <span id="btn-text">Deploy Configuration</span>
+            </button>
+            <div class="deploy-hint" id="deploy-hint">Changes will be saved to .env and services restarted</div>
+        </div>
+
+        <!-- Success state (hidden initially) -->
+        <div class="success-state" id="success-state">
+            <div class="success-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+            </div>
+            <div class="success-title">Configuration Saved</div>
+            <div class="success-body">Restarting services — redirecting to DJ interface...</div>
+            <div style="display:flex;justify-content:center">
+                <div class="spinner"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Generate floating particles
+        (function() {
+            const container = document.getElementById('particles');
+            for (let i = 0; i < 30; i++) {
+                const p = document.createElement('div');
+                p.className = 'particle';
+                p.style.left = Math.random() * 100 + '%';
+                p.style.animationDuration = (8 + Math.random() * 12) + 's';
+                p.style.animationDelay = Math.random() * 10 + 's';
+                p.style.width = p.style.height = (1 + Math.random() * 2) + 'px';
+                container.appendChild(p);
+            }
+        })();
+
+        // Icons
+        const icons = {
+            check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`,
+            x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+            warn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+            llm: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
+            database: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`,
+            garage: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>`,
+            auth: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>`,
+        };
+
+        const iconMap = {
+            llm_server: icons.llm,
+            database: icons.database,
+            garage_s3: icons.garage,
+            jwt_secret: icons.auth,
+            auth_passwords: icons.auth,
+        };
+
+        // State
+        let checks = [];
+        let failedRequired = false;
+
+        async function loadChecks() {
+            try {
+                const res = await fetch('/api/onboarding');
+                checks = await res.json();
+                renderChecks();
+            } catch (e) {
+                console.error('Failed to load onboarding checks:', e);
+            }
+        }
+
+        function renderChecks() {
+            const list = document.getElementById('checks-list');
+            const alertBanner = document.getElementById('alert-banner');
+            const successBanner = document.getElementById('success-banner');
+            const deploySection = document.getElementById('deploy-section');
+
+            failedRequired = checks.some(c => !c.passed && c.category === 'required');
+
+            if (!failedRequired) {
+                alertBanner.style.display = 'none';
+                successBanner.style.display = 'flex';
+                deploySection.style.display = 'none';
+            } else {
+                alertBanner.style.display = 'flex';
+                successBanner.style.display = 'none';
+                deploySection.style.display = 'block';
+            }
+
+            list.innerHTML = '';
+            checks.forEach((check, i) => {
+                const card = document.createElement('div');
+                const cls = check.passed ? 'pass' : (check.category === 'required' ? 'fail' : 'warn');
+                card.className = `check-card ${cls}`;
+                card.style.animationDelay = `${i * 0.08}s`;
+
+                const icon = check.passed ? icons.check : (check.category === 'required' ? icons.x : icons.warn);
+                const catLabel = check.category.toUpperCase();
+
+                let inputsHtml = '';
+                if (!check.passed) {
+                    inputsHtml = buildInputs(check);
+                }
+
+                card.innerHTML = `
+                    <div class="check-header">
+                        <div class="check-icon">${icon}</div>
+                        <div class="check-meta">
+                            <div class="check-category">${catLabel}</div>
+                            <div class="check-name">${check.name.replace(/_/g, ' ')}</div>
+                        </div>
+                    </div>
+                    <div class="check-message">${check.message}</div>
+                    ${inputsHtml}
+                    ${check.hint ? `<div class="check-hint">${check.hint}</div>` : ''}
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        function buildInputs(check) {
+            // Build input fields based on check name
+            if (check.name === 'llm_server') {
+                return `
+                <div class="check-inputs single">
+                    <div class="input-group full">
+                        <label class="input-label">LLM Base URL</label>
+                        <input class="input-field" type="text" id="input-llm-url" value="${getEnvOrDefault('LLM_BASE_URL', 'http://localhost:1234/v1')}" placeholder="http://localhost:1234/v1">
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Model Name</label>
+                        <input class="input-field" type="text" id="input-llm-model" value="${getEnvOrDefault('LLM_MODEL', 'local-model')}">
+                    </div>
+                </div>`;
+            }
+            if (check.name === 'garage_s3') {
+                return `
+                <div class="check-inputs">
+                    <div class="input-group">
+                        <label class="input-label">Endpoint</label>
+                        <input class="input-field" type="text" id="input-garage-endpoint" value="${getEnvOrDefault('GARAGE_ENDPOINT', 'http://localhost:3900')}">
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Bucket</label>
+                        <input class="input-field" type="text" id="input-garage-bucket" value="${getEnvOrDefault('GARAGE_BUCKET', 'mcclanker')}">
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Access Key</label>
+                        <input class="input-field" type="text" id="input-garage-access" value="${getEnvOrDefault('GARAGE_ACCESS_KEY', '')}">
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Secret Key</label>
+                        <input class="input-field" type="password" id="input-garage-secret" value="${getEnvOrDefault('GARAGE_SECRET_KEY', '')}">
+                    </div>
+                </div>`;
+            }
+            if (check.name === 'jwt_secret') {
+                return `
+                <div class="check-inputs single">
+                    <div class="input-group full">
+                        <label class="input-label">JWT Secret</label>
+                        <input class="input-field" type="password" id="input-jwt-secret" value="${getEnvOrDefault('JWT_SECRET', '')}" placeholder="Leave empty to keep current">
+                    </div>
+                </div>`;
+            }
+            if (check.name === 'auth_passwords') {
+                return `
+                <div class="check-inputs">
+                    <div class="input-group">
+                        <label class="input-label">DJ Password</label>
+                        <input class="input-field" type="password" id="input-dj-password" value="${getEnvOrDefault('DJ_PASSWORD', '')}">
+                    </div>
+                    <div class="input-group">
+                        <label class="input-label">Audience Password</label>
+                        <input class="input-field" type="password" id="input-audience-password" value="${getEnvOrDefault('AUDIENCE_PASSWORD', '')}">
+                    </div>
+                </div>`;
+            }
+            return '';
+        }
+
+        function getEnvOrDefault(key, def) {
+            // We don't have access to server-side env vars on load,
+            // so we use the default. User can edit the fields.
+            return def;
+        }
+
+        // Deploy button
+        document.getElementById('deploy-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('deploy-btn');
+            const btnText = document.getElementById('btn-text');
+
+            btn.disabled = true;
+            btn.classList.add('loading');
+            btnText.innerHTML = '<span class="spinner"></span> Deploying...';
+
+            const payload = {};
+
+            // Gather all input values
+            const llmUrl = document.getElementById('input-llm-url')?.value;
+            const llmModel = document.getElementById('input-llm-model')?.value;
+            const garageEndpoint = document.getElementById('input-garage-endpoint')?.value;
+            const garageBucket = document.getElementById('input-garage-bucket')?.value;
+            const garageAccess = document.getElementById('input-garage-access')?.value;
+            const garageSecret = document.getElementById('input-garage-secret')?.value;
+            const jwtSecret = document.getElementById('input-jwt-secret')?.value;
+            const djPassword = document.getElementById('input-dj-password')?.value;
+            const audiencePassword = document.getElementById('input-audience-password')?.value;
+
+            if (llmUrl !== undefined) payload.LLM_BASE_URL = llmUrl;
+            if (llmModel !== undefined) payload.LLM_MODEL = llmModel;
+            if (garageEndpoint !== undefined) payload.GARAGE_ENDPOINT = garageEndpoint;
+            if (garageBucket !== undefined) payload.GARAGE_BUCKET = garageBucket;
+            if (garageAccess !== undefined) payload.GARAGE_ACCESS_KEY = garageAccess;
+            if (garageSecret !== undefined) payload.GARAGE_SECRET_KEY = garageSecret;
+            if (jwtSecret !== undefined && jwtSecret) payload.JWT_SECRET = jwtSecret;
+            if (djPassword !== undefined) payload.DJ_PASSWORD = djPassword;
+            if (audiencePassword !== undefined) payload.AUDIENCE_PASSWORD = audiencePassword;
+
+            try {
+                const res = await fetch('/api/setup/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+
+                if (res.ok) {
+                    document.getElementById('deploy-section').style.display = 'none';
+                    document.getElementById('checks-list').style.display = 'none';
+                    document.getElementById('alert-banner').style.display = 'none';
+                    document.getElementById('success-banner').style.display = 'none';
+                    document.getElementById('success-state').classList.add('visible');
+
+                    // Redirect after a short delay
+                    setTimeout(() => {
+                        window.location.href = '/dj';
+                    }, 2500);
+                } else {
+                    const err = await res.text();
+                    btnText.textContent = 'Deploy Failed — Retry';
+                    btn.disabled = false;
+                    btn.classList.remove('loading');
+                    alert('Deploy failed: ' + err);
+                }
+            } catch (e) {
+                btnText.textContent = 'Deploy Failed — Retry';
+                btn.disabled = false;
+                btn.classList.remove('loading');
+                alert('Deploy failed: ' + e);
+            }
+        });
+
+        // Load on page ready
+        loadChecks();
+    </script>
+</body>
+</html>

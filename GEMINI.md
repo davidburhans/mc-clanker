@@ -55,5 +55,5 @@ python app_ui.py
 
 - **LLM Prompting**: The Conductor heavily relies on structured JSON outputs with strict schemas to define track attributes (e.g., `major_family`, `sub_family`, `timbre_tags`, `notation_tag`, `fx_tag`, `bars`). Any changes to the conductor prompt must respect this schema.
 - **State Management**: All cross-component state (BPM, keys, user overrides, stems) must go through `framework_state.py` to ensure thread-safety and proper synchronization across the generation pipeline.
-- **Environment Variables**: Use environment variables for configuration. Key variables include `LLM_BASE_URL` (default: `http://192.168.0.203:1234/v1`), `LLM_API_KEY`, `LLM_MODEL`, `ICECAST_ENABLED`, and `EXPORT_DIR`.
+- **Environment Variables**: Use environment variables for configuration. Key variables include `LLM_BASE_URL` (default: `http://localhost:1234/v1`), `LLM_API_KEY`, `LLM_MODEL`, `ICECAST_ENABLED`, and `EXPORT_DIR`.
 - **Testing**: A `tests/` directory is present (e.g., `test_api.py`, `test_conductor_prompts.py`). New features or logic changes should include accompanying tests. Use standard `pytest` execution.

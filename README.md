@@ -110,7 +110,7 @@ ollama pull llama3.2
 Configure the LLM endpoint in the DJ UI Settings modal or via environment variables:
 
 ```bash
-export LLM_BASE_URL=http://192.168.0.203:1234/v1
+export LLM_BASE_URL=http://localhost:1234/v1
 export LLM_API_KEY=not-needed
 export LLM_MODEL=local-model
 ```
@@ -174,7 +174,7 @@ curl -X POST http://localhost:7860/api/export/start \
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_BASE_URL` | `http://192.168.0.203:1234/v1` | LLM API base URL |
+| `LLM_BASE_URL` | `http://localhost:1234/v1` | LLM API base URL |
 | `LLM_API_KEY` | `not-needed` | LLM API key |
 | `LLM_MODEL` | `local-model` | LLM model name |
 | `ICECAST_ENABLED` | `false` | Enable Icecast streaming |

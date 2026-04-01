@@ -3,7 +3,7 @@ services:
     image: postgres:15-alpine
     environment:
       - POSTGRES_USER=mcclanker
-      - POSTGRES_PASSWORD=change-me-in-production
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=mcclanker
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -44,25 +44,28 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.web
     image: mcclanker/web:latest
+    env_file:
+      - ../.env
     ports:
       - "7860:7860"
     environment:
-      - LLM_BASE_URL=http://192.168.0.203:1234/v1
-      - LLM_API_KEY=not-needed
-      - LLM_MODEL=local-model
-      - ICECAST_ENABLED=false
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY:-not-needed}
+      - LLM_MODEL=${LLM_MODEL}
+      - ICECAST_ENABLED=${ICECAST_ENABLED:-false}
       - EXPORT_DIR=/exports
       - DISABLE_LOCAL_AUDIO=1
-      - DATABASE_URL=postgresql://mcclanker:change-me-in-production@postgres:5432/mcclanker
-      - JWT_SECRET=change-me-in-production-use-strong-secret
+      - DATABASE_URL=${DATABASE_URL:-postgresql://mcclanker:${POSTGRES_PASSWORD}@postgres:5432/mcclanker}
+      - JWT_SECRET=${JWT_SECRET}
       - SHOWS_DIR=/exports/shows
-      - GARAGE_ENDPOINT=http://garage:3900
-      - GARAGE_ACCESS_KEY=GarageAccessKey
-      - GARAGE_SECRET_KEY=GarageSecretKey
-      - GARAGE_BUCKET=mcclanker
-      - GARAGE_BUCKET_REGION=garage
+      - GARAGE_ENDPOINT=${GARAGE_ENDPOINT}
+      - GARAGE_ACCESS_KEY=${GARAGE_ACCESS_KEY}
+      - GARAGE_SECRET_KEY=${GARAGE_SECRET_KEY}
+      - GARAGE_BUCKET=${GARAGE_BUCKET}
+      - GARAGE_BUCKET_REGION=${GARAGE_BUCKET_REGION:-garage}
     volumes:
       - ../exports:/exports:rw
+      - ../.env:/app/.env:rw
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,14 +78,16 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.worker
     image: mcclanker/worker:latest
+    env_file:
+      - ../.env
     environment:
       - WORKER_ID=worker-${HOSTNAME:-1}
-      - DATABASE_URL=postgresql://mcclanker:change-me-in-production@postgres:5432/mcclanker
-      - GARAGE_ENDPOINT=http://garage:3900
-      - GARAGE_ACCESS_KEY=GarageAccessKey
-      - GARAGE_SECRET_KEY=GarageSecretKey
-      - GARAGE_BUCKET=mcclanker
-      - GARAGE_BUCKET_REGION=garage
+      - DATABASE_URL=${DATABASE_URL:-postgresql://mcclanker:${POSTGRES_PASSWORD}@postgres:5432/mcclanker}
+      - GARAGE_ENDPOINT=${GARAGE_ENDPOINT}
+      - GARAGE_ACCESS_KEY=${GARAGE_ACCESS_KEY}
+      - GARAGE_SECRET_KEY=${GARAGE_SECRET_KEY}
+      - GARAGE_BUCKET=${GARAGE_BUCKET}
+      - GARAGE_BUCKET_REGION=${GARAGE_BUCKET_REGION:-garage}
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
     volumes:

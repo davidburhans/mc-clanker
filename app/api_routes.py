@@ -1509,3 +1509,64 @@ async def get_session_heartbeat(session_id: UUID):
             "last_heartbeat": result[0],
             "is_stale": (datetime.utcnow() - result[0]) > timedelta(minutes=5)
         }
+
+
+# =============================================================================
+# Onboarding / Setup
+# =============================================================================
+
+from typing import Optional
+
+
+class SetupConfigRequest(BaseModel):
+    LLM_BASE_URL: Optional[str] = None
+    LLM_MODEL: Optional[str] = None
+    LLM_API_KEY: Optional[str] = None
+    GARAGE_ENDPOINT: Optional[str] = None
+    GARAGE_ACCESS_KEY: Optional[str] = None
+    GARAGE_SECRET_KEY: Optional[str] = None
+    GARAGE_BUCKET: Optional[str] = None
+    GARAGE_BUCKET_REGION: Optional[str] = None
+    JWT_SECRET: Optional[str] = None
+    DJ_PASSWORD: Optional[str] = None
+    AUDIENCE_PASSWORD: Optional[str] = None
+    DATABASE_URL: Optional[str] = None
+
+
+@router.get("/api/onboarding")
+async def get_onboarding_status():
+    """
+    Returns structured list of configuration check results.
+
+    Use this to determine if the app is properly configured before
+    allowing access to the DJ interface.
+    """
+    from onboarding import run_onboarding_checks
+    results = await run_onboarding_checks()
+    required_failed = [r for r in results if not r.passed and r.category == "required"]
+    return {
+        "ready": len(required_failed) == 0,
+        "checks": [r._asdict() for r in results],
+    }
+
+
+@router.post("/api/setup/config")
+async def save_setup_config(config: SetupConfigRequest):
+    """
+    Persist configuration to /app/.env and trigger service restart.
+
+    After saving, services read the new .env via docker-compose's env_file.
+    """
+    from onboarding import write_env_file, restart_services
+
+    values = {k: v for k, v in config.model_dump().items() if v is not None and v != ""}
+    if not values:
+        return {"status": "ok", "restarting": False}
+
+    try:
+        write_env_file(values)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
+
+    restart_services()
+    return {"status": "ok", "restarting": True}

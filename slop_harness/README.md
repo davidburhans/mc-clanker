@@ -13,7 +13,7 @@ Generates 100,000+ Conductor prompt/response pairs by simulating diverse DJ sess
 pip install -e slop_harness/
 
 # Run (target your LM Studio or Ollama)
-export LLM_BASE_URL=http://192.168.0.203:1234/v1
+export LLM_BASE_URL=http://localhost:1234/v1
 export LLM_MODEL=your-model
 export TOTAL_INTERACTIONS=100000
 export OUTPUT_DIR=./training/data
