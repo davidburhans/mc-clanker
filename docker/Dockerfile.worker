@@ -1,0 +1,57 @@
+# docker/Dockerfile.worker - Generator worker container for mc-clanker (GPU-enabled)
+# Multi-stage build: build stage installs deps, runtime stage is minimal
+# Runs the Foundation-1 model for audio stem generation using PyTorch/CUDA
+
+# =============================================================================
+# Build stage - install all Python dependencies
+# =============================================================================
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /build
+
+# Install build tools and Python
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-dev python3-pip ffmpeg curl git && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python
+
+# Install Python dependencies (cached until requirements-worker.txt changes)
+COPY requirements-worker.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements-worker.txt
+
+# =============================================================================
+# Runtime stage - minimal image with just runtime
+# =============================================================================
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/
+
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 libgomp1 ffmpeg && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -sf /usr/bin/python3.10 /usr/bin/python
+
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
+
+# Copy app code (this layer changes most often, will be cached separately)
+COPY app/ ./app/
+COPY config/ ./config/
+
+# Create non-root user
+RUN useradd -m -u 1000 worker
+USER worker
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD ffmpeg -version > /dev/null 2>&1 || exit 1
+
+CMD ["python", "-m", "app.worker"]

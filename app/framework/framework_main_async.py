@@ -26,10 +26,10 @@ import uuid
 import numpy as np
 from typing import Optional, List, Dict, Any
 
-from framework_state import state
-from framework_mixer import Mixer
-from framework_conductor_async import ConductorLLMAsync
-from job_waiter import wait_for_multiple_jobs
+from app.framework.framework_state import state
+from app.framework.framework_mixer import Mixer
+from app.framework.framework_conductor_async import ConductorLLMAsync
+from app.job_waiter import wait_for_multiple_jobs
 
 
 def calc_duration(bpm: int, bars: int, time_signature: int = 4) -> float:
@@ -488,7 +488,7 @@ class AsyncFrameworkLoop:
         """
         from datetime import datetime, timedelta
         from models.generator_job import GeneratorJob
-        from db import DatabaseManager
+        from app.db import DatabaseManager
 
         db_manager = DatabaseManager.get_instance()
         expires_at = datetime.utcnow() + timedelta(hours=24)

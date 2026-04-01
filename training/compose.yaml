@@ -1,0 +1,27 @@
+# training/compose.yaml - Podman compose for GPU training jobs
+# Run with: podman compose -f training/compose.yaml up --build
+
+services:
+  training:
+    build:
+      context: ..
+      dockerfile: training/Dockerfile
+    image: mcclanker/training:latest
+    container_name: mcclanker-training
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - MODEL_NAME=Qwen/Qwen3.5-0.8B
+      - OUTPUT_DIR=/training/outputs
+      - MAX_SEQ_LENGTH=2048
+      - NUM_EPOCHS=3
+      - PER_DEVICE_BATCH_SIZE=8
+      - GRADIENT_ACCUMULATION_STEPS=4
+      - LEARNING_RATE=1e-5
+    volumes:
+      - ../training/data:/training/data:ro
+      - ../training/outputs:/training/outputs:rw
+      - ~/.cache/huggingface:/root/.cache/huggingface:rw
+    devices:
+      - nvidia.com/gpu=all
+    restart: "no"

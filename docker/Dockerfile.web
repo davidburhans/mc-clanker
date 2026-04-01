@@ -1,0 +1,60 @@
+# docker/Dockerfile.web - FastAPI web application (CPU-only)
+# Multi-stage build: build stage installs deps, runtime stage is minimal
+# Serves HTTP/WebSocket API, does not need GPU
+
+# =============================================================================
+# Build stage - install all Python dependencies
+# =============================================================================
+FROM python:3.10-slim AS builder
+
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (cached until requirements.txt changes)
+COPY requirements.txt .
+RUN pip install --prefix=/install -r requirements.txt
+
+# =============================================================================
+# Runtime stage - minimal image
+# =============================================================================
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
+
+# Copy app code (this layer changes most often, will be cached separately)
+COPY app/ ./app/
+COPY config/ ./config/
+COPY static/ ./static/
+COPY migrations/ ./migrations/
+
+# Create exports directory
+RUN mkdir -p /exports/shows
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')" || exit 1
+
+# Default command - run the FastAPI app
+CMD ["uvicorn", "app.app_ui:app", "--host", "0.0.0.0", "--port", "7860"]

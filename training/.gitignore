@@ -1,0 +1,14 @@
+# Model outputs (large, generated)
+outputs/
+outputs_backup/
+
+# Huggingface cache
+.cache/
+
+# Unsloth compilation cache
+unsloth_compiled_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
