@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
-from framework_state import GlobalState
+from app.framework.framework_state import GlobalState
 
 def test_initial_state():
     state = GlobalState()

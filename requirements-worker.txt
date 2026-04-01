@@ -10,7 +10,6 @@ botocore>=1.34.0
 
 # Audio processing
 scipy>=1.12.0
-numpy>=1.26.0
 
 # Stable audio tools for generation
 stable-audio-tools==0.0.19

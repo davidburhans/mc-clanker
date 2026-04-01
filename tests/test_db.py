@@ -10,12 +10,12 @@ class TestDatabaseManager:
     def test_database_manager_singleton(self):
         """Test that DatabaseManager is a singleton."""
         # Reset singleton for testing
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("db.create_engine"):
-                with patch("db.sessionmaker"):
+            with patch("app.db.create_engine"):
+                with patch("app.db.sessionmaker"):
                     # First call should create instance
                     db1 = DatabaseManager.get_instance()
                     db2 = DatabaseManager.get_instance()
@@ -27,12 +27,12 @@ class TestDatabaseManager:
 
     def test_database_url_postgresql(self):
         """Test PostgreSQL database URL configuration."""
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://user:pass@localhost/db"}):
-            with patch("db.create_engine") as mock_engine:
-                with patch("db.sessionmaker"):
+            with patch("app.db.create_engine") as mock_engine:
+                with patch("app.db.sessionmaker"):
                     db = DatabaseManager.get_instance()
                     mock_engine.assert_called_once()
                     call_args = mock_engine.call_args[0][0]
@@ -42,7 +42,7 @@ class TestDatabaseManager:
 
     def test_database_url_sqlite_fallback(self):
         """Test SQLite fallback when no DATABASE_URL."""
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         DatabaseManager._instance = None
 
         # Clear DATABASE_URL
@@ -50,8 +50,8 @@ class TestDatabaseManager:
         env.pop("DATABASE_URL", None)
 
         with patch.dict(os.environ, env, clear=True):
-            with patch("db.create_engine") as mock_engine:
-                with patch("db.sessionmaker"):
+            with patch("app.db.create_engine") as mock_engine:
+                with patch("app.db.sessionmaker"):
                     with patch("os.makedirs"):
                         with patch("os.path.dirname", return_value="/tmp"):
                             db = DatabaseManager.get_instance()
@@ -62,12 +62,12 @@ class TestDatabaseManager:
 
     def test_create_tables(self):
         """Test create_tables method."""
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("db.create_engine") as mock_engine:
-                with patch("db.sessionmaker"):
+            with patch("app.db.create_engine") as mock_engine:
+                with patch("app.db.sessionmaker"):
                     with patch("os.makedirs"):
                         with patch("os.path.dirname", return_value="/tmp"):
                             mock_base = MagicMock()
@@ -78,14 +78,14 @@ class TestDatabaseManager:
 
     def test_session_context_manager(self):
         """Test session context manager."""
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("db.create_engine") as mock_engine:
+            with patch("app.db.create_engine") as mock_engine:
                 mock_session = MagicMock()
                 mock_session_maker = MagicMock(return_value=mock_session)
-                with patch("db.sessionmaker", return_value=mock_session_maker):
+                with patch("app.db.sessionmaker", return_value=mock_session_maker):
                     with patch("os.makedirs"):
                         with patch("os.path.dirname", return_value="/tmp"):
                             db = DatabaseManager.get_instance()
@@ -99,14 +99,14 @@ class TestDatabaseManager:
 
     def test_session_context_manager_rollback_on_exception(self):
         """Test session rollback when exception occurs in context manager."""
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("db.create_engine") as mock_engine:
+            with patch("app.db.create_engine") as mock_engine:
                 mock_session = MagicMock()
                 mock_session_maker = MagicMock(return_value=mock_session)
-                with patch("db.sessionmaker", return_value=mock_session_maker):
+                with patch("app.db.sessionmaker", return_value=mock_session_maker):
                     with patch("os.makedirs"):
                         with patch("os.path.dirname", return_value="/tmp"):
                             db = DatabaseManager.get_instance()
@@ -128,14 +128,14 @@ class TestDatabaseManager:
 
     def test_session_context_manager_close_always_called(self):
         """Test that session close is always called even without exception."""
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("db.create_engine") as mock_engine:
+            with patch("app.db.create_engine") as mock_engine:
                 mock_session = MagicMock()
                 mock_session_maker = MagicMock(return_value=mock_session)
-                with patch("db.sessionmaker", return_value=mock_session_maker):
+                with patch("app.db.sessionmaker", return_value=mock_session_maker):
                     with patch("os.makedirs"):
                         with patch("os.path.dirname", return_value="/tmp"):
                             db = DatabaseManager.get_instance()
@@ -152,7 +152,7 @@ class TestModelsIntegration:
 
     def test_user_model_fields(self):
         """Test User model has required fields."""
-        from models.user import User
+        from app.models.user import User
 
         fields = [c.name for c in User.__table__.columns]
         assert "id" in fields
@@ -164,7 +164,7 @@ class TestModelsIntegration:
 
     def test_show_model_fields(self):
         """Test Show model has required fields."""
-        from models.show import Show
+        from app.models.show import Show
 
         fields = [c.name for c in Show.__table__.columns]
         assert "id" in fields
@@ -181,7 +181,7 @@ class TestModelsIntegration:
 
     def test_show_action_model_fields(self):
         """Test ShowAction model has required fields."""
-        from models.show_action import ShowAction
+        from app.models.show_action import ShowAction
 
         fields = [c.name for c in ShowAction.__table__.columns]
         assert "id" in fields
@@ -196,7 +196,7 @@ class TestModelsIntegration:
 
     def test_llm_interaction_model_fields(self):
         """Test LLMInteraction model has required fields."""
-        from models.llm_interaction import LLMInteraction
+        from app.models.llm_interaction import LLMInteraction
 
         fields = [c.name for c in LLMInteraction.__table__.columns]
         assert "id" in fields

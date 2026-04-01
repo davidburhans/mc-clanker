@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
-from framework_mixer import Mixer, Track
-from framework_state import state
+from app.framework.framework_mixer import Mixer, Track
+from app.framework.framework_state import state
 
 @pytest.fixture(autouse=True)
 def reset_state():

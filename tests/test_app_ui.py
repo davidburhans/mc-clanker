@@ -17,8 +17,8 @@ class TestAuthMiddleware:
         mock_state.dj_password = ""
         mock_state.audience_password = ""
 
-        with patch('app_ui.state', mock_state):
-            from app_ui import AuthMiddleware
+        with patch('app.app_ui.state', mock_state):
+            from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
             middleware = AuthMiddleware(app_mock)
@@ -45,8 +45,8 @@ class TestAuthMiddleware:
         mock_state.dj_password = "secret"
         mock_state.audience_password = ""
 
-        with patch('app_ui.state', mock_state):
-            from app_ui import AuthMiddleware
+        with patch('app.app_ui.state', mock_state):
+            from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
             middleware = AuthMiddleware(app_mock)
@@ -73,8 +73,8 @@ class TestAuthMiddleware:
         mock_state.dj_password = ""
         mock_state.audience_password = "audience_secret"
 
-        with patch('app_ui.state', mock_state):
-            from app_ui import AuthMiddleware
+        with patch('app.app_ui.state', mock_state):
+            from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
             middleware = AuthMiddleware(app_mock)
@@ -101,8 +101,8 @@ class TestAuthMiddleware:
         mock_state.dj_password = "secret"
         mock_state.audience_password = ""
 
-        with patch('app_ui.state', mock_state):
-            from app_ui import AuthMiddleware
+        with patch('app.app_ui.state', mock_state):
+            from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
             middleware = AuthMiddleware(app_mock)
@@ -130,8 +130,8 @@ class TestAuthMiddleware:
         mock_state.dj_password = "secret"
         mock_state.audience_password = ""
 
-        with patch('app_ui.state', mock_state):
-            from app_ui import AuthMiddleware
+        with patch('app.app_ui.state', mock_state):
+            from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
             middleware = AuthMiddleware(app_mock)
@@ -157,7 +157,7 @@ class TestAudioStreamGenerator:
     def test_poison_pill_before_first_chunk(self):
         """Generator should handle None poison pill before first chunk."""
         with patch('app_ui.queue.Queue') as mock_queue_class, \
-             patch('app_ui.state') as mock_state, \
+             patch('app.app_ui.state') as mock_state, \
              patch('app_ui.subprocess') as mock_subprocess:
 
             mock_queue = MagicMock()
@@ -167,7 +167,7 @@ class TestAudioStreamGenerator:
             mock_state.remove_audio_client = MagicMock()
             mock_state.is_running = True
 
-            from app_ui import audio_stream_generator
+            from app.app_ui import audio_stream_generator
             gen = audio_stream_generator()
 
             # Should not raise and should return immediately
@@ -181,7 +181,7 @@ class TestAudioStreamGenerator:
     def test_timeout_waiting_for_first_chunk(self):
         """Generator should handle timeout waiting for first chunk."""
         with patch('app_ui.queue.Queue') as mock_queue_class, \
-             patch('app_ui.state') as mock_state, \
+             patch('app.app_ui.state') as mock_state, \
              patch('app_ui.subprocess'):
 
             mock_queue = MagicMock()
@@ -191,7 +191,7 @@ class TestAudioStreamGenerator:
             mock_state.remove_audio_client = MagicMock()
             mock_state.is_running = True
 
-            from app_ui import audio_stream_generator
+            from app.app_ui import audio_stream_generator
             gen = audio_stream_generator()
 
             # Should not raise and should return on timeout
@@ -209,7 +209,7 @@ class TestRedirects:
     def test_dj_redirect(self):
         """Test /dj redirects to /dj/."""
         from fastapi.testclient import TestClient
-        from app_ui import redirect_to_dj_slash
+        from app.app_ui import redirect_to_dj_slash
         from fastapi import FastAPI
 
         app = FastAPI()
@@ -228,12 +228,12 @@ class TestStreamMp3:
         """Test streaming response has correct headers."""
         from fastapi import FastAPI
         from fastapi.responses import StreamingResponse
-        from app_ui import stream_mp3, audio_stream_generator
+        from app.app_ui import stream_mp3, audio_stream_generator
 
         app = FastAPI()
         app.add_api_route("/stream.mp3", stream_mp3, methods=["GET"])
 
-        with patch('app_ui.state') as mock_state, \
+        with patch('app.app_ui.state') as mock_state, \
              patch('app_ui.audio_stream_generator') as mock_gen:
 
             mock_state.is_running = True
@@ -262,13 +262,13 @@ class TestAppUIModule:
     def test_app_initialization(self):
         """Test that the app is properly initialized."""
         # The app should be a FastAPI instance with middleware
-        from app_ui import app
+        from app.app_ui import app
 
         assert app is not None
 
     def test_app_has_auth_middleware(self):
         """Test that the app has AuthMiddleware registered."""
-        from app_ui import app
+        from app.app_ui import app
 
         # Check middleware is registered
         middleware = app.user_middleware

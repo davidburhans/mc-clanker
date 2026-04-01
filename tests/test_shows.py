@@ -11,7 +11,7 @@ class TestShowModel:
     """Tests for Show model."""
 
     def test_show_to_dict_without_password(self):
-        from models.show import Show
+        from app.models.show import Show
 
         show = Show(
             id=1,
@@ -34,7 +34,7 @@ class TestShowModel:
         assert "has_audience_password" not in result  # Not included when False
 
     def test_show_to_dict_with_password(self):
-        from models.show import Show
+        from app.models.show import Show
 
         show = Show(
             id=1,
@@ -54,7 +54,7 @@ class TestShowModel:
         assert "audience_password_hash" not in result  # Never exposed
 
     def test_show_status_values(self):
-        from models.show import Show
+        from app.models.show import Show
 
         # Valid statuses should be stored as-is
         show = Show(
@@ -79,7 +79,7 @@ class TestShowActionModel:
     """Tests for ShowAction model."""
 
     def test_show_action_to_dict(self):
-        from models.show_action import ShowAction
+        from app.models.show_action import ShowAction
 
         action = ShowAction(
             id=1,
@@ -106,7 +106,7 @@ class TestLLMInteractionModel:
     """Tests for LLMInteraction model."""
 
     def test_llm_interaction_to_dict(self):
-        from models.llm_interaction import LLMInteraction
+        from app.models.llm_interaction import LLMInteraction
 
         interaction = LLMInteraction(
             id=1,
@@ -130,7 +130,7 @@ class TestLLMInteractionModel:
         assert result["was_fallback"] is False
 
     def test_llm_interaction_to_llm_dump_dict(self):
-        from models.llm_interaction import LLMInteraction
+        from app.models.llm_interaction import LLMInteraction
 
         interaction = LLMInteraction(
             id=1,
@@ -160,7 +160,7 @@ class TestShowRoutes:
     def app_client(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from api_routes import router
+        from app.api_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -168,7 +168,7 @@ class TestShowRoutes:
 
     @pytest.fixture(autouse=True)
     def reset_state(self):
-        from framework_state import state
+        from app.framework.framework_state import state
         state.reset()
         yield
 
@@ -186,7 +186,7 @@ class TestShowRoutes:
         """Mock database with a test show."""
         from unittest.mock import MagicMock, patch
         from datetime import datetime
-        from models.show import Show
+        from app.models.show import Show
 
         mock_show = MagicMock(spec=Show)
         mock_show.id = 1
@@ -330,8 +330,8 @@ class TestShowRoutes:
         mock_db_instance.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_db_instance.session.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("api_routes.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("api_routes.DatabaseManager") as mock_db_class:
+        with patch("app.api_routes.get_current_user_from_request", return_value=mock_auth_user):
+            with patch("app.api_routes.DatabaseManager") as mock_db_class:
                 mock_db_class.get_instance.return_value = mock_db_instance
 
                 response = app_client.get("/api/shows")
@@ -375,8 +375,8 @@ class TestShowRoutes:
         mock_db_instance.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_db_instance.session.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("api_routes.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("api_routes.DatabaseManager") as mock_db_class:
+        with patch("app.api_routes.get_current_user_from_request", return_value=mock_auth_user):
+            with patch("app.api_routes.DatabaseManager") as mock_db_class:
                 mock_db_class.get_instance.return_value = mock_db_instance
 
                 response = app_client.get("/api/shows/1")
@@ -400,8 +400,8 @@ class TestShowRoutes:
         mock_db_instance.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_db_instance.session.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("api_routes.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("api_routes.DatabaseManager") as mock_db_class:
+        with patch("app.api_routes.get_current_user_from_request", return_value=mock_auth_user):
+            with patch("app.api_routes.DatabaseManager") as mock_db_class:
                 mock_db_class.get_instance.return_value = mock_db_instance
 
                 response = app_client.get("/api/shows/1")
@@ -414,7 +414,7 @@ class TestPlaybackModule:
     """Tests for playback.py."""
 
     def test_show_playback_init(self):
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
 
         playback = ShowPlayback(
             show_id=1,
@@ -426,8 +426,8 @@ class TestPlaybackModule:
         assert playback.is_playing is False
 
     def test_show_playback_get_progress(self):
-        from playback import ShowPlayback
-        from framework_state import state
+        from app.playback import ShowPlayback
+        from app.framework.framework_state import state
 
         playback = ShowPlayback(show_id=1, audio_file_path="/fake/path.wav")
         result = playback.get_progress()
@@ -438,7 +438,7 @@ class TestPlaybackModule:
 
     def test_show_playback_start_already_playing(self):
         """Test starting playback when already playing returns early."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
 
         playback = ShowPlayback(show_id=1, audio_file_path="/fake/path.wav")
         playback.is_playing = True
@@ -450,7 +450,7 @@ class TestPlaybackModule:
 
     def test_show_playback_start_file_not_found(self):
         """Test starting playback with non-existent file returns error."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
 
         playback = ShowPlayback(show_id=1, audio_file_path="/nonexistent/path.wav")
 
@@ -461,14 +461,14 @@ class TestPlaybackModule:
 
     def test_show_playback_stop(self):
         """Test stopping playback."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
 
         playback = ShowPlayback(show_id=1, audio_file_path="/fake/path.wav")
         playback.is_playing = True
 
         # Mock the state.lock
         from unittest.mock import patch, MagicMock
-        with patch("playback.state") as mock_state:
+        with patch("app.playback.state") as mock_state:
             mock_state.lock = MagicMock()
             mock_state.lock.__enter__ = MagicMock(return_value=None)
             mock_state.lock.__exit__ = MagicMock(return_value=False)
@@ -481,14 +481,14 @@ class TestPlaybackModule:
         assert result["show_id"] == 1
 
     def test_remix_interface_init(self):
-        from playback import ReMixInterface
+        from app.playback import ReMixInterface
 
         remix = ReMixInterface(show_id=1)
 
         assert remix.show_id == 1
 
     def test_remix_interface_get_context(self):
-        from playback import ReMixInterface
+        from app.playback import ReMixInterface
 
         remix = ReMixInterface(show_id=1)
         result = remix.get_remix_context()
@@ -498,7 +498,7 @@ class TestPlaybackModule:
 
     def test_remix_interface_regenerate_stem(self):
         """Test regenerate_stem returns not_implemented."""
-        from playback import ReMixInterface
+        from app.playback import ReMixInterface
 
         remix = ReMixInterface(show_id=1)
         result = remix.regenerate_stem(loop_index=0, stem_index=1, params={})
@@ -514,7 +514,7 @@ class TestShowPlaybackWithMockedAudio:
         """Test that start() sets is_playing and state correctly."""
         import tempfile
         import os
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
 
         # Create a valid WAV file for testing
         import wave
@@ -530,7 +530,7 @@ class TestShowPlaybackWithMockedAudio:
 
             # Mock state.lock
             from unittest.mock import patch, MagicMock
-            with patch("playback.state") as mock_state:
+            with patch("app.playback.state") as mock_state:
                 mock_state.lock = MagicMock()
                 mock_state.lock.__enter__ = MagicMock(return_value=None)
                 mock_state.lock.__exit__ = MagicMock(return_value=False)
@@ -552,14 +552,14 @@ class TestShowPlaybackWithMockedAudio:
 
     def test_show_playback_stop_clears_state(self):
         """Test that stop() clears is_playing and state."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
         from unittest.mock import patch, MagicMock
 
         playback = ShowPlayback(show_id=1, audio_file_path="/fake/path.wav")
         playback.is_playing = True
         playback.playback_thread = MagicMock()
 
-        with patch("playback.state") as mock_state:
+        with patch("app.playback.state") as mock_state:
             mock_state.lock = MagicMock()
             mock_state.lock.__enter__ = MagicMock(return_value=None)
             mock_state.lock.__exit__ = MagicMock(return_value=False)
@@ -577,7 +577,7 @@ class TestShowPlaybackEdgeCases:
 
     def test_playback_init_with_db_session(self):
         """Test ShowPlayback initialization with db_session."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
         from unittest.mock import MagicMock
 
         mock_session = MagicMock()
@@ -589,13 +589,13 @@ class TestShowPlaybackEdgeCases:
 
     def test_playback_progress_while_not_started(self):
         """Test get_progress when playback hasn't started."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
         from unittest.mock import patch, MagicMock
 
         playback = ShowPlayback(show_id=1, audio_file_path="/fake.wav")
         playback.is_playing = False
 
-        with patch("playback.state") as mock_state:
+        with patch("app.playback.state") as mock_state:
             mock_state.lock = MagicMock()
             mock_state.lock.__enter__ = MagicMock(return_value=None)
             mock_state.lock.__exit__ = MagicMock(return_value=False)
@@ -611,7 +611,7 @@ class TestPlaybackStartStop:
 
     def test_playback_start_updates_state(self):
         """Test that start() properly updates playback state."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
         from unittest.mock import patch, MagicMock
         import tempfile
         import wave
@@ -627,7 +627,7 @@ class TestPlaybackStartStop:
         try:
             playback = ShowPlayback(show_id=1, audio_file_path=temp_path)
 
-            with patch("playback.state") as mock_state:
+            with patch("app.playback.state") as mock_state:
                 mock_state.lock = MagicMock()
                 mock_state.lock.__enter__ = MagicMock(return_value=None)
                 mock_state.lock.__exit__ = MagicMock(return_value=False)
@@ -648,14 +648,14 @@ class TestPlaybackStartStop:
 
     def test_playback_stop_resets_state(self):
         """Test that stop() properly resets playback state."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
         from unittest.mock import patch, MagicMock
 
         playback = ShowPlayback(show_id=1, audio_file_path="/fake.wav")
         playback.is_playing = True
         playback.playback_thread = MagicMock()
 
-        with patch("playback.state") as mock_state:
+        with patch("app.playback.state") as mock_state:
             mock_state.lock = MagicMock()
             mock_state.lock.__enter__ = MagicMock(return_value=None)
             mock_state.lock.__exit__ = MagicMock(return_value=False)
@@ -673,14 +673,14 @@ class TestPlaybackInternal:
 
     def test_playback_loop_with_missing_file(self):
         """Test playback loop handles missing file gracefully."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
         from unittest.mock import patch, MagicMock
 
         playback = ShowPlayback(show_id=1, audio_file_path="/nonexistent/file.wav")
 
         # Mock the wave.open to raise an exception
         with patch("wave.open", side_effect=Exception("File not found")):
-            with patch("playback.state"):
+            with patch("app.playback.state"):
                 # The _playback_loop should handle the exception and set is_playing to False
                 import threading
                 playback.is_playing = True
@@ -694,7 +694,7 @@ class TestPlaybackInternal:
 
     def test_playback_audio_queue_creation(self):
         """Test that audio queue is initialized correctly."""
-        from playback import ShowPlayback
+        from app.playback import ShowPlayback
         import queue
 
         playback = ShowPlayback(show_id=1, audio_file_path="/fake.wav")
@@ -708,7 +708,7 @@ class TestReMixInterfaceEdgeCases:
 
     def test_remix_interface_with_db_session(self):
         """Test ReMixInterface initialization with db_session."""
-        from playback import ReMixInterface
+        from app.playback import ReMixInterface
         from unittest.mock import MagicMock
 
         mock_session = MagicMock()
@@ -723,7 +723,7 @@ class TestShowModelEdgeCases:
 
     def test_show_to_dict_with_all_fields(self):
         from datetime import datetime
-        from models.show import Show
+        from app.models.show import Show
 
         show = Show(
             id=1,
@@ -750,7 +750,7 @@ class TestShowModelEdgeCases:
 
     def test_show_to_dict_includes_timestamps(self):
         from datetime import datetime
-        from models.show import Show
+        from app.models.show import Show
 
         show = Show(
             id=1,
@@ -772,7 +772,7 @@ class TestShowActionModelEdgeCases:
 
     def test_show_action_with_none_stem_details(self):
         from datetime import datetime
-        from models.show_action import ShowAction
+        from app.models.show_action import ShowAction
 
         action = ShowAction(
             id=1,
@@ -797,7 +797,7 @@ class TestLLMInteractionModelEdgeCases:
 
     def test_llm_interaction_with_error(self):
         from datetime import datetime
-        from models.llm_interaction import LLMInteraction
+        from app.models.llm_interaction import LLMInteraction
 
         interaction = LLMInteraction(
             id=1,
@@ -819,7 +819,7 @@ class TestLLMInteractionModelEdgeCases:
 
     def test_llm_interaction_to_llm_dump_dict_with_error(self):
         from datetime import datetime
-        from models.llm_interaction import LLMInteraction
+        from app.models.llm_interaction import LLMInteraction
 
         interaction = LLMInteraction(
             id=1,
@@ -845,14 +845,14 @@ class TestRequireShowOwner:
 
     def test_require_show_owner_unauthenticated(self):
         """Test that unauthenticated request raises 401."""
-        from api_routes import require_show_owner
+        from app.api_routes import require_show_owner
         from fastapi import HTTPException
 
         mock_request = MagicMock()
         mock_request.headers.get.return_value = None
         mock_db_session = MagicMock()
 
-        with patch("api_routes.get_current_user_from_request", return_value=None):
+        with patch("app.api_routes.get_current_user_from_request", return_value=None):
             with pytest.raises(HTTPException) as exc_info:
                 require_show_owner(show_id=1, request=mock_request, db_session=mock_db_session)
 
@@ -861,7 +861,7 @@ class TestRequireShowOwner:
 
     def test_require_show_owner_show_not_found(self):
         """Test that non-existent show raises 404."""
-        from api_routes import require_show_owner
+        from app.api_routes import require_show_owner
         from fastapi import HTTPException
 
         mock_user = MagicMock()
@@ -871,7 +871,7 @@ class TestRequireShowOwner:
         mock_db_session = MagicMock()
         mock_db_session.query.return_value.filter.return_value.first.return_value = None
 
-        with patch("api_routes.get_current_user_from_request", return_value=mock_user):
+        with patch("app.api_routes.get_current_user_from_request", return_value=mock_user):
             with pytest.raises(HTTPException) as exc_info:
                 require_show_owner(show_id=999, request=mock_request, db_session=mock_db_session)
 
@@ -880,7 +880,7 @@ class TestRequireShowOwner:
 
     def test_require_show_owner_not_owner(self):
         """Test that accessing another user's show raises 404."""
-        from api_routes import require_show_owner
+        from app.api_routes import require_show_owner
         from fastapi import HTTPException
 
         mock_user = MagicMock()
@@ -894,7 +894,7 @@ class TestRequireShowOwner:
         mock_db_session = MagicMock()
         mock_db_session.query.return_value.filter.return_value.first.return_value = mock_show
 
-        with patch("api_routes.get_current_user_from_request", return_value=mock_user):
+        with patch("app.api_routes.get_current_user_from_request", return_value=mock_user):
             with pytest.raises(HTTPException) as exc_info:
                 require_show_owner(show_id=1, request=mock_request, db_session=mock_db_session)
 
@@ -903,7 +903,7 @@ class TestRequireShowOwner:
 
     def test_require_show_owner_success(self):
         """Test that owner can access their show."""
-        from api_routes import require_show_owner
+        from app.api_routes import require_show_owner
 
         mock_user = MagicMock()
         mock_user.id = 1
@@ -916,7 +916,7 @@ class TestRequireShowOwner:
         mock_db_session = MagicMock()
         mock_db_session.query.return_value.filter.return_value.first.return_value = mock_show
 
-        with patch("api_routes.get_current_user_from_request", return_value=mock_user):
+        with patch("app.api_routes.get_current_user_from_request", return_value=mock_user):
             result = require_show_owner(show_id=1, request=mock_request, db_session=mock_db_session)
 
             assert result is mock_show

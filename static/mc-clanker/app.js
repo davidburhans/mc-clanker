@@ -57,6 +57,8 @@ class DJSlopApp {
         this.populateCustomStemInstruments();
         this.populateCustomStemModels();
         this.bindBroadcastEvents();
+        // Hide generating indicator initially
+        this.hideGeneratingIndicator();
     }
 
     bindElements() {
@@ -130,6 +132,16 @@ class DJSlopApp {
         this.cfgVal = document.getElementById('cfg-val');
         this.stepsRange = document.getElementById('steps-range');
         this.stepsVal = document.getElementById('steps-val');
+
+        // New UI Elements
+        this.toastContainer = document.getElementById('toast-container');
+        this.generatingIndicator = document.getElementById('generating-indicator');
+        this.generatingLabel = document.getElementById('generating-label');
+        this.generationProgressBar = document.getElementById('generation-progress-bar');
+        this.rotaryKeySelector = document.getElementById('rotary-key-selector');
+        this.rotaryKeyDisplay = document.getElementById('rotary-key-display');
+        this.rotaryKeyType = document.getElementById('rotary-key-type');
+        this.keyPickerFlyout = document.getElementById('key-picker-flyout');
 
 
 
@@ -315,13 +327,20 @@ class DJSlopApp {
     }
 
     bindKeyPicker() {
-        const keyWheel = document.getElementById('key-display');
-        const keyPickerGrid = document.getElementById('key-picker-grid');
         const keyPickBtns = document.querySelectorAll('.key-pick-btn');
 
-        if (keyWheel && keyPickerGrid) {
-            keyWheel.addEventListener('click', () => {
-                keyPickerGrid.classList.toggle('active');
+        if (this.rotaryKeySelector && this.keyPickerFlyout) {
+            // Toggle flyout on click
+            this.rotaryKeySelector.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.keyPickerFlyout.classList.toggle('visible');
+            });
+
+            // Close on outside click
+            document.addEventListener('click', (e) => {
+                if (!this.keyPickerFlyout.contains(e.target) && e.target !== this.rotaryKeySelector) {
+                    this.keyPickerFlyout.classList.remove('visible');
+                }
             });
 
             keyPickBtns.forEach(btn => {
@@ -333,14 +352,29 @@ class DJSlopApp {
                         btn.classList.add('selected');
                         // Set the value
                         this.keyOverride.value = key;
+                        // Update rotary display with spin animation
+                        if (this.rotaryKeySelector) {
+                            this.rotaryKeySelector.classList.add('spinning');
+                            setTimeout(() => this.rotaryKeySelector.classList.remove('spinning'), 150);
+                        }
+                        // Update rotary display
+                        this.updateKeyDisplay(key);
                         // Trigger apply
                         this.applyAll();
                         // Close picker
-                        keyPickerGrid.classList.remove('active');
+                        this.keyPickerFlyout.classList.remove('visible');
                     }
                 });
             });
         }
+    }
+
+    updateKeyDisplay(key) {
+        if (!key) return;
+        const isMinor = key.toLowerCase().includes('minor');
+        const baseKey = key.replace(' major', '').replace(' minor', '');
+        this.rotaryKeyDisplay.textContent = isMinor ? baseKey + 'm' : baseKey;
+        this.rotaryKeyType.textContent = isMinor ? 'minor' : 'major';
     }
 
     bindShowModeToggle() {
@@ -400,10 +434,21 @@ class DJSlopApp {
         if (!this.state.isPlaying) return; // Only auto-reconnect if we think we should be playing
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.showToast('Stream disconnected after multiple attempts. Use the reconnect button.', 'error');
+            // Show reconnect button in error state
+            if (this.reconnectBtn) {
+                this.reconnectBtn.classList.add('error');
+            }
             return;
         }
         this.reconnectAttempts++;
         const delay = this.reconnectDelay * this.reconnectAttempts;
+
+        // Update reconnect button to show attempt
+        if (this.reconnectBtn) {
+            this.reconnectBtn.classList.add('reconnecting');
+            this.reconnectBtn.setAttribute('data-attempt', this.reconnectAttempts);
+        }
+
         this.showToast(`Stream interrupted, reconnecting... (attempt ${this.reconnectAttempts})`);
         setTimeout(() => {
             if (this.state.isPlaying) {
@@ -614,12 +659,16 @@ class DJSlopApp {
 
         // Key - update wheel and full text
         this.state.key = data.current_key || 'C minor';
+        const shortKey = this.shortenKey(this.state.key);
         if (this.keyDisplay) {
-            const shortKey = this.shortenKey(this.state.key);
             this.keyDisplay.textContent = shortKey;
         }
         if (this.keyFull) {
             this.keyFull.textContent = this.state.key;
+        }
+        // Update rotary display if available
+        if (this.rotaryKeyDisplay) {
+            this.updateKeyDisplay(this.state.key);
         }
 
         // Reasoning
@@ -636,6 +685,14 @@ class DJSlopApp {
         // Playing state from backend
         this.state.isPlaying = data.is_generating || false;
         this.updatePlayButton();
+
+        // Generating indicator - show when is_generating is true
+        if (data.is_generating) {
+            const stemCount = this.state.nextStems.length || this.state.currentStems.length;
+            this.showGeneratingIndicator(`Generating ${stemCount} stem${stemCount !== 1 ? 's' : ''}...`);
+        } else {
+            this.hideGeneratingIndicator();
+        }
 
         // Show started state
         this.state.isShowStarted = data.is_show_started || false;
@@ -728,7 +785,17 @@ class DJSlopApp {
         });
 
         if (allStems.length === 0) {
-            this.stemDeck.innerHTML = '<p class="placeholder">No stems yet</p>';
+            this.stemDeck.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">
+                        <div class="vinyl-record"></div>
+                        <div class="vinyl-tonearm"></div>
+                    </div>
+                    <span class="empty-state-title">No Stems Yet</span>
+                    <span class="empty-state-desc">Press play to start generating stems</span>
+                    <span class="empty-state-hint">Ready to Create</span>
+                </div>
+            `;
             return;
         }
 
@@ -753,6 +820,18 @@ class DJSlopApp {
         const bars = stem.bars || '';
         const hasControls = stem.hasMixerControls && stem.index !== undefined;
         const hasDownload = stem.position === 'previous' || hasControls;
+        const age = stem._age || 0;
+
+        // Determine family class from major_family or prompt analysis
+        let familyClass = 'family-default';
+        const majorFamily = stem.major_family || '';
+        const majorFamilyLower = majorFamily.toLowerCase();
+        if (majorFamilyLower.includes('drum') || majorFamilyLower.includes('percussion')) familyClass = 'family-drums';
+        else if (majorFamilyLower.includes('bass')) familyClass = 'family-bass';
+        else if (majorFamilyLower.includes('synth') || majorFamilyLower.includes('pad')) familyClass = 'family-synth';
+        else if (majorFamilyLower.includes('keys') || majorFamilyLower.includes('piano')) familyClass = 'family-keys';
+        else if (majorFamilyLower.includes('vocal') || majorFamilyLower.includes('voice')) familyClass = 'family-vocal';
+        else if (majorFamilyLower.includes('texture') || majorFamilyLower.includes('ambient')) familyClass = 'family-texture';
 
         // Render tags
         const tags = prompt.split(',').map(tag => {
@@ -767,37 +846,55 @@ class DJSlopApp {
 
         const timeInfo = bars ? `${bars} bars` : '';
 
+        // Age indicator styling - calculate fill percentage (max at 10 loops)
+        let ageClass = 'fresh';
+        let ageFillPercent = Math.min(age * 10, 100);
+        let ageLabel = 'NEW';
+        if (age > 3) { ageClass = 'aging'; ageLabel = `${age}`; }
+        if (age > 6) { ageClass = 'old'; ageLabel = `${age}`; }
+
         return `
-            <div class="stem-row ${position}">
+            <div class="stem-row ${position} ${familyClass}">
                 <div class="stem-row-header">
-                    <span class="stem-position-label">${position.toUpperCase()}</span>
-                    ${timeInfo ? `<span class="stem-time">${timeInfo}</span>` : ''}
-                    ${position === 'next' ? `
-                    <button class="stem-remove-btn" data-action="remove-next" data-stem-index="${stem.index}" title="Remove from next loop">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="18" y1="6" x2="6" y2="18"/>
-                            <line x1="6" y1="6" x2="18" y2="18"/>
-                        </svg>
-                    </button>
-                    ` : ''}
+                    <div class="stem-label-group">
+                        <span class="stem-position-label">${position.toUpperCase()}</span>
+                        <div class="stem-age" title="${age} loops old">
+                            <div class="stem-age-bar">
+                                <div class="stem-age-fill ${ageClass}" style="width: ${ageFillPercent}%"></div>
+                            </div>
+                            <span class="stem-age-text">${ageLabel}</span>
+                        </div>
+                    </div>
+                    <div class="stem-header-right">
+                        ${timeInfo ? `<span class="stem-time">${timeInfo}</span>` : ''}
+                        ${position === 'next' ? `
+                        <button class="stem-remove-btn" data-action="remove-next" data-stem-index="${stem.index}" title="Remove from next loop" aria-label="Remove from next loop">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"/>
+                                <line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                        </button>
+                        ` : ''}
+                    </div>
                 </div>
                 <div class="stem-tags">${tags}</div>
                 ${hasControls ? `
                 <div class="stem-controls">
                     <input type="range" class="stem-vol-slider" min="0" max="2" step="0.05"
                            value="${stem.volume ?? 1.0}"
-                           data-stem-index="${stem.index}">
+                           data-stem-index="${stem.index}"
+                           aria-label="Stem volume">
                     <div class="stem-btns">
-                        <button class="stem-btn ${stem.is_muted ? 'active-mute' : ''}" data-action="mute" data-stem-index="${stem.index}">M</button>
-                        <button class="stem-btn ${stem.is_soloed ? 'active-solo' : ''}" data-action="solo" data-stem-index="${stem.index}">S</button>
-                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}" data-stem-set="${position}">↓</button>
+                        <button class="stem-btn ${stem.is_muted ? 'active-mute' : ''}" data-action="mute" data-stem-index="${stem.index}" aria-label="Mute stem" title="Mute">M</button>
+                        <button class="stem-btn ${stem.is_soloed ? 'active-solo' : ''}" data-action="solo" data-stem-index="${stem.index}" aria-label="Solo stem" title="Solo">S</button>
+                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}" data-stem-set="${position}" aria-label="Download stem" title="Download">↓</button>
                     </div>
                 </div>
                 ` : ''}
                 ${hasDownload && !hasControls ? `
                 <div class="stem-controls">
                     <div class="stem-btns">
-                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}" data-stem-set="${position}">↓</button>
+                        <button class="stem-btn stem-btn-dl" data-action="download" data-stem-index="${stem.index}" data-stem-set="${position}" aria-label="Download stem" title="Download">↓</button>
                     </div>
                 </div>
                 ` : ''}
@@ -809,66 +906,65 @@ class DJSlopApp {
         this.instrumentCategories.innerHTML = '';
         this.state.instruments = instruments;
 
+        // Category icons mapping
+        const categoryIcons = {
+            'Electronic & Dance': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+            'Bass & 808s': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+            'Synth & Pads': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10v4M10 10v4M14 10v4M18 10v4"/></svg>',
+            'Keys & Piano': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 4v16M10 4v16M14 4v16M18 4v16"/></svg>',
+            'Strings & Orchestral': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4"/></svg>',
+            'Vocals': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>',
+            'Drums': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/></svg>',
+            'Custom': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/></svg>'
+        };
+
         for (const [category, items] of Object.entries(instruments)) {
             if (category === 'Custom' && items.length === 0) continue;
 
             const categoryEl = document.createElement('div');
             categoryEl.className = 'instrument-category';
 
+            const icon = categoryIcons[category] || categoryIcons['Custom'];
+
             const header = document.createElement('div');
             header.className = 'category-header';
             header.innerHTML = `
-                <input type="checkbox" class="category-checkbox" data-category="${category}" checked>
-                <span>${category}</span>
+                <div class="category-icon">${icon}</div>
+                <span class="category-name">${category}</span>
+                <span class="category-count">${items.length}</span>
             `;
 
-            const list = document.createElement('div');
-            list.className = 'instruments-list';
+            const togglesGrid = document.createElement('div');
+            togglesGrid.className = 'instrument-toggles';
 
             items.forEach(item => {
-                const itemEl = document.createElement('label');
-                itemEl.className = 'instrument-item selected';
-                itemEl.innerHTML = `
-                    <input type="checkbox" value="${item}" checked>
-                    ${item}
+                const toggleEl = document.createElement('div');
+                toggleEl.className = 'instrument-toggle active';
+                toggleEl.innerHTML = `
+                    <div class="pad-led"></div>
+                    <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                    </svg>
+                    <span class="toggle-label">${item}</span>
                 `;
-                list.appendChild(itemEl);
+                togglesGrid.appendChild(toggleEl);
+
+                toggleEl.addEventListener('click', () => {
+                    const isActive = toggleEl.classList.toggle('active');
+                    this.showToast(`${item} ${isActive ? 'enabled' : 'disabled'}`, 'info', 2000);
+                });
             });
 
             categoryEl.appendChild(header);
-            categoryEl.appendChild(list);
+            categoryEl.appendChild(togglesGrid);
             this.instrumentCategories.appendChild(categoryEl);
 
             // Add collapse toggle to category header
             header.addEventListener('click', (e) => {
-                if (e.target.classList.contains('category-checkbox')) return;
                 const isCollapsed = categoryEl.classList.toggle('collapsed');
                 header.classList.toggle('expanded', !isCollapsed);
             });
-
-            // Category checkbox toggle
-            header.querySelector('.category-checkbox').addEventListener('change', (e) => {
-                const checked = e.target.checked;
-                list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = checked);
-                list.querySelectorAll('.instrument-item').forEach(el => {
-                    el.classList.toggle('selected', checked);
-                });
-            });
-
-            // Individual instrument checkboxes - update category checkbox
-            list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                cb.addEventListener('change', (e) => {
-                    e.target.closest('.instrument-item').classList.toggle('selected', e.target.checked);
-                    this.updateCategoryCheckbox(header.querySelector('.category-checkbox'), list);
-                });
-            });
         }
-    }
-
-    updateCategoryCheckbox(categoryCheckbox, listEl) {
-        const allItems = listEl.querySelectorAll('input');
-        const checkedItems = listEl.querySelectorAll('input:checked');
-        categoryCheckbox.checked = allItems.length > 0 && allItems.length === checkedItems.length;
     }
 
     // Transport Controls
@@ -1114,21 +1210,46 @@ class DJSlopApp {
     }
 
     updatePlayButton() {
-        this.playBtn.classList.toggle('playing', this.state.isPlaying);
-        this.playBtn.classList.toggle('play', !this.state.isPlaying);
-        this.playBtn.setAttribute('aria-pressed', this.state.isPlaying.toString());
+        const isPlaying = this.state.isPlaying;
+        this.playBtn.classList.toggle('playing', isPlaying);
+        this.playBtn.classList.toggle('play', !isPlaying);
+        this.playBtn.setAttribute('aria-pressed', isPlaying.toString());
+
+        // Update screen reader label
+        const label = document.getElementById('play-btn-label');
+        if (label) {
+            label.textContent = isPlaying ? 'Pause' : 'Play';
+        }
+
+        // Update aria-label for better accessibility
+        this.playBtn.setAttribute('aria-label', isPlaying ? 'Pause playback' : 'Start playback');
     }
 
     reconnectStream() {
         this.showToast('Reconnecting stream...');
         this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
         this.audioPlayer.load();
+
+        // Add reconnecting visual state
+        if (this.reconnectBtn) {
+            this.reconnectBtn.classList.remove('error');
+            this.reconnectBtn.classList.add('reconnecting');
+        }
+
         if (this.state.isPlaying) {
             this.audioPlayer.play().then(() => {
                 this.reconnectAttempts = 0; // Reset on successful reconnect
+                // Reset button state
+                if (this.reconnectBtn) {
+                    this.reconnectBtn.classList.remove('reconnecting', 'error');
+                }
             }).catch(e => {
                 console.error('Reconnect play error:', e);
                 this.showToast('Reconnect failed', 'error');
+                if (this.reconnectBtn) {
+                    this.reconnectBtn.classList.remove('reconnecting');
+                    this.reconnectBtn.classList.add('error');
+                }
             });
         }
     }
@@ -1178,7 +1299,8 @@ class DJSlopApp {
                 }
                 if (keyVal) {
                     this.state.key = keyVal;
-                    this.keyDisplay.textContent = keyVal;
+                    if (this.keyDisplay) this.keyDisplay.textContent = keyVal;
+                    if (this.rotaryKeyDisplay) this.updateKeyDisplay(keyVal);
                     this.keyOverride.classList.add('override-active');
                     this.keyOverride.value = '';
                 }
@@ -1197,18 +1319,27 @@ class DJSlopApp {
                 if (keyVal) msg += ` (Key: ${keyVal})`;
                 if (vibeVal) msg += ` - "${vibeVal}"`;
                 this.showToast(msg);
+
+                // Show success state on button
+                this.applyAllBtn.classList.remove('loading');
+                this.applyAllBtn.classList.add('success');
+                setTimeout(() => {
+                    this.applyAllBtn.classList.remove('success');
+                }, 1500);
             })
             .catch((e) => {
                 console.error('Apply failed:', e);
                 this.showToast('Failed to apply settings', 'error');
             })
             .finally(() => {
-                this.applyAllBtn.disabled = false;
-                this.applyAllBtn.classList.remove('loading');
-                const btnText = this.applyAllBtn.querySelector('.btn-text');
-                const btnIcon = this.applyAllBtn.querySelector('.btn-icon');
-                if (btnText) btnText.textContent = 'Apply Settings';
-                if (btnIcon) btnIcon.style.display = '';
+                if (!this.applyAllBtn.classList.contains('success')) {
+                    this.applyAllBtn.disabled = false;
+                    this.applyAllBtn.classList.remove('loading');
+                    const btnText = this.applyAllBtn.querySelector('.btn-text');
+                    const btnIcon = this.applyAllBtn.querySelector('.btn-icon');
+                    if (btnText) btnText.textContent = 'Apply Settings';
+                    if (btnIcon) btnIcon.style.display = '';
+                }
             });
     }
 
@@ -1289,27 +1420,104 @@ class DJSlopApp {
         }
     }
 
-    showToast(message, type = 'success') {
-        const existing = document.querySelector('.toast-notification');
-        if (existing) existing.remove();
+    showToast(message, type = 'success', duration = 4000) {
+        if (!this.toastContainer) return;
 
         const toast = document.createElement('div');
-        toast.className = 'toast-notification';
-        toast.textContent = message;
-        if (type === 'error') {
-            toast.style.borderColor = 'var(--danger)';
-            toast.style.boxShadow = '0 4px 20px rgba(255, 68, 68, 0.2)';
-        }
-        document.body.appendChild(toast);
+        toast.className = `toast ${type}`;
 
+        const iconSvg = this.getToastIcon(type);
+
+        toast.innerHTML = `
+            <div class="toast-icon">${iconSvg}</div>
+            <div class="toast-content">
+                <div class="toast-title">${this.getToastTitle(type)}</div>
+                <div class="toast-message">${message}</div>
+            </div>
+            <button class="toast-close">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        `;
+
+        // Close button handler
+        toast.querySelector('.toast-close').addEventListener('click', () => {
+            this.dismissToast(toast);
+        });
+
+        this.toastContainer.appendChild(toast);
+
+        // Trigger animation
         requestAnimationFrame(() => {
             toast.classList.add('visible');
         });
 
+        // Auto-remove after duration
+        if (duration > 0) {
+            setTimeout(() => {
+                this.dismissToast(toast);
+            }, duration);
+        }
+    }
+
+    getToastIcon(type) {
+        const icons = {
+            success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
+            error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+            warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+            info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>'
+        };
+        return icons[type] || icons.success;
+    }
+
+    getToastTitle(type) {
+        const titles = {
+            success: 'Success',
+            error: 'Error',
+            warning: 'Warning',
+            info: 'Info'
+        };
+        return titles[type] || 'Notice';
+    }
+
+    dismissToast(toast) {
+        if (!toast || toast.classList.contains('toast-exit')) return;
+        toast.classList.add('toast-exit');
         setTimeout(() => {
-            toast.classList.remove('visible');
-            setTimeout(() => toast.remove(), 300);
-        }, 2500);
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 300);
+    }
+
+    // Show/hide generating indicator
+    showGeneratingIndicator(label = 'Creating stems...', progress = null) {
+        if (!this.generatingIndicator) return;
+        this.generatingLabel.textContent = label;
+        if (progress !== null && this.generationProgressBar) {
+            this.generationProgressBar.style.width = `${progress}%`;
+        }
+        this.generatingIndicator.classList.add('visible');
+    }
+
+    updateGeneratingProgress(progress, label = null) {
+        if (!this.generatingIndicator) return;
+        if (progress !== null && this.generationProgressBar) {
+            this.generationProgressBar.style.width = `${progress}%`;
+        }
+        if (label && this.generatingLabel) {
+            this.generatingLabel.textContent = label;
+        }
+    }
+
+    hideGeneratingIndicator() {
+        if (!this.generatingIndicator) return;
+        this.generatingIndicator.classList.remove('visible');
+        if (this.generationProgressBar) {
+            this.generationProgressBar.style.width = '0%';
+        }
     }
 
     async applyState(updates) {
@@ -1683,6 +1891,73 @@ class DJSlopApp {
         this.visualizer.height = container.clientHeight;
     }
 
+    // Initialize segmented VU meter with LED segments
+    initVUSegments(vuBar) {
+        if (vuBar.dataset.initialized) return;
+        vuBar.dataset.initialized = 'true';
+
+        // Clear existing content
+        vuBar.innerHTML = '';
+
+        // Create 12 segments (bottom to top: 5 green, 3 amber, 4 red)
+        const segmentCounts = { green: 5, amber: 3, red: 4 };
+        const colors = ['seg-green', 'seg-amber', 'seg-red'];
+        let colorIndex = 0;
+        let count = 0;
+
+        for (let i = 0; i < 12; i++) {
+            const segment = document.createElement('div');
+            segment.className = `vu-segment ${colors[colorIndex]}`;
+            vuBar.appendChild(segment);
+            count++;
+            if (count >= segmentCounts[colors[colorIndex]]) {
+                count = 0;
+                colorIndex++;
+            }
+        }
+
+        // Add peak hold indicator
+        const peak = document.createElement('div');
+        peak.className = 'vu-peak';
+        vuBar.appendChild(peak);
+    }
+
+    // Update VU meter with segmented LED display
+    updateVUMeter(vuBarEl, level) {
+        if (!vuBarEl) return;
+
+        // Initialize segments if needed
+        this.initVUSegments(vuBarEl);
+
+        const segments = vuBarEl.querySelectorAll('.vu-segment');
+        const peak = vuBarEl.querySelector('.vu-peak');
+        const activeCount = Math.round((level / 100) * segments.length);
+
+        // Update segments
+        segments.forEach((seg, i) => {
+            // Segments are added bottom to top, so index 0 is at bottom
+            const isActive = i < activeCount;
+            seg.classList.toggle('active', isActive);
+        });
+
+        // Update peak hold
+        if (peak) {
+            const peakLevel = vuBarEl.dataset.peakLevel || 0;
+            if (level > peakLevel) {
+                vuBarEl.dataset.peakLevel = level;
+                peak.classList.add('held');
+                peak.style.bottom = (3 + (level / 100) * (vuBarEl.clientHeight - 9)) + 'px';
+
+                // Clear peak after delay
+                clearTimeout(vuBarEl.dataset.peakTimeout);
+                vuBarEl.dataset.peakTimeout = setTimeout(() => {
+                    vuBarEl.dataset.peakLevel = 0;
+                    peak.classList.remove('held');
+                }, 1500);
+            }
+        }
+    }
+
     drawVisualizer() {
         const ctx = this.visualizerCtx;
         const width = this.visualizer.width;
@@ -1719,8 +1994,8 @@ class DJSlopApp {
             // Update VU meters with placeholder animation
             if (this.vuLeftEl && this.vuRightEl) {
                 const vuLevel = 20 + Math.sin(time * 2) * 15 + Math.random() * 5;
-                this.vuLeftEl.style.height = vuLevel + '%';
-                this.vuRightEl.style.height = (vuLevel + Math.sin(time * 1.5) * 8) + '%';
+                this.updateVUMeter(this.vuLeftEl, vuLevel);
+                this.updateVUMeter(this.vuRightEl, vuLevel + Math.sin(time * 1.5) * 8);
             }
             return;
         }
@@ -1741,9 +2016,9 @@ class DJSlopApp {
         const leftAvg = (leftSum / half / 255) * 100;
         const rightAvg = (rightSum / half / 255) * 100;
 
-        // Update VU meters
-        if (this.vuLeftEl) this.vuLeftEl.style.height = leftAvg + '%';
-        if (this.vuRightEl) this.vuRightEl.style.height = rightAvg + '%';
+        // Update VU meters with segmented display
+        if (this.vuLeftEl) this.updateVUMeter(this.vuLeftEl, leftAvg);
+        if (this.vuRightEl) this.updateVUMeter(this.vuRightEl, rightAvg);
 
         // Draw center beam effect
         let avgValue = 0;

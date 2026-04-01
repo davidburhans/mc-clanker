@@ -7,7 +7,7 @@ class TestCalcDuration:
 
     def test_calc_duration_standard(self):
         """Test duration calculation for standard BPM/bar combinations."""
-        from framework_main import calc_duration
+        from app.framework.framework_main import calc_duration
 
         # 120 BPM, 4 bars, 4/4 time
         # 4 bars * 4 beats/bar = 16 beats
@@ -17,7 +17,7 @@ class TestCalcDuration:
 
     def test_calc_duration_different_bpm(self):
         """Test with different BPM values."""
-        from framework_main import calc_duration
+        from app.framework.framework_main import calc_duration
 
         # 140 BPM, 4 bars
         # 4 * 4 = 16 beats
@@ -27,7 +27,7 @@ class TestCalcDuration:
 
     def test_calc_duration_different_bars(self):
         """Test with different bar counts."""
-        from framework_main import calc_duration
+        from app.framework.framework_main import calc_duration
 
         # 120 BPM, 8 bars
         # 8 * 4 = 32 beats
@@ -37,7 +37,7 @@ class TestCalcDuration:
 
     def test_calc_duration_different_time_signature(self):
         """Test with time signature != 4."""
-        from framework_main import calc_duration
+        from app.framework.framework_main import calc_duration
 
         # 120 BPM, 4 bars, 3/4 time (waltz)
         # 4 bars * 3 beats/bar = 12 beats
@@ -47,7 +47,7 @@ class TestCalcDuration:
 
     def test_calc_duration_waltz_time(self):
         """Test with 3/4 time signature."""
-        from framework_main import calc_duration
+        from app.framework.framework_main import calc_duration
 
         # 120 BPM, 8 bars, 3/4 time
         # 8 * 3 = 24 beats
@@ -283,8 +283,8 @@ class TestFlushRecordingBuffers:
 
     def test_flush_does_nothing_when_buffers_empty(self):
         """Test that flush does nothing when both buffers are empty."""
-        from framework_main import flush_recording_buffers
-        from framework_state import state
+        from app.framework.framework_main import flush_recording_buffers
+        from app.framework.framework_state import state
 
         state.llm_interaction_buffer = []
         state.action_buffer = []
@@ -295,8 +295,8 @@ class TestFlushRecordingBuffers:
 
     def test_flush_clears_buffers_when_no_show_id(self):
         """Test buffers are cleared when show_id is None."""
-        from framework_main import flush_recording_buffers
-        from framework_state import state
+        from app.framework.framework_main import flush_recording_buffers
+        from app.framework.framework_state import state
 
         state.llm_interaction_buffer = [{"test": "interaction"}]
         state.action_buffer = [{"test": "action"}]
@@ -310,8 +310,8 @@ class TestFlushRecordingBuffers:
 
     def test_flush_writes_to_db_when_show_recording(self):
         """Test that flush writes buffers to DB when show is recording."""
-        from framework_main import flush_recording_buffers
-        from framework_state import state
+        from app.framework.framework_main import flush_recording_buffers
+        from app.framework.framework_state import state
 
         # Set up state for recording
         state.llm_interaction_buffer = [
@@ -328,7 +328,7 @@ class TestFlushRecordingBuffers:
         mock_db_instance.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_db_instance.session.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("db.DatabaseManager") as mock_db_class:
+        with patch("app.db.DatabaseManager") as mock_db_class:
             mock_db_class.return_value = mock_db_instance
             # The function uses get_instance() as a static method
             with patch.object(mock_db_class, 'get_instance', return_value=mock_db_instance):

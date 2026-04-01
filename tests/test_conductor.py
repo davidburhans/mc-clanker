@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from framework_conductor import Conductor
+from app.framework.framework_conductor import Conductor
 
 
 @pytest.fixture
@@ -11,7 +11,7 @@ def conductor():
 class TestConductorGetNextState:
     """Test Conductor.get_next_state method."""
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_returns_parsed_json(self, mock_openai, conductor):
         """Test successful LLM response parsing."""
         mock_client = MagicMock()
@@ -46,7 +46,7 @@ class TestConductorGetNextState:
         assert result["reasoning"] == "Test reasoning"
         assert result["name"] == "Test Set"
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_fallback_on_llm_error(self, mock_openai, conductor):
         """Test fallback response when LLM throws exception."""
         mock_client = MagicMock()
@@ -76,7 +76,7 @@ class TestConductorGetNextState:
         assert result["actions"][1]["stem_index"] == 1
         assert "LLM FAILED" in result["reasoning"]
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_fallback_on_invalid_json(self, mock_openai, conductor):
         """Test fallback when LLM returns invalid JSON."""
         mock_client = MagicMock()
@@ -98,7 +98,7 @@ class TestConductorGetNextState:
         assert result["name"] == "Fallback Recovery State"
         assert "LLM FAILED" in result["reasoning"]
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_user_override_appended_to_prompt(self, mock_openai, conductor):
         """Test user override is appended to prompt."""
         mock_client = MagicMock()
@@ -123,7 +123,7 @@ class TestConductorGetNextState:
 
         assert "OVERRIDE: Make it more upbeat" in user_message
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_client_caching_on_config_change(self, mock_openai, conductor):
         """Test OpenAI client is recreated when config changes."""
         mock_client1 = MagicMock()
@@ -155,7 +155,7 @@ class TestConductorGetNextState:
         # Should have created 2 different clients
         assert mock_openai.call_count == 2
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_client_reuse_on_same_config(self, mock_openai, conductor):
         """Test OpenAI client is reused when config unchanged."""
         mock_client = MagicMock()
@@ -179,7 +179,7 @@ class TestConductorGetNextState:
         # Should only create one client
         assert mock_openai.call_count == 1
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_deduplication_of_retain_actions(self, mock_openai, conductor):
         """Test that duplicate retain indices are handled."""
         mock_client = MagicMock()
@@ -219,7 +219,7 @@ class TestConductorGetNextState:
         assert result["master_bpm"] == 120
         assert len(result["actions"]) == 3
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_available_models_formatting(self, mock_openai, conductor):
         """Test models string formatting with supported_families."""
         mock_client = MagicMock()
@@ -255,7 +255,7 @@ class TestConductorGetNextState:
 class TestConductorDensityRule:
     """Test density rule injection."""
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_sparse_mix_gets_add_directive(self, mock_openai, conductor):
         """Test that sparse mix (1-3 stems) gets 'add more' directive."""
         mock_client = MagicMock()
@@ -286,7 +286,7 @@ class TestConductorDensityRule:
         assert "DENSITY RULE: There are currently 2 active stems." in user_message
         assert "This mix is too sparse for a professional sound. Aim for 4-6 stems." in user_message
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_good_density_gets_maintain_directive(self, mock_openai, conductor):
         """Test that good density (4-6 stems) gets 'maintain' directive."""
         mock_client = MagicMock()
@@ -324,7 +324,7 @@ class TestConductorDensityRule:
 class TestConductorEdgeCases:
     """Test edge cases in Conductor."""
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_empty_active_stems_with_history(self, mock_openai, conductor):
         """Test conductor with no active stems but has history."""
         mock_client = MagicMock()
@@ -357,7 +357,7 @@ class TestConductorEdgeCases:
         # History should appear in the prompt
         assert "Recent Track History:" in user_message
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_max_density_directive(self, mock_openai, conductor):
         """Test that 6 stems gets 'maintain' directive (edge of good density)."""
         mock_client = MagicMock()
@@ -392,7 +392,7 @@ class TestConductorEdgeCases:
         assert "DENSITY RULE: There are currently 6 active stems." in user_message
         assert "The mix density is good" in user_message
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_llm_returns_empty_actions_array(self, mock_openai, conductor):
         """Test when LLM returns empty actions array."""
         mock_client = MagicMock()
@@ -413,7 +413,7 @@ class TestConductorEdgeCases:
         assert result["master_bpm"] == 120
         assert len(result["actions"]) == 0
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_stem_age_included_in_prompt(self, mock_openai, conductor):
         """Test that stem age is included in the prompt."""
         mock_client = MagicMock()
@@ -482,7 +482,7 @@ class TestConductorSystemInstruction:
 class TestConductorModelInfo:
     """Test model info formatting in conductor."""
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_model_without_supported_families(self, mock_openai, conductor):
         """Test model info formatting when supported_families is missing."""
         mock_client = MagicMock()
@@ -512,7 +512,7 @@ class TestConductorModelInfo:
         # Should default to ['Any']
         assert "['Any']" in user_message or "Supported Families" in user_message
 
-    @patch('framework_conductor.OpenAI')
+    @patch('app.framework.framework_conductor.OpenAI')
     def test_multiple_models_listed(self, mock_openai, conductor):
         """Test that multiple models are all listed in prompt."""
         mock_client = MagicMock()

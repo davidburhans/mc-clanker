@@ -1,8 +1,8 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from api_routes import router
-from framework_state import state
+from app.api_routes import router
+from app.framework.framework_state import state
 import numpy as np
 import json
 import time
@@ -588,7 +588,7 @@ class TestGenerateAudiencePassword:
 
     def test_generate_password_length(self):
         """Test that generated password has sufficient length."""
-        from api_routes import generate_audience_password
+        from app.api_routes import generate_audience_password
 
         password = generate_audience_password()
 
@@ -597,7 +597,7 @@ class TestGenerateAudiencePassword:
 
     def test_generate_password_uniqueness(self):
         """Test that generated passwords are unique."""
-        from api_routes import generate_audience_password
+        from app.api_routes import generate_audience_password
 
         passwords = [generate_audience_password() for _ in range(10)]
 

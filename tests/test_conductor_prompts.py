@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from framework_conductor import Conductor
+from app.framework.framework_conductor import Conductor
 
 @pytest.fixture
 def conductor():
@@ -10,7 +10,7 @@ def test_system_instruction_contains_density_rule(conductor):
     assert "DENSITY & LAYERING" in conductor.system_instruction
     assert "4 to 6 active stems" in conductor.system_instruction
 
-@patch('framework_conductor.OpenAI')
+@patch('app.framework.framework_conductor.OpenAI')
 def test_user_prompt_injection_low_density(mock_openai, conductor):
     mock_client = MagicMock()
     mock_openai.return_value = mock_client
@@ -35,7 +35,7 @@ def test_user_prompt_injection_low_density(mock_openai, conductor):
     assert "DENSITY RULE: There are currently 1 active stems." in user_message
     assert "This mix is too sparse for a professional sound. Aim for 4-6 stems." in user_message
 
-@patch('framework_conductor.OpenAI')
+@patch('app.framework.framework_conductor.OpenAI')
 def test_user_prompt_injection_good_density(mock_openai, conductor):
     mock_client = MagicMock()
     mock_openai.return_value = mock_client
@@ -65,7 +65,7 @@ def test_user_prompt_injection_good_density(mock_openai, conductor):
     assert "DENSITY RULE: There are currently 4 active stems." in user_message
     assert "The mix density is good. Maintain 4-6 stems for a full sound." in user_message
 
-@patch('framework_conductor.OpenAI')
+@patch('app.framework.framework_conductor.OpenAI')
 def test_user_prompt_injection_available_models(mock_openai, conductor):
     mock_client = MagicMock()
     mock_openai.return_value = mock_client

@@ -14,6 +14,12 @@
 </head>
 <body>
     <div class="floating-particles"></div>
+    <div class="scanlines"></div>
+    <div class="grain"></div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
     <div class="dj-container">
         <!-- Header -->
         <header class="dj-header">
@@ -45,6 +51,25 @@
             <div class="panel visualizer-panel">
                 <div class="visualizer-container">
                     <canvas id="visualizer"></canvas>
+
+                    <!-- Generating Indicator -->
+                    <div class="generating-indicator" id="generating-indicator">
+                        <div class="generating-rings">
+                            <div class="generating-ring"></div>
+                            <div class="generating-ring"></div>
+                            <div class="generating-ring"></div>
+                            <div class="generating-core"></div>
+                            <div class="generating-particle"></div>
+                            <div class="generating-particle"></div>
+                            <div class="generating-particle"></div>
+                        </div>
+                        <span class="generating-text">GENERATING</span>
+                        <span class="generating-label" id="generating-label">Creating stems...</span>
+                        <div class="generation-progress">
+                            <div class="generation-progress-bar" id="generation-progress-bar" style="width: 0%"></div>
+                        </div>
+                    </div>
+
                     <div class="now-playing-overlay">
                         <div class="track-info">
                             <span class="label">NOW PLAYING</span>
@@ -67,18 +92,19 @@
                             </svg>
                         </button>
                     </div>
-                    <button id="play-btn" class="transport-btn play" title="Play/Pause" aria-label="Play or Pause" aria-pressed="false">
-                        <span class="play-icon">
+                    <button id="play-btn" class="transport-btn play" aria-label="Play or Pause" aria-pressed="false">
+                        <span class="play-icon" aria-hidden="true">
                             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                                 <polygon points="8,5 20,12 8,19"/>
                             </svg>
                         </span>
-                        <span class="pause-icon">
+                        <span class="pause-icon" aria-hidden="true">
                             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                                 <rect x="6" y="5" width="4" height="14" rx="1"/>
                                 <rect x="14" y="5" width="4" height="14" rx="1"/>
                             </svg>
                         </span>
+                        <span class="sr-only" id="play-btn-label">Play</span>
                     </button>
                     <div class="transport-right">
                         <button id="reconnect-btn" class="icon-btn reconnect-btn" title="Reconnect Stream" aria-label="Reconnect Stream">
@@ -173,34 +199,47 @@
                         </select>
                     </div>
                     <div class="key-display-container">
-                        <div class="key-wheel" id="key-display" title="Click to change key">Cm</div>
-                        <div class="key-picker-grid" id="key-picker-grid">
-                            <!-- Major keys -->
-                            <button class="key-pick-btn major" data-key="C major">C</button>
-                            <button class="key-pick-btn major" data-key="C# major">C#</button>
-                            <button class="key-pick-btn major" data-key="D major">D</button>
-                            <button class="key-pick-btn major" data-key="D# major">D#</button>
-                            <button class="key-pick-btn major" data-key="E major">E</button>
-                            <button class="key-pick-btn major" data-key="F major">F</button>
-                            <button class="key-pick-btn major" data-key="F# major">F#</button>
-                            <button class="key-pick-btn major" data-key="G major">G</button>
-                            <button class="key-pick-btn major" data-key="G# major">G#</button>
-                            <button class="key-pick-btn major" data-key="A major">A</button>
-                            <button class="key-pick-btn major" data-key="A# major">A#</button>
-                            <button class="key-pick-btn major" data-key="B major">B</button>
-                            <!-- Minor keys -->
-                            <button class="key-pick-btn minor" data-key="C minor">Cm</button>
-                            <button class="key-pick-btn minor" data-key="C# minor">C#m</button>
-                            <button class="key-pick-btn minor" data-key="D minor">Dm</button>
-                            <button class="key-pick-btn minor" data-key="D# minor">D#m</button>
-                            <button class="key-pick-btn minor" data-key="E minor">Em</button>
-                            <button class="key-pick-btn minor" data-key="F minor">Fm</button>
-                            <button class="key-pick-btn minor" data-key="F# minor">F#m</button>
-                            <button class="key-pick-btn minor" data-key="G minor">Gm</button>
-                            <button class="key-pick-btn minor" data-key="G# minor">G#m</button>
-                            <button class="key-pick-btn minor" data-key="A minor">Am</button>
-                            <button class="key-pick-btn minor" data-key="A# minor">A#m</button>
-                            <button class="key-pick-btn minor" data-key="B minor">Bm</button>
+                        <div class="key-wheel-container">
+                            <div class="rotary-key-selector" id="rotary-key-selector" title="Click to change key">
+                                <div class="rotary-indicator"></div>
+                                <div class="rotary-center">
+                                    <span class="rotary-key-display" id="rotary-key-display">Cm</span>
+                                    <span class="rotary-key-type" id="rotary-key-type">minor</span>
+                                </div>
+                            </div>
+                            <!-- Key picker flyout -->
+                            <div class="key-picker-flyout" id="key-picker-flyout">
+                                <div class="key-grid-major">
+                                    <span class="key-grid-label">Major</span>
+                                    <button class="key-pick-btn major" data-key="C major">C</button>
+                                    <button class="key-pick-btn major" data-key="C# major">C#</button>
+                                    <button class="key-pick-btn major" data-key="D major">D</button>
+                                    <button class="key-pick-btn major" data-key="D# major">D#</button>
+                                    <button class="key-pick-btn major" data-key="E major">E</button>
+                                    <button class="key-pick-btn major" data-key="F major">F</button>
+                                    <button class="key-pick-btn major" data-key="F# major">F#</button>
+                                    <button class="key-pick-btn major" data-key="G major">G</button>
+                                    <button class="key-pick-btn major" data-key="G# major">G#</button>
+                                    <button class="key-pick-btn major" data-key="A major">A</button>
+                                    <button class="key-pick-btn major" data-key="A# major">A#</button>
+                                    <button class="key-pick-btn major" data-key="B major">B</button>
+                                </div>
+                                <div class="key-grid-minor">
+                                    <span class="key-grid-label">Minor</span>
+                                    <button class="key-pick-btn minor" data-key="C minor">Cm</button>
+                                    <button class="key-pick-btn minor" data-key="C# minor">C#m</button>
+                                    <button class="key-pick-btn minor" data-key="D minor">Dm</button>
+                                    <button class="key-pick-btn minor" data-key="D# minor">D#m</button>
+                                    <button class="key-pick-btn minor" data-key="E minor">Em</button>
+                                    <button class="key-pick-btn minor" data-key="F minor">Fm</button>
+                                    <button class="key-pick-btn minor" data-key="F# minor">F#m</button>
+                                    <button class="key-pick-btn minor" data-key="G minor">Gm</button>
+                                    <button class="key-pick-btn minor" data-key="G# minor">G#m</button>
+                                    <button class="key-pick-btn minor" data-key="A minor">Am</button>
+                                    <button class="key-pick-btn minor" data-key="A# minor">A#m</button>
+                                    <button class="key-pick-btn minor" data-key="B minor">Bm</button>
+                                </div>
+                            </div>
                         </div>
                         <span class="key-full" id="key-full">C minor</span>
                         <select id="key-override" class="key-select hidden">
@@ -235,10 +274,10 @@
 
                 <!-- Vibe Section -->
                 <div class="vibe-section">
-                    <label class="section-label">VIBE</label>
+                    <label class="section-label" for="vibe-input">VIBE</label>
                     <div class="vibe-input-wrapper">
-                        <input type="text" id="vibe-input" placeholder="Describe the mood..." maxlength="200">
-                        <span class="vibe-active-indicator" id="vibe-active-indicator">
+                        <input type="text" id="vibe-input" placeholder="Describe the mood..." maxlength="200" aria-describedby="vibe-char-count">
+                        <span class="vibe-active-indicator" id="vibe-active-indicator" aria-hidden="true">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                                 <polygon points="12,2 15,9 22,9 17,14 19,22 12,17 5,22 7,14 2,9 9,9"/>
                             </svg>
@@ -248,35 +287,35 @@
                     <div class="vibe-presets">
                         <button class="vibe-chip" data-vibe="aggressive">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                            Aggressive
+                            <span class="vibe-label">Aggressive</span>
                         </button>
                         <button class="vibe-chip" data-vibe="chill">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
-                            Chill
+                            <span class="vibe-label">Chill</span>
                         </button>
                         <button class="vibe-chip" data-vibe="dark">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-                            Dark
+                            <span class="vibe-label">Dark</span>
                         </button>
                         <button class="vibe-chip" data-vibe="uplifting">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                            Uplifting
+                            <span class="vibe-label">Uplifting</span>
                         </button>
                         <button class="vibe-chip" data-vibe="hypnotic">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-                            Hypnotic
+                            <span class="vibe-label">Hypnotic</span>
                         </button>
                         <button class="vibe-chip" data-vibe="mysterious">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.4 8 12 8 12s8-6.6 8-12a8 8 0 0 0-8-8z"/><circle cx="12" cy="10" r="3"/></svg>
-                            Mysterious
+                            <span class="vibe-label">Mysterious</span>
                         </button>
                         <button class="vibe-chip" data-vibe="energetic">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                            Energetic
+                            <span class="vibe-label">Energetic</span>
                         </button>
                         <button class="vibe-chip" data-vibe="melancholic">
                             <svg class="vibe-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 18a5 5 0 0 0-10 0"/><line x1="12" y1="2" x2="12" y2="9"/><line x1="4.22" y1="10.22" x2="5.64" y2="11.64"/><line x1="1" y1="18" x2="3" y2="18"/><line x1="21" y1="18" x2="23" y2="18"/><line x1="18.36" y1="11.64" x2="19.78" y2="10.22"/><line x1="23" y1="22" x2="1" y2="22"/></svg>
-                            Melancholic
+                            <span class="vibe-label">Melancholic</span>
                         </button>
                     </div>
                     <div class="active-vibe-display" id="active-vibe-display">
@@ -295,7 +334,7 @@
                 </div>
 
                 <!-- Instrument Rack -->
-                <div class="instrument-rack collapsed" id="instrument-rack">
+                <div class="instrument-rack" id="instrument-rack">
                     <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="instrument-categories">
                         <h3>INSTRUMENT RACK</h3>
                         <span class="collapse-icon">

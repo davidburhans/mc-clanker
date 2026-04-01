@@ -2,7 +2,7 @@ import json
 import pytest
 import unittest
 from unittest.mock import patch, MagicMock, PropertyMock
-from framework_generator import GeneratorRegistry, StableAudioEngine, AceStepEngine, ModelState
+from app.framework.framework_generator import GeneratorRegistry, StableAudioEngine, AceStepEngine, ModelState
 
 def test_plugin_registry_loads_multiple_engines():
     mock_config = {

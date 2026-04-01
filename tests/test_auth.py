@@ -10,7 +10,7 @@ class TestAuthModule:
     """Tests for auth.py functions."""
 
     def test_hash_password(self):
-        from auth import hash_password, verify_password
+        from app.auth import hash_password, verify_password
 
         password = "test_password_123"
         hashed = hash_password(password)
@@ -21,7 +21,7 @@ class TestAuthModule:
         assert hashed.startswith("$2")
 
     def test_verify_password_correct(self):
-        from auth import hash_password, verify_password
+        from app.auth import hash_password, verify_password
 
         password = "test_password_123"
         hashed = hash_password(password)
@@ -29,7 +29,7 @@ class TestAuthModule:
         assert verify_password(password, hashed) is True
 
     def test_verify_password_incorrect(self):
-        from auth import hash_password, verify_password
+        from app.auth import hash_password, verify_password
 
         password = "test_password_123"
         hashed = hash_password(password)
@@ -37,7 +37,7 @@ class TestAuthModule:
         assert verify_password("wrong_password", hashed) is False
 
     def test_create_access_token(self):
-        from auth import create_access_token, decode_token
+        from app.auth import create_access_token, decode_token
 
         user_id = 42
         token = create_access_token(user_id)
@@ -50,7 +50,7 @@ class TestAuthModule:
         assert payload["sub"] == str(user_id)
 
     def test_decode_invalid_token(self):
-        from auth import decode_token
+        from app.auth import decode_token
 
         result = decode_token("invalid.token.here")
         assert result is None
@@ -58,14 +58,14 @@ class TestAuthModule:
     def test_decode_expired_token(self):
         import jwt
         from datetime import datetime, timedelta, timezone
-        from auth import JWT_SECRET, JWT_ALGORITHM
+        from app.auth import JWT_SECRET, JWT_ALGORITHM
 
         # Create an expired token
         expire = datetime.now(timezone.utc) - timedelta(hours=1)
         payload = {"sub": "1", "exp": expire}
         expired_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-        from auth import decode_token
+        from app.auth import decode_token
         result = decode_token(expired_token)
         assert result is None
 
@@ -76,7 +76,7 @@ class TestAuthRoutes:
     @pytest.fixture
     def mock_db(self):
         """Mock database for testing."""
-        with patch("auth.DatabaseManager") as mock:
+        with patch("app.auth.DatabaseManager") as mock:
             mock_instance = MagicMock()
             mock_instance.session.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_instance.session.return_value.__exit__ = MagicMock(return_value=False)
@@ -101,21 +101,21 @@ class TestGetCurrentUserFromRequest:
         """Test that decode_token returns None for expired tokens."""
         import jwt
         from datetime import datetime, timedelta, timezone
-        from auth import JWT_SECRET, JWT_ALGORITHM
+        from app.auth import JWT_SECRET, JWT_ALGORITHM
 
         # Create an expired token
         expire = datetime.now(timezone.utc) - timedelta(hours=1)
         payload = {"sub": "1", "exp": expire}
         expired_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-        from auth import decode_token
+        from app.auth import decode_token
         result = decode_token(expired_token)
 
         assert result is None
 
     def test_decode_token_returns_none_for_invalid(self):
         """Test that decode_token returns None for invalid tokens."""
-        from auth import decode_token
+        from app.auth import decode_token
 
         result = decode_token("not.a.valid.token")
 
@@ -127,7 +127,7 @@ class TestRequireAuth:
 
     def test_require_auth_with_user(self):
         """Test require_auth allows valid user."""
-        from auth import require_auth
+        from app.auth import require_auth
 
         mock_user = MagicMock()
         mock_user.id = 1
@@ -138,7 +138,7 @@ class TestRequireAuth:
 
     def test_require_auth_without_user(self):
         """Test require_auth raises 401 without user."""
-        from auth import require_auth
+        from app.auth import require_auth
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
@@ -153,7 +153,7 @@ class TestUserModel:
 
     def test_user_to_dict(self):
         from datetime import datetime
-        from models.user import User
+        from app.models.user import User
 
         user = User(
             id=1,
@@ -178,13 +178,13 @@ class TestGetCurrentUserFromRequest:
 
     def test_no_auth_header_returns_none(self):
         """Test that missing auth header returns None when no passwords configured."""
-        from auth import get_current_user_from_request
+        from app.auth import get_current_user_from_request
 
         mock_request = MagicMock()
         mock_request.headers.get.return_value = None
 
         # Patch where state is used (inside the function's import)
-        with patch("framework_state.state") as mock_state:
+        with patch("app.framework.framework_state.state") as mock_state:
             mock_state.dj_password = ""
             mock_state.audience_password = ""
 
@@ -194,7 +194,7 @@ class TestGetCurrentUserFromRequest:
 
     def test_bearer_token_invalid(self):
         """Test that invalid bearer token raises 401."""
-        from auth import get_current_user_from_request
+        from app.auth import get_current_user_from_request
         from fastapi import HTTPException
 
         mock_request = MagicMock()
@@ -207,7 +207,7 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_valid_dj_password(self):
         """Test that valid DJ Basic auth returns CompatUser."""
-        from auth import get_current_user_from_request
+        from app.auth import get_current_user_from_request
         import base64
 
         mock_request = MagicMock()
@@ -215,7 +215,7 @@ class TestGetCurrentUserFromRequest:
         creds = base64.b64encode(b"user:secret").decode("utf-8")
         mock_request.headers.get.return_value = f"Basic {creds}"
 
-        with patch("framework_state.state") as mock_state:
+        with patch("app.framework.framework_state.state") as mock_state:
             mock_state.dj_password = "secret"
             mock_state.audience_password = ""
 
@@ -226,7 +226,7 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_valid_audience_password(self):
         """Test that valid audience Basic auth returns CompatAudUser."""
-        from auth import get_current_user_from_request
+        from app.auth import get_current_user_from_request
         import base64
 
         mock_request = MagicMock()
@@ -234,7 +234,7 @@ class TestGetCurrentUserFromRequest:
         creds = base64.b64encode(b"user:audience_secret").decode("utf-8")
         mock_request.headers.get.return_value = f"Basic {creds}"
 
-        with patch("framework_state.state") as mock_state:
+        with patch("app.framework.framework_state.state") as mock_state:
             mock_state.dj_password = ""
             mock_state.audience_password = "audience_secret"
 
@@ -245,14 +245,14 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_wrong_password_returns_none(self):
         """Test that wrong password returns None (allows anonymous)."""
-        from auth import get_current_user_from_request
+        from app.auth import get_current_user_from_request
         import base64
 
         mock_request = MagicMock()
         creds = base64.b64encode(b"user:wrong_password").decode("utf-8")
         mock_request.headers.get.return_value = f"Basic {creds}"
 
-        with patch("framework_state.state") as mock_state:
+        with patch("app.framework.framework_state.state") as mock_state:
             mock_state.dj_password = "secret"
             mock_state.audience_password = ""
 
@@ -262,12 +262,12 @@ class TestGetCurrentUserFromRequest:
 
     def test_malformed_basic_auth_returns_none(self):
         """Test that malformed Basic auth returns None."""
-        from auth import get_current_user_from_request
+        from app.auth import get_current_user_from_request
 
         mock_request = MagicMock()
         mock_request.headers.get.return_value = "Basic invalid_base64!"
 
-        with patch("framework_state.state") as mock_state:
+        with patch("app.framework.framework_state.state") as mock_state:
             mock_state.dj_password = "secret"
             mock_state.audience_password = ""
 
@@ -278,7 +278,7 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_without_colon_returns_none(self):
         """Test that Basic auth without colon returns None."""
-        from auth import get_current_user_from_request
+        from app.auth import get_current_user_from_request
         import base64
 
         mock_request = MagicMock()
@@ -286,7 +286,7 @@ class TestGetCurrentUserFromRequest:
         creds = base64.b64encode(b"justpassword").decode("utf-8")
         mock_request.headers.get.return_value = f"Basic {creds}"
 
-        with patch("framework_state.state") as mock_state:
+        with patch("app.framework.framework_state.state") as mock_state:
             mock_state.dj_password = "secret"
             mock_state.audience_password = ""
 
@@ -300,7 +300,7 @@ class TestHashPasswordEdgeCases:
 
     def test_hash_password_different_each_time(self):
         """Test that hash_password generates different hashes (due to salt)."""
-        from auth import hash_password
+        from app.auth import hash_password
 
         password = "test_password"
         hash1 = hash_password(password)
@@ -309,13 +309,13 @@ class TestHashPasswordEdgeCases:
         # Hashes should be different due to random salt
         assert hash1 != hash2
         # But both should verify correctly
-        from auth import verify_password
+        from app.auth import verify_password
         assert verify_password(password, hash1) is True
         assert verify_password(password, hash2) is True
 
     def test_verify_password_with_invalid_hash(self):
         """Test verify_password with invalid hash format."""
-        from auth import verify_password
+        from app.auth import verify_password
 
         # bcrypt raises ValueError for invalid hash format, verify_password catches it
         # and returns False for invalid passwords
@@ -333,7 +333,7 @@ class TestCreateAccessToken:
 
     def test_token_contains_user_id(self):
         """Test that token contains correct user ID."""
-        from auth import create_access_token, decode_token
+        from app.auth import create_access_token, decode_token
 
         user_id = 12345
         token = create_access_token(user_id)
@@ -345,7 +345,7 @@ class TestCreateAccessToken:
     def test_token_has_expiration(self):
         """Test that token has expiration claim."""
         import jwt
-        from auth import create_access_token, JWT_SECRET, JWT_ALGORITHM
+        from app.auth import create_access_token, JWT_SECRET, JWT_ALGORITHM
 
         token = create_access_token(1)
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -359,7 +359,7 @@ class TestJWTSecret:
     def test_jwt_secret_from_environment(self):
         """Test that JWT_SECRET can be set from environment."""
         import os
-        from auth import JWT_SECRET
+        from app.auth import JWT_SECRET
 
         # Should have a default value
         assert JWT_SECRET is not None
