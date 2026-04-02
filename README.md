@@ -19,8 +19,20 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 │         │                 │                  │             │
 │         ▼                 ▼                  ▼             │
 │  ┌─────────────────────────────────────────────────────┐  │
-│  │              Foundation-1 Generator                  │  │
-│  │         (Local LLM + Audio Model)                   │  │
+│  │              Async Framework Loop                    │  │
+│  │         (Job Queue + Audio Mixer)                   │  │
+│  └─────────────────────────────────────────────────────┘  │
+│         │                                    │             │
+│         ▼                                    ▼             │
+│  ┌──────────────┐              ┌─────────────────────┐   │
+│  │  Job Queue   │              │   Garage S3 Store   │   │
+│  │  (PostgreSQL)│              │   (Audio Storage)  │   │
+│  └──────────────┘              └─────────────────────┘   │
+│         │                                                      │
+│         ▼                                                      │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │              GPU Worker (Separate Container)          │  │
+│  │         Foundation-1 Generator                       │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                          │                                 │
 │                          ▼                                 │
@@ -51,11 +63,15 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 |-----------|-------------|
 | `app/app_ui.py` | FastAPI server with Gradio UI and DJ interface |
 | `app/api_routes.py` | REST API endpoints for DJ UI and Stem Mixer |
-| `app/framework/framework_main.py` | Core generation loop and audio mixing |
-| `app/framework/framework_conductor.py` | LLM-powered track arrangement logic |
+| `app/framework/framework_main_async.py` | Async generation loop and audio mixing |
+| `app/framework/framework_conductor_async.py` | LLM-powered track arrangement logic |
 | `app/framework/framework_generator.py` | Foundation-1 audio generation |
 | `app/framework/framework_mixer.py` | Multi-track audio mixing engine with Stem support |
 | `app/framework/framework_state.py` | Shared global state and process management |
+| `app/worker.py` | Async job worker for distributed GPU generation |
+| `app/job_waiter.py` | LISTEN/NOTIFY job completion waiter |
+| `app/garage_client.py` | Garage S3-compatible object storage |
+| `app/cleanup.py` | Expired job cleanup service |
 
 ## Requirements
 
@@ -237,9 +253,9 @@ mc-clanker/
 │   ├── api_routes.py       # REST API endpoints
 │   ├── auth.py             # JWT authentication
 │   ├── db.py               # Database singleton
-│   ├── framework/          # Audio generation pipeline
-│   │   ├── framework_main.py
-│   │   ├── framework_conductor.py
+│   ├── framework/          # Audio generation pipeline (async)
+│   │   ├── framework_main_async.py
+│   │   ├── framework_conductor_async.py
 │   │   ├── framework_generator.py
 │   │   ├── framework_mixer.py
 │   │   └── framework_state.py
@@ -249,11 +265,15 @@ mc-clanker/
 │   │   ├── show_action.py
 │   │   ├── llm_interaction.py
 │   │   └── generator_job.py
-│   └── worker.py           # Async job worker for distributed generation
+│   ├── worker.py           # Async job worker for distributed generation
+│   ├── job_waiter.py       # LISTEN/NOTIFY job completion waiter
+│   ├── garage_client.py    # Garage S3-compatible object storage
+│   ├── cleanup.py          # Expired job cleanup service
+│   └── aac_encoder.py      # AAC audio encoding/decoding
 ├── config/
 │   └── models_config.json   # Audio model registry
 ├── docker/
-│   ├── compose.yaml         # Container orchestration
+│   ├── compose.yaml         # Container orchestration (podman)
 │   ├── Dockerfile.web       # Web server container
 │   └── Dockerfile.worker   # GPU worker container
 ├── slop_harness/            # Dataset generation for training
@@ -262,6 +282,7 @@ mc-clanker/
 │   ├── index.html
 │   ├── styles.css
 │   └── app.js
+├── tests/                   # Test suite
 ├── requirements.txt         # Python dependencies
 ├── requirements-worker.txt  # Worker dependencies
 └── README.md

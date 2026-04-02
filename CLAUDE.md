@@ -6,7 +6,7 @@ This file provides guidance to [Claude Code](https://claude.com/code) when worki
 
 **mc-clanker** is an AI-powered continuous music generator that transforms Foundation-1 text-to-sample models into a DJ-style experience. It generates seamless, infinitely-running music controlled by an LLM "Conductor" that makes DJ-style arrangement decisions.
 
-**Core pipeline:** `Conductor (LLM)` → `Generator (Foundation-1)` → `Mixer (sounddevice)`
+**Core pipeline:** `Conductor (LLM)` → `Job Queue (PostgreSQL)` → `Generator (GPU worker)` → `Garage S3` → `Mixer (FFmpeg MP3 stream)`
 
 ---
 
@@ -14,24 +14,38 @@ This file provides guidance to [Claude Code](https://claude.com/code) when worki
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           MAIN THREAD (FastAPI)                        │
+│                           MAIN THREAD (FastAPI)                         │
 │                                                                          │
-│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐               │
-│   │   HTTP &   │     │   FFmpeg    │     │    Auth     │               │
-│   │   WebSocket│     │   Streaming │     │  Middleware │               │
-│   └─────────────┘     └─────────────┘     └─────────────┘               │
-│          ▲                                                                │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐              │
+│   │   HTTP &    │     │   FFmpeg    │     │    Auth     │              │
+│   │   WebSocket │     │   Streaming │     │  Middleware │              │
+│   └─────────────┘     └─────────────┘     └─────────────┘              │
+│          ▲                                                            │
 │          │                    GlobalState.state                          │
-└──────────┼──────────────────────────────────────────────────────────────┘
+└──────────┼─────────────────────────────────────────────────────────────┘
            │ with state.lock:
-┌──────────┼──────────────────────────────────────────────────────────────┐
-│          ▼            DAEMON THREAD (framework_main.py)                  │
+┌──────────┼─────────────────────────────────────────────────────────────┐
+│          ▼            ASYNC TASK (framework_main_async.py)              │
 │                                                                          │
-│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐               │
-│   │  CONDUCTOR  │────▶│  GENERATOR  │────▶│   MIXER     │               │
-│   │  LLM Call   │     │  (blocking)│     │  (playback) │               │
-│   └─────────────┘     └─────────────┘     └─────────────┘               │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐             │
+│   │  CONDUCTOR  │────▶│  JOB QUEUE  │────▶│   MIXER     │             │
+│   │  LLM Call   │     │  (worker)   │     │  (playback) │             │
+│   └─────────────┘     └─────────────┘     └─────────────┘             │
+│                                │                                          │
+│                                ▼                                          │
+│                    ┌─────────────────────┐                               │
+│                    │   Garage S3 Store  │                               │
+│                    │   (audio storage)   │                               │
+│                    └─────────────────────┘                               │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         WORKER PROCESS (separate)                        │
 │                                                                          │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐             │
+│   │   Job       │────▶│  GENERATOR  │────▶│   Garage    │             │
+│   │   Fetcher   │     │  (GPU)      │     │   Upload    │             │
+│   └─────────────┘     └─────────────┘     └─────────────┘             │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,27 +136,33 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 
 | File | Purpose | How It Runs |
 |------|---------|-------------|
-| `app_ui.py` | FastAPI app startup, lifespan, routes, auth | `python app_ui.py` |
-| `framework_main.py` | `run_framework_loop()` daemon thread | Started in app lifespan |
+| `app/app_ui.py` | FastAPI app startup, lifespan, routes, auth | `python -m app.app_ui` |
+| `app/framework/framework_main_async.py` | `run_framework_loop_async()` async task | Started in FastAPI lifespan |
+| `app/worker.py` | GPU job processor | `python -m app.worker` (separate container) |
 
 ### Framework Components
 
 | File | Class/Functions | Responsibility |
 |------|-----------------|----------------|
 | `framework_state.py` | `GlobalState`, `state` | Thread-safe shared state |
-| `framework_conductor.py` | `ConductorLLM`, `ConductorPromptBuilder` | LLM client, prompt construction, JSON parsing |
-| `framework_generator.py` | `GeneratorRegistry`, `load_model()`, `generate_stem()` | Audio model management |
-| `framework_mixer.py` | `Mixer`, `create_mixer()` | sounddevice playback |
+| `framework_conductor_async.py` | `ConductorLLMAsync`, `ConductorPromptBuilder` | Async LLM client, prompt construction, JSON parsing |
+| `framework_generator.py` | `GeneratorRegistry`, `generate_stem()` | Audio model management (Foundation-1, ACE-Step) |
+| `framework_mixer.py` | `Mixer` | Real-time mixing thread, MP3 broadcasting via FFmpeg |
 
 ### API Layer
 
 | File | Responsibility |
 |------|----------------|
-| `api_routes.py` | REST endpoints |
-| `auth.py` | JWT tokens, password hashing |
-| `db.py` | PostgreSQL singleton |
-| `models.py` | SQLAlchemy models |
+| `api_routes.py` | REST endpoints (~1500 lines, all in one router) |
+| `auth.py` | JWT tokens, bcrypt password hashing |
+| `db.py` | SQLAlchemy DatabaseManager singleton (thread-safe) |
+| `models/` | SQLAlchemy ORM models (User, Show, GeneratorJob, etc.) |
 | `playback.py` | Pre-recorded show playback |
+| `worker.py` | Async job processor (separate container) |
+| `garage_client.py` | Async boto3 wrapper for Garage S3 |
+| `job_waiter.py` | Async LISTEN/NOTIFY waiter for job completion |
+| `cleanup.py` | Periodic expired job/audio cleanup |
+| `onboarding.py` | Pre-flight configuration health checks |
 
 ---
 
@@ -246,14 +266,14 @@ state.is_playback_active     # bool
 
 ## Framework Loop
 
-### Loop Cycle (`framework_main.py:run_framework_loop()`)
+### Loop Cycle (`framework_main_async.py:run_framework_loop_async()`)
 
 ```
 1. with state.lock: read is_generating, user_override, bpm, key, stems
 2. Build Conductor prompt from state
 3. Release lock
 
-4. Call LLM Conductor (blocking, 100ms-10s)
+4. Call LLM Conductor (async, 100ms-10s)
 
 5. with state.lock: parse JSON actions
    - retain: keep stem in next_stems
@@ -262,24 +282,36 @@ state.is_playback_active     # bool
 6. Release lock
 
 7. For each stem in next_stems:
-   - Call generator.generate_stem() (blocking, 5-30s per stem)
-   - Audio returned as numpy array
+   - Submit job to PostgreSQL queue
+   - Wait for job completion via LISTEN/NOTIFY
 
-8. with state.lock:
+8. Fetch generated audio from Garage S3
+
+9. with state.lock:
    - previous_stems = active_stems
    - active_stems = next_stems
    - next_stems = []
    - Update stem_ages, loop_count
    - Signal next_loop_ready Event
-9. Release lock
+10. Release lock
 
-10. Mixer crossfades to new active_stems
-11. GOTO 1
+11. Mixer crossfades to new active_stems
+12. GOTO 1
 ```
+
+### Async Job Queue Architecture
+
+The async framework uses PostgreSQL as a job queue:
+
+1. **Job Submission**: When the conductor requests a new stem, a job record is inserted into `generator_jobs` table
+2. **Job Processing**: The worker process (separate container) claims jobs via `FOR UPDATE SKIP LOCKED`
+3. **Audio Generation**: Worker generates audio using GPU, uploads to Garage S3
+4. **Completion**: Worker marks job complete and sends PostgreSQL NOTIFY
+5. **Collection**: Async framework waits for NOTIFY and fetches audio from Garage
 
 ### Crossfade Timing
 
-The `next_loop_ready` Event coordinates framework thread with mixer thread. Mixer waits for this signal before transitioning to new stems.
+The `next_loop_ready` Event coordinates framework task with mixer thread. Mixer waits for this signal before transitioning to new stems.
 
 ---
 
@@ -392,7 +424,7 @@ python -m pytest tests/test_api.py -v
 python -m pytest tests/test_api.py::test_get_state -v
 
 # With coverage
-python -m pytest tests/ --cov=. --cov-report=term-missing
+python -m pytest tests/ --cov=app --cov-report=term-missing
 ```
 
 ### Test Structure
@@ -401,11 +433,13 @@ python -m pytest tests/ --cov=. --cov-report=term-missing
 |------|-------------|
 | `test_api.py` | REST endpoints |
 | `test_state.py` | GlobalState lock behavior |
-| `test_conductor_prompts.py` | Prompt building, JSON parsing |
 | `test_mixer.py` | Audio mixing |
 | `test_generator.py` | Model loading |
 | `test_auth.py` | JWT tokens |
 | `test_db.py` | Database operations |
+| `test_worker.py` | Job queue worker |
+| `test_async_framework.py` | Async framework loop |
+| `test_job_waiter.py` | Job waiting/LISTEN-NOTIFY |
 
 ### Mocking Patterns
 
@@ -501,26 +535,32 @@ Auto-created from defaults if missing.
 ### Core
 ```toml
 stable-audio-tools==0.0.19  # Foundation-1 model interface
-scipy                      # Audio processing
-sounddevice                # Real-time playback
-fastapi                    # Web framework
-uvicorn[standard]          # ASGI server
-pydantic                   # Data validation
-huggingface_hub            # Model downloads
-openai                     # LLM API client
-numpy                      # Array operations
+scipy                       # Audio processing
+fastapi                     # Web framework
+uvicorn[standard]           # ASGI server
+pydantic>=2.0.0             # Data validation
+huggingface_hub             # Model downloads
+openai                      # LLM API client
+numpy                       # Array operations
+bcrypt>=4.0.0               # Password hashing
+PyJWT>=2.8.0                # JWT tokens
+sqlalchemy>=2.0.0           # ORM
+psycopg2-binary>=2.9.0      # PostgreSQL adapter
+asyncpg>=0.28.0             # Async PostgreSQL (worker)
+boto3>=1.34.0               # Garage S3 client
 ```
 
-### Optional
-```toml
-# Show recording
-psycopg2-binary            # PostgreSQL adapter
-sqlalchemy                 # ORM
-python-jose[cryptography]   # JWT
-passlib[bcrypt]            # Password hashing
+### Local Dev
+```bash
+# Fast setup with uv
+uv venv
+uv pip install -r requirements.txt
+python -m app.app_ui
+```
 
-# Audio export
-ffmpeg                      # System binary
+### Runtime
+```
+ffmpeg  # System binary (must be in PATH)
 ```
 
 ---
