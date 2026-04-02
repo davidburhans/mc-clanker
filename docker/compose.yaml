@@ -26,7 +26,7 @@ services:
     restart: unless-stopped
 
   garage:
-    image: debian-slim/garage:latest
+    image: dxflrs/garage:latest
     ports:
       - "3900:3900"
     volumes:
@@ -92,6 +92,8 @@ services:
       - CUDA_VISIBLE_DEVICES=0
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface:rw
+    ports:
+      - "8081:8081"  # Worker health check / stats endpoint
     devices:
       - nvidia.com/gpu=all
     depends_on:
@@ -99,8 +101,6 @@ services:
         condition: service_healthy
       garage:
         condition: service_healthy
-    deploy:
-      replicas: 3
     restart: unless-stopped
 
   # Optional Icecast server for streaming output

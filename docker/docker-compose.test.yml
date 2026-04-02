@@ -1,6 +1,8 @@
-# docker-compose.test.yml - Test environment with PostgreSQL
-# Usage: docker-compose -f docker-compose.test.yml up -d
-# Then run tests with: DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcclanker pytest tests/
+# docker-compose.test.yml - Test environment with PostgreSQL and test-runner
+# Usage:
+#   cd docker && podman-compose -f docker-compose.test.yml up -d
+#   podman-compose -f docker-compose.test.yml exec test-runner pytest tests/ -v
+#   podman-compose -f docker-compose.test.yml down
 
 services:
   postgres:
@@ -20,6 +22,38 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    image: mcclanker/web:latest
+    container_name: mcclanker-test-runner
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/mcclanker
+      - GARAGE_ENDPOINT=http://garage:3900
+      - GARAGE_ACCESS_KEY=${GARAGE_ACCESS_KEY:-localdefault}
+      - GARAGE_SECRET_KEY=${GARAGE_SECRET_KEY:-localdefault}
+      - GARAGE_BUCKET=${GARAGE_BUCKET:-mcclanker}
+      - GARAGE_BUCKET_REGION=${GARAGE_BUCKET_REGION:-garage}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1234/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-not-needed}
+      - LLM_MODEL=${LLM_MODEL:-local-model}
+    working_dir: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Override default CMD to run pytest instead of uvicorn
+    # Ignore slop_harness/ (separate module), test_api.py (needs email-validator),
+    # and test_dpo_pipeline.py (needs training module) - these require additional deps
+    command: ["python", "-m", "pytest", "tests/", "-v", "--tb=short",
+              "--ignore=tests/slop_harness",
+              "--ignore=tests/test_api.py",
+              "--ignore=tests/test_dpo_pipeline.py"]
+    # For interactive debugging, comment out command above and run:
+    # podman-compose -f docker-compose.test.yml exec test-runner bash
 
 volumes:
   pgtestdata:

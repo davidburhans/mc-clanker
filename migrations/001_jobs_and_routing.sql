@@ -104,22 +104,25 @@ $$ LANGUAGE plpgsql;
 
 -- ============================================================================
 -- Shows table modifications (Phase 1 scope additions)
+-- Only apply if the shows table already exists (created by SQLAlchemy)
 -- ============================================================================
--- Add server_id column if it doesn't exist (for session affinity)
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'shows' AND column_name = 'server_id'
-    ) THEN
-        ALTER TABLE shows ADD COLUMN server_id VARCHAR(255);
-    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'shows') THEN
+        -- Add server_id column if it doesn't exist (for session affinity)
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'shows' AND column_name = 'server_id'
+        ) THEN
+            ALTER TABLE shows ADD COLUMN server_id VARCHAR(255);
+        END IF;
 
-    -- Add status column for session state tracking
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'shows' AND column_name = 'status'
-    ) THEN
-        ALTER TABLE shows ADD COLUMN status VARCHAR(20) DEFAULT 'idle';
+        -- Add status column for session state tracking
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'shows' AND column_name = 'status'
+        ) THEN
+            ALTER TABLE shows ADD COLUMN status VARCHAR(20) DEFAULT 'idle';
+        END IF;
     END IF;
 END $$;

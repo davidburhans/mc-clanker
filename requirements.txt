@@ -6,8 +6,10 @@ numpy
 openai
 fastapi
 uvicorn
-pydantic
+pydantic[email]>=2.0.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
 bcrypt>=4.0.0
 PyJWT>=2.8.0
+pytest>=7.0.0
+pytest-asyncio>=0.21.0

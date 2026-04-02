@@ -8,12 +8,15 @@ FROM python:3.11-slim
 
 WORKDIR /harness
 
+# Install uv for fast dependency resolution
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Copy slop_harness source (context is repo root, so paths are relative to repo root)
 COPY slop_harness/pyproject.toml ./slop_harness/
 COPY slop_harness/*.py ./slop_harness/
 
-# Install dependencies
-RUN pip install --no-cache-dir -e ./slop_harness
+# Install dependencies using uv
+RUN uv pip install --system -e ./slop_harness
 
 # Default env — override with --env or -e at runtime
 ENV LLM_BASE_URL=http://localhost:1234/v1

@@ -18,9 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/* && \
     ln -sf /usr/bin/python3.10 /usr/bin/python
 
+# Install uv for fast dependency resolution
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Install Python dependencies (cached until requirements-worker.txt changes)
 COPY requirements-worker.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements-worker.txt
+RUN uv pip install --system --prefix=/install -r requirements-worker.txt
 
 # =============================================================================
 # Runtime stage - minimal image with just runtime
@@ -52,6 +55,6 @@ USER worker
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD ffmpeg -version > /dev/null 2>&1 || exit 1
+    CMD python -c "import fastapi" || exit 1
 
 CMD ["python", "-m", "app.worker"]

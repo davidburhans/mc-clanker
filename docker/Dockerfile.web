@@ -8,7 +8,6 @@
 FROM python:3.10-slim AS builder
 
 ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /build
 
@@ -17,9 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies (cached until requirements.txt changes)
+# Install uv for fast dependency resolution
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install Python dependencies into /install (cached until requirements.txt changes)
 COPY requirements.txt .
-RUN pip install --prefix=/install -r requirements.txt
+RUN uv pip install --system --prefix=/install -r requirements.txt
 
 # =============================================================================
 # Runtime stage - minimal image
@@ -44,6 +46,7 @@ COPY app/ ./app/
 COPY config/ ./config/
 COPY static/ ./static/
 COPY migrations/ ./migrations/
+COPY tests/ ./tests/
 
 # Create exports directory
 RUN mkdir -p /exports/shows
