@@ -135,12 +135,12 @@ async def wait_for_job_completion_poll(
         audio_path string if job completed
         None if timeout or error
     """
-    from models.generator_job import GeneratorJob
+    from app.models.generator_job import GeneratorJob
 
-    start_time = asyncio.get_event_loop().time()
+    start_time = asyncio.get_running_loop().time()
 
     while True:
-        elapsed = asyncio.get_event_loop().time() - start_time
+        elapsed = asyncio.get_running_loop().time() - start_time
         if elapsed >= timeout:
             return None
 
@@ -195,7 +195,7 @@ async def wait_for_job_completion(
         # Use asyncpg pool for LISTEN/NOTIFY
         try:
             pool = await asyncpg.create_pool(
-                db_manager.engine.url,
+                db_manager.engine.url.render_as_string(hide_password=False),
                 min_size=1,
                 max_size=5
             )
@@ -209,14 +209,14 @@ async def wait_for_job_completion(
 
     # Fall back to polling with SQLAlchemy
     if db_manager is None:
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         db_manager = DatabaseManager.get_instance()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _poll_job():
         with db_manager.session() as session:
-            from models.generator_job import GeneratorJob
+            from app.models.generator_job import GeneratorJob
             job = session.query(GeneratorJob).filter(
                 GeneratorJob.id == job_id
             ).first()
