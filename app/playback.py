@@ -69,7 +69,8 @@ class ShowPlayback:
         import numpy as np
 
         try:
-            with wave.open(self.audio_file_path, "rb") as wav_file:
+            wav_file = wave.open(self.audio_file_path, "rb")
+            try:
                 sample_rate = wav_file.getframerate()
                 channels = wav_file.getnchannels()
                 sampwidth = wav_file.getsampwidth()
@@ -81,9 +82,8 @@ class ShowPlayback:
                         # Read audio data
                         data = wav_file.readframes(chunk_size // (sampwidth * channels))
                         if not data:
-                            # End of file - loop or stop
+                            # End of file — restart from beginning
                             if self.is_playing:
-                                # Re-open and loop
                                 wav_file.close()
                                 wav_file = wave.open(self.audio_file_path, "rb")
                                 data = wav_file.readframes(chunk_size // (sampwidth * channels))
@@ -107,6 +107,8 @@ class ShowPlayback:
                     except Exception as e:
                         print(f"Playback error: {e}")
                         break
+            finally:
+                wav_file.close()
 
         except Exception as e:
             print(f"Failed to open audio file for playback: {e}")
@@ -138,5 +140,5 @@ class ReMixInterface:
         """Regenerate a specific stem from a specific loop."""
         return {
             "status": "not_implemented",
-            "message": "Regermix interface - full implementation in future phase",
+            "message": "Remix interface - full implementation in future phase",
         }

@@ -90,9 +90,12 @@ async def check_llm_server() -> CheckResult:
     import httpx
 
     base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
+    # Normalize: strip trailing slash, then try /models endpoint relative to the base
+    # (The base URL already includes /v1, so we just append /models - not /v1/models)
+    models_url = base_url.rstrip('/') + "/models"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{base_url.rstrip('/')}/v1/models")
+            response = await client.get(models_url)
             if response.status_code == 200:
                 return CheckResult(
                     passed=True,

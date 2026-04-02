@@ -453,9 +453,10 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         if generator and hasattr(generator, 'models'):
             import json as json_module
             import os
+            _config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
             desc = "No description"
-            if os.path.exists("models_config.json"):
-                with open("models_config.json") as f:
+            if os.path.exists(_config_path):
+                with open(_config_path) as f:
                     cfg = json_module.load(f)
                     for model_id in generator.models:
                         m_info = cfg.get("models", {}).get(model_id, {})

@@ -172,7 +172,7 @@ class GlobalState:
             try:
                 with open(self.instruments_file, "r") as f:
                     return json.load(f)
-            except:
+            except Exception:
                 pass
         return DEFAULT_INSTRUMENTS.copy()
 
@@ -250,7 +250,7 @@ class GlobalState:
             for q in self.audio_clients:
                 try:
                     q.put_nowait(None)
-                except:
+                except Exception:
                     pass
 
         # Immediate termination of all tracked subprocesses
@@ -260,7 +260,7 @@ class GlobalState:
                     print(f"Killing tracked process {p.pid}...")
                     p.kill()
                     p.wait(timeout=1)
-                except:
+                except Exception:
                     pass
             self.active_subprocesses.clear()
 

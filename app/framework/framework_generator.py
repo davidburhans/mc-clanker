@@ -168,7 +168,9 @@ class AceStepEngine:
 
 
 class GeneratorRegistry:
-    def __init__(self, config_path="models_config.json"):
+    def __init__(self, config_path=None):
+        if config_path is None:
+            config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
         self.config_path = config_path
         self.models = {}
         self.default_model_id = None

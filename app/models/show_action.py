@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Index
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from ..db import Base
 
 
@@ -10,7 +10,7 @@ class ShowAction(Base):
     id = Column(Integer, primary_key=True, index=True)
     show_id = Column(Integer, ForeignKey("shows.id"), nullable=False, index=True)
     loop_index = Column(Integer, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     relative_time_ms = Column(Integer, nullable=False)
     action_type = Column(String(20), nullable=False)  # retain, add, remove
     stem_index = Column(Integer, nullable=True)

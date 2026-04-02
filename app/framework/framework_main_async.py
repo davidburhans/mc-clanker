@@ -21,15 +21,19 @@ Usage:
 """
 
 import asyncio
+import os
 import time
 import uuid
 import numpy as np
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
 from app.framework.framework_state import state
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_conductor_async import ConductorLLMAsync
 from app.job_waiter import wait_for_multiple_jobs
+from app.garage_client import create_garage_client_from_env
+from app.aac_encoder import decode_aac
 
 
 def calc_duration(bpm: int, bars: int, time_signature: int = 4) -> float:
@@ -37,6 +41,41 @@ def calc_duration(bpm: int, bars: int, time_signature: int = 4) -> float:
     beats = bars * time_signature
     seconds = beats / (bpm / 60.0)
     return seconds
+
+
+def flush_recording_buffers():
+    """Batch write buffered interactions/actions to DB.
+
+    Called from api_routes.py when a show is stopped to persist
+    buffered LLM interactions and actions to the database.
+    """
+    with state.lock:
+        if not state.llm_interaction_buffer and not state.action_buffer:
+            return
+        if state.current_show_id is None:
+            state.llm_interaction_buffer.clear()
+            state.action_buffer.clear()
+            return
+
+    # Import here to avoid circular imports
+    from app.db import DatabaseManager
+    from app.models import LLMInteraction, ShowAction
+
+    db_manager = DatabaseManager.get_instance()
+    try:
+        with db_manager.session() as session:
+            # Bulk insert LLM interactions
+            if state.llm_interaction_buffer:
+                session.bulk_insert_mappings(LLMInteraction, state.llm_interaction_buffer)
+                state.llm_interaction_buffer.clear()
+
+            # Bulk insert actions
+            if state.action_buffer:
+                session.bulk_insert_mappings(ShowAction, state.action_buffer)
+                state.action_buffer.clear()
+        print("Flushed recording buffers to DB")
+    except Exception as e:
+        print(f"Error flushing recording buffers: {e}")
 
 
 def process_actions(actions: List[Dict[str, Any]], active_stems: List[Dict]) -> List[Dict]:
@@ -131,7 +170,7 @@ class AsyncFrameworkLoop:
         self.running = True
 
         # Initialize mixer in async context
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self.mixer = await loop.run_in_executor(None, lambda: Mixer(sample_rate=44100, channels=2))
         self.mixer.start()
 
@@ -154,7 +193,7 @@ class AsyncFrameworkLoop:
                 pass
 
         if self.mixer:
-            await asyncio.get_event_loop().run_in_executor(None, self.mixer.stop)
+            await asyncio.get_running_loop().run_in_executor(None, self.mixer.stop)
 
         print(f"[AsyncFrameworkLoop-{self.session_id}] Stopped")
 
@@ -213,9 +252,9 @@ class AsyncFrameworkLoop:
                 generator = getattr(state, 'generator', None)
                 if generator and hasattr(generator, 'models'):
                     import json as json_module
-                    import os
-                    if os.path.exists("models_config.json"):
-                        with open("models_config.json") as f:
+                    _config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
+                    if os.path.exists(_config_path):
+                        with open(_config_path) as f:
                             cfg = json_module.load(f)
                             for model_id in generator.models:
                                 m_info = cfg.get("models", {}).get(model_id, {})
@@ -486,12 +525,11 @@ class AsyncFrameworkLoop:
 
         Returns the job UUID.
         """
-        from datetime import datetime, timedelta
-        from models.generator_job import GeneratorJob
+        from app.models.generator_job import GeneratorJob
         from app.db import DatabaseManager
 
         db_manager = DatabaseManager.get_instance()
-        expires_at = datetime.utcnow() + timedelta(hours=24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
         with db_manager.session() as session:
             job = GeneratorJob(
@@ -517,15 +555,39 @@ class AsyncFrameworkLoop:
 
     async def _fetch_audio(self, audio_path: str) -> Optional[np.ndarray]:
         """
-        Fetch audio from Garage.
+        Fetch audio from Garage and decode to numpy array.
 
-        In production, this would download from S3/Garage and return numpy array.
-        For now, returns None as Garage integration is not implemented.
+        Args:
+            audio_path: Garage S3 path (e.g., "audio/{job_id}.aac")
+
+        Returns:
+            numpy array of audio samples (float32, shape [samples, channels])
+            or None if fetch/decode fails
         """
-        # TODO: Implement Garage fetch
-        # For now, this is a placeholder that returns None
-        print(f"[AsyncFrameworkLoop] Would fetch audio from: {audio_path}")
-        return None
+        try:
+            # Get Garage client
+            garage = create_garage_client_from_env()
+
+            # Download AAC bytes from Garage
+            aac_bytes = await garage.get_object(audio_path)
+
+            if not aac_bytes:
+                print(f"[AsyncFrameworkLoop] No audio data received from Garage: {audio_path}")
+                return None
+
+            # Decode AAC to numpy array (runs in thread pool since it's blocking)
+            loop = asyncio.get_running_loop()
+            audio_data = await loop.run_in_executor(
+                None,
+                lambda: decode_aac(aac_bytes, sample_rate=44100)
+            )
+
+            print(f"[AsyncFrameworkLoop] Fetched and decoded audio from: {audio_path}")
+            return audio_data
+
+        except Exception as e:
+            print(f"[AsyncFrameworkLoop] Failed to fetch audio from Garage: {e}")
+            return None
 
 
 async def run_framework_loop_async(session_id: uuid.UUID):

@@ -1,11 +1,13 @@
 """
 GeneratorJob model - represents a queued stem generation job.
 """
-from sqlalchemy import Column, Integer, String, DateTime, Float, Text
-from sqlalchemy.dialects.postgresql import UUID, JSONB
-from datetime import datetime
+import os
 import uuid
 import enum
+from datetime import datetime, timezone
+
+from sqlalchemy import Column, Integer, String, DateTime, Float, Text, JSON
+from sqlalchemy.orm import declarative_mixin
 
 from ..db import Base
 
@@ -18,11 +20,32 @@ class JobStatus(enum.Enum):
     EXPIRED = "expired"
 
 
+def _make_uuid_column():
+    """Return a UUID column compatible with both PostgreSQL and SQLite."""
+    database_url = os.environ.get("DATABASE_URL", "")
+    if "postgres" in database_url or "postgresql" in database_url:
+        from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+        return Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    else:
+        # SQLite: store as String(36)
+        return Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+
+def _make_session_id_column():
+    """Return a session_id column compatible with both PostgreSQL and SQLite."""
+    database_url = os.environ.get("DATABASE_URL", "")
+    if "postgres" in database_url or "postgresql" in database_url:
+        from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+        return Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    else:
+        return Column(String(36), nullable=False, index=True)
+
+
 class GeneratorJob(Base):
     __tablename__ = "generator_jobs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    id = _make_uuid_column()
+    session_id = _make_session_id_column()
 
     # Job spec
     instrument = Column(String(255), nullable=False)
@@ -31,13 +54,13 @@ class GeneratorJob(Base):
     model_id = Column(String(100), default="foundation-1")
     key = Column(String(50), nullable=True)
     bpm = Column(Integer, nullable=True)
-    timbre_tags = Column(JSONB, default=[])
+    timbre_tags = Column(JSON, default=list)   # JSON works on both SQLite and PostgreSQL
     bars = Column(Integer, default=4)
 
     # Status
     status = Column(String(20), default=JobStatus.PENDING.value)
     priority = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
