@@ -28,7 +28,7 @@ from typing import Optional, List
 
 import asyncpg
 
-from garage_client import GarageClient, GarageConfig, create_garage_client_from_env
+from app.garage_client import GarageClient, GarageConfig, create_garage_client_from_env
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -198,7 +198,7 @@ async def main():
     cleanup = JobExpirationCleanup(config)
 
     # Handle graceful shutdown
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, cleanup.stop)
 

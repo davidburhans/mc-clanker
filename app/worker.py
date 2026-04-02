@@ -185,7 +185,7 @@ class GeneratorWorker:
             Tuple of (garage_path, duration_seconds)
         """
         # Generate using stable-audio-tools (blocking, runs in executor)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         audio_array = await loop.run_in_executor(
             None,
             lambda: self.generators.generate_stem(
@@ -334,7 +334,7 @@ async def main():
     set_worker_instance(worker)
 
     # Handle graceful shutdown
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, worker.stop)
 

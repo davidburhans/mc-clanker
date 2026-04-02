@@ -1,11 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 import threading
 import os
 import time
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from app.framework.framework_state import state
 
@@ -627,7 +628,6 @@ async def get_vram():
 # AUTH ROUTES
 # =============================================================================
 
-from pydantic import BaseModel, EmailStr
 from fastapi import status
 from app.auth import hash_password, verify_password, create_access_token, get_current_user_from_request
 from app.db import DatabaseManager
@@ -896,7 +896,7 @@ async def start_show(show_id: int, request: Request):
 
         from datetime import datetime
         show.status = "live"
-        show.started_at = datetime.utcnow()
+        show.started_at = datetime.now(timezone.utc)
 
         # Create show directory and audio file
         shows_dir = os.environ.get("SHOWS_DIR", os.path.join(os.path.dirname(__file__), "data", "shows"))
@@ -953,7 +953,7 @@ async def stop_show(show_id: int, request: Request):
 
         from datetime import datetime
         show.status = "ended"
-        show.ended_at = datetime.utcnow()
+        show.ended_at = datetime.now(timezone.utc)
 
         # Calculate duration
         if show.started_at:
@@ -968,7 +968,7 @@ async def stop_show(show_id: int, request: Request):
                 state.current_show_start_time = None
 
         # Flush any remaining buffers
-        from app.framework.framework_main import flush_recording_buffers
+        from app.framework.framework_main_async import flush_recording_buffers
         flush_recording_buffers()
 
         return show.to_dict(include_audience_password=True)
@@ -1215,7 +1215,7 @@ async def submit_job(job: JobSubmission):
     db_manager = DatabaseManager.get_instance()
 
     # Calculate expiration (24 hours from now)
-    expires_at = datetime.utcnow() + timedelta(hours=24)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
     with db_manager.session() as session:
         # Create new job
@@ -1298,7 +1298,7 @@ async def get_audio(job_id: uuid.UUID):
             raise HTTPException(status_code=404, detail="Audio path not found")
 
         # Refresh expiration on access
-        job.expires_at = datetime.utcnow() + timedelta(hours=1)
+        job.expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         session.commit()
 
         # For now, return the audio_path directly
@@ -1428,13 +1428,13 @@ async def session_heartbeat(session_id: UUID, request: SessionHeartbeatRequest):
                 UPDATE session_routing
                 SET server_id = :server_id, last_heartbeat = :heartbeat
                 WHERE session_id = :session_id
-            """), {"session_id": str(session_id), "server_id": request.server_id, "heartbeat": datetime.utcnow()})
+            """), {"session_id": str(session_id), "server_id": request.server_id, "heartbeat": datetime.now(timezone.utc)})
 
             if result.rowcount == 0:
                 session.execute(text("""
                     INSERT INTO session_routing (session_id, server_id, last_heartbeat)
                     VALUES (:session_id, :server_id, :heartbeat)
-                """), {"session_id": str(session_id), "server_id": request.server_id, "heartbeat": datetime.utcnow()})
+                """), {"session_id": str(session_id), "server_id": request.server_id, "heartbeat": datetime.now(timezone.utc)})
 
     return {"status": "ok", "session_id": str(session_id), "server_id": request.server_id}
 
@@ -1507,66 +1507,6 @@ async def get_session_heartbeat(session_id: UUID):
         return {
             "session_id": str(session_id),
             "last_heartbeat": result[0],
-            "is_stale": (datetime.utcnow() - result[0]) > timedelta(minutes=5)
+            "is_stale": (datetime.now(timezone.utc).replace(tzinfo=None) - result[0]) > timedelta(minutes=5)
         }
 
-
-# =============================================================================
-# Onboarding / Setup
-# =============================================================================
-
-from typing import Optional
-
-
-class SetupConfigRequest(BaseModel):
-    LLM_BASE_URL: Optional[str] = None
-    LLM_MODEL: Optional[str] = None
-    LLM_API_KEY: Optional[str] = None
-    GARAGE_ENDPOINT: Optional[str] = None
-    GARAGE_ACCESS_KEY: Optional[str] = None
-    GARAGE_SECRET_KEY: Optional[str] = None
-    GARAGE_BUCKET: Optional[str] = None
-    GARAGE_BUCKET_REGION: Optional[str] = None
-    JWT_SECRET: Optional[str] = None
-    DJ_PASSWORD: Optional[str] = None
-    AUDIENCE_PASSWORD: Optional[str] = None
-    DATABASE_URL: Optional[str] = None
-
-
-@router.get("/api/onboarding")
-async def get_onboarding_status():
-    """
-    Returns structured list of configuration check results.
-
-    Use this to determine if the app is properly configured before
-    allowing access to the DJ interface.
-    """
-    from onboarding import run_onboarding_checks
-    results = await run_onboarding_checks()
-    required_failed = [r for r in results if not r.passed and r.category == "required"]
-    return {
-        "ready": len(required_failed) == 0,
-        "checks": [r._asdict() for r in results],
-    }
-
-
-@router.post("/api/setup/config")
-async def save_setup_config(config: SetupConfigRequest):
-    """
-    Persist configuration to /app/.env and trigger service restart.
-
-    After saving, services read the new .env via docker-compose's env_file.
-    """
-    from onboarding import write_env_file, restart_services
-
-    values = {k: v for k, v in config.model_dump().items() if v is not None and v != ""}
-    if not values:
-        return {"status": "ok", "restarting": False}
-
-    try:
-        write_env_file(values)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to write config: {e}")
-
-    restart_services()
-    return {"status": "ok", "restarting": True}

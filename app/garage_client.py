@@ -102,7 +102,7 @@ class GarageClient:
             key: Object key in bucket (e.g., "audio/job-123.aac")
             data: Raw bytes to upload
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._sync_put_object, key, data)
 
     async def get_object(self, key: str) -> bytes:
@@ -115,7 +115,7 @@ class GarageClient:
         Returns:
             Raw bytes from object
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._sync_get_object, key)
 
     async def delete_object(self, key: str) -> None:
@@ -125,7 +125,7 @@ class GarageClient:
         Args:
             key: Object key in bucket
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._sync_delete_object, key)
 
     def get_presigned_url(self, key: str, expires_in: int = 3600) -> str:
@@ -158,7 +158,7 @@ class GarageClient:
         Returns:
             True if object exists, False otherwise
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(
                 None,

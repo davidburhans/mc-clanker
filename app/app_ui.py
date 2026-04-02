@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+import asyncio
 import threading
 import queue
 import uvicorn
@@ -10,10 +11,10 @@ import socket
 import uuid
 
 from app.framework.framework_state import state
-from app.framework.framework_main import run_framework_loop
+from app.framework.framework_main_async import run_framework_loop_async
 from app.api_routes import router as api_router
+from contextlib import asynccontextmanager, suppress
 import atexit
-from contextlib import asynccontextmanager
 
 
 # =============================================================================
@@ -56,7 +57,7 @@ print(f"SESSION AFFINITY: This server's ID is: {current_server_id}")
 async def lifespan(app: FastAPI):
     # Startup logic
     print("FASTAPI LIFESPAN: Initializing database...")
-    from db import DatabaseManager
+    from app.db import DatabaseManager
     db_manager = DatabaseManager.get_instance()
     db_manager.create_tables()
 
@@ -75,12 +76,25 @@ async def lifespan(app: FastAPI):
         print(f"WARNING: Onboarding check error (non-fatal): {e}")
 
     print("FASTAPI LIFESPAN: Starting framework loop...")
-    framework_thread = threading.Thread(target=run_framework_loop, daemon=True)
-    framework_thread.start()
+    # Generate a session ID for this app instance
+    app_session_id = uuid.uuid4()
+    print(f"SESSION AFFINITY: App session ID: {app_session_id}")
+
+    # Start the async framework loop as a background task
+    framework_task = asyncio.create_task(run_framework_loop_async(app_session_id))
+
+    # Store the task for proper shutdown
+    state.framework_task = framework_task
+
     yield
     # Shutdown logic
     print("FASTAPI LIFESPAN: Shutting down resources...")
     state.trigger_shutdown()
+
+    # Cancel the async framework task
+    framework_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await framework_task
 
 def cleanup():
     print("Application exiting, cleaning up...")
@@ -99,9 +113,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Import here to avoid circular imports
-        from auth import decode_token
-        from db import DatabaseManager
-        from models import Show
+        from app.auth import decode_token
+        from app.db import DatabaseManager
+        from app.models import Show
 
         auth_header = request.headers.get("Authorization")
         current_user = None
@@ -114,7 +128,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 user_id = int(payload["sub"])
                 db_manager = DatabaseManager.get_instance()
                 with db_manager.session() as session:
-                    user = session.query(type("User", (), {"id": int, "username": str, "email": str, "is_active": bool, "to_dict": lambda s: {"id": s.id, "username": s.username, "email": s.email}}) ).filter_by(id=user_id).first()
+                    user = session.query(User).filter(User.id == user_id).first()
                     if user and user.is_active:
                         # Attach user to request state
                         request.state.user = user
@@ -135,7 +149,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
                     if ":" in decoded:
                         _, provided_pass = decoded.split(":", 1)
-                except:
+                except Exception:
                     pass
 
             if provided_pass is None:
@@ -194,11 +208,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                             decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
                             if ":" in decoded:
                                 _, provided_pass = decoded.split(":", 1)
-                        except:
+                        except Exception:
                             pass
 
                     if provided_pass:
-                        from auth import verify_password
+                        from app.auth import verify_password
                         if not verify_password(provided_pass, show.audience_password_hash):
                             return needs_auth(f"Show {show_id}")
                     else:
@@ -277,7 +291,7 @@ class SessionAffinityMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Look up which server handles this session
-        from db import DatabaseManager
+        from app.db import DatabaseManager
         from sqlalchemy import text
 
         db_manager = DatabaseManager.get_instance()
@@ -338,8 +352,6 @@ if os.path.exists(static_dir):
 
 @app.get("/dj")
 def redirect_to_dj_slash():
-    from fastapi.responses import RedirectResponse
-
     return RedirectResponse(url="/dj/")
 
 
@@ -492,7 +504,7 @@ def audio_stream_generator():
         finally:
             try:
                 process.stdin.close()
-            except:
+            except Exception:
                 pass
             stderr = process.stderr.read().decode() if process.stderr else ""
             if stderr:
@@ -524,7 +536,7 @@ def audio_stream_generator():
         try:
             process.kill()
             process.wait(timeout=2)
-        except:
+        except Exception:
             pass
         print("Audio stream generator closed")
 
