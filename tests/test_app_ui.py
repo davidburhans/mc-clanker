@@ -156,9 +156,9 @@ class TestAudioStreamGenerator:
 
     def test_poison_pill_before_first_chunk(self):
         """Generator should handle None poison pill before first chunk."""
-        with patch('app_ui.queue.Queue') as mock_queue_class, \
+        with patch('app.app_ui.queue.Queue') as mock_queue_class, \
              patch('app.app_ui.state') as mock_state, \
-             patch('app_ui.subprocess') as mock_subprocess:
+             patch('app.app_ui.subprocess') as mock_subprocess:
 
             mock_queue = MagicMock()
             mock_queue_class.return_value = mock_queue
@@ -180,9 +180,9 @@ class TestAudioStreamGenerator:
 
     def test_timeout_waiting_for_first_chunk(self):
         """Generator should handle timeout waiting for first chunk."""
-        with patch('app_ui.queue.Queue') as mock_queue_class, \
+        with patch('app.app_ui.queue.Queue') as mock_queue_class, \
              patch('app.app_ui.state') as mock_state, \
-             patch('app_ui.subprocess'):
+             patch('app.app_ui.subprocess') as mock_subprocess:
 
             mock_queue = MagicMock()
             mock_queue_class.return_value = mock_queue
@@ -234,7 +234,7 @@ class TestStreamMp3:
         app.add_api_route("/stream.mp3", stream_mp3, methods=["GET"])
 
         with patch('app.app_ui.state') as mock_state, \
-             patch('app_ui.audio_stream_generator') as mock_gen:
+             patch('app.app_ui.audio_stream_generator') as mock_gen:
 
             mock_state.is_running = True
             mock_state.add_audio_client = MagicMock()
