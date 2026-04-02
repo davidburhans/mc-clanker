@@ -1,4 +1,5 @@
 import os
+import threading
 from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -8,6 +9,7 @@ Base = declarative_base()
 
 class DatabaseManager:
     _instance = None
+    _lock = threading.Lock()
 
     def __init__(self):
         database_url = os.environ.get("DATABASE_URL")
@@ -27,9 +29,12 @@ class DatabaseManager:
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
     @classmethod
-    def get_instance(cls):
+    def get_instance(cls) -> "DatabaseManager":
+        """Thread-safe singleton using double-checked locking."""
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def create_tables(self):
@@ -46,6 +51,14 @@ class DatabaseManager:
             raise
         finally:
             session.close()
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.engine.dialect.name == "sqlite"
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.engine.dialect.name == "postgresql"
 
 
 def get_db():
