@@ -207,18 +207,30 @@ class TestRedirects:
     """Test route redirects."""
 
     def test_dj_redirect(self):
-        """Test /dj redirects to /dj/."""
+        """Test /dj redirects to /dj/ (handled by StaticFiles)."""
         from fastapi.testclient import TestClient
-        from app.app_ui import redirect_to_dj_slash
+        from fastapi.staticfiles import StaticFiles
         from fastapi import FastAPI
+        import tempfile
+        import os
 
-        app = FastAPI()
-        app.add_api_route("/dj", redirect_to_dj_slash, methods=["GET"])
+        # Create a minimal static dir with index.html
+        with tempfile.TemporaryDirectory() as tmpdir:
+            static_dir = os.path.join(tmpdir, "mc-clanker")
+            os.makedirs(static_dir)
+            with open(os.path.join(static_dir, "index.html"), "w") as f:
+                f.write("<html>DJ UI</html>")
 
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/dj", follow_redirects=False)
+            app = FastAPI()
+            app.mount("/dj", StaticFiles(directory=static_dir, html=True), name="dj_ui")
 
-        assert response.status_code == 307
+            client = TestClient(app, raise_server_exceptions=False)
+            # /dj should redirect to /dj/
+            response = client.get("/dj", follow_redirects=False)
+            assert response.status_code == 307
+            # Location might be relative "/dj/" or absolute "http://testserver/dj/"
+            location = response.headers["location"]
+            assert location.endswith("/dj/"), f"Expected location ending with /dj/, got {location}"
 
 
 class TestStreamMp3:

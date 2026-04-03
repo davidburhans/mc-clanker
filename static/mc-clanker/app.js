@@ -524,87 +524,30 @@ class DJSlopApp {
         // Load mixer data
         await this.loadModelsConfig();
         this.updateStemMixer();
-        await this.pollVRAM();
     }
 
 
     async loadModelsConfig() {
         try {
-            // Fetch both models config and status
-            const [modelsRes, statusRes] = await Promise.all([
-                fetch("/api/models"),
-                fetch("/api/models/status")
-            ]);
-
+            // Fetch models config
+            const modelsRes = await fetch("/api/models");
             const modelsData = modelsRes.ok ? await modelsRes.json() : { models: {} };
-            const statusData = statusRes.ok ? await statusRes.json() : { models: {} };
 
             const container = document.getElementById("models-list-container");
             if (!container) return;
 
             container.innerHTML = "";
             const models = modelsData.models || {};
-            const modelStates = statusData.models || {};
 
             for (const [id, info] of Object.entries(models)) {
                 const div = document.createElement("div");
                 div.className = "model-item";
 
-                const modelState = modelStates[id] || {};
-                const state = modelState.state || "idle";
-                const isLoaded = modelState.is_loaded || false;
-
-                // State badge
-                const badge = document.createElement("span");
-                badge.className = `model-state-badge ${state}`;
-                badge.textContent = state;
-                badge.title = modelState.error || state;
-
                 // Model label
                 const label = document.createElement("label");
                 const families = info.supported_families ? info.supported_families.join(", ") : "Any";
-                label.textContent = id + " (" + info.engine + ")";
-                label.title = info.description + " | Supported: " + families;
-
-                // Action button
-                const actionBtn = document.createElement("button");
-                actionBtn.className = "model-action-btn";
-                actionBtn.dataset.modelId = id;
-
-                if (isLoaded) {
-                    actionBtn.textContent = "Unload";
-                    actionBtn.classList.add("unload");
-                } else {
-                    actionBtn.textContent = state === "loading" ? "Loading..." : "Load";
-                    actionBtn.classList.add("load");
-                    if (state === "loading") {
-                        actionBtn.disabled = true;
-                    }
-                }
-
-                actionBtn.onclick = async () => {
-                    const action = isLoaded ? "unload" : "load";
-                    actionBtn.disabled = true;
-                    actionBtn.textContent = action === "load" ? "Loading..." : "Unloading...";
-
-                    try {
-                        const res = await fetch(`/api/models/${id}/${action}`, { method: "POST" });
-                        if (res.ok) {
-                            this.showToast(`${id} ${action}ed`);
-                            await this.loadModelsConfig();
-                            await this.pollVRAM();
-                        } else {
-                            const err = await res.json();
-                            this.showToast(err.detail || `Failed to ${action} model`, "error");
-                            actionBtn.disabled = false;
-                            actionBtn.textContent = isLoaded ? "Unload" : "Load";
-                        }
-                    } catch (err) {
-                        this.showToast(`Error ${action}ing model`, "error");
-                        actionBtn.disabled = false;
-                        actionBtn.textContent = isLoaded ? "Unload" : "Load";
-                    }
-                };
+                label.textContent = id + " (" + (info.engine || 'unknown') + ")";
+                label.title = (info.description || '') + " | Supported: " + families;
 
                 // Enable checkbox
                 const checkbox = document.createElement("input");
@@ -618,7 +561,7 @@ class DJSlopApp {
                             body: JSON.stringify({ model_id: id, enabled: e.target.checked })
                         });
                         if (res.ok) {
-                            this.showToast(id + (e.target.checked ? " enabled" : " disabled") + ". Restart required.");
+                            this.showToast(id + (e.target.checked ? " enabled" : " disabled") + ". Worker will update.");
                         } else {
                             e.target.checked = !e.target.checked; // revert
                             this.showToast("Failed to update model", "error");
@@ -629,9 +572,7 @@ class DJSlopApp {
                     }
                 };
 
-                div.appendChild(badge);
                 div.appendChild(label);
-                div.appendChild(actionBtn);
                 div.appendChild(checkbox);
                 container.appendChild(div);
             }
@@ -1096,7 +1037,7 @@ class DJSlopApp {
                 if (btnText) btnText.textContent = 'STARTING...';
             }
 
-            await fetch('/api/show/start', { method: 'POST' });
+            await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_generating: true }) });
             this.state.isShowStarted = true;
             this.updateShowControls();
             this.startShowTimer();
@@ -1150,7 +1091,7 @@ class DJSlopApp {
         if (this.showStatusText) this.showStatusText.textContent = 'Ending broadcast...';
 
         try {
-            await fetch('/api/show/stop', { method: 'POST' });
+            await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_generating: false }) });
             this.state.isShowStarted = false;
             this.updateShowControls();
             this.showToast('Show ended - Audience sees waiting screen');
@@ -1733,7 +1674,6 @@ class DJSlopApp {
     // Polling
     startPolling() {
         this.pollTimer = setInterval(() => this.pollState(), 2000);
-        this.vramPollTimer = setInterval(() => this.pollVRAM(), 5000);
     }
 
     async pollState() {
@@ -1779,27 +1719,7 @@ class DJSlopApp {
         }
     }
 
-    async pollVRAM() {
-        try {
-            const response = await fetch('/api/vram');
-            if (response.ok) {
-                const data = await response.json();
-                this.updateVRAMDisplay(data);
-            }
-        } catch (e) {
-            console.error('Failed to poll VRAM:', e);
-        }
-
-        try {
-            const response = await fetch('/api/download-progress');
-            if (response.ok) {
-                const data = await response.json();
-                this.updateDownloadProgress(data);
-            }
-        } catch (e) {
-            console.error('Failed to poll download progress:', e);
-        }
-    }
+    // pollVRAM removed as vram and status are managed by worker service.
 
     updateVRAMDisplay(data) {
         let vramEl = document.getElementById('vram-meter');

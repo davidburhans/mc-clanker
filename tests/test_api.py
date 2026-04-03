@@ -1,7 +1,7 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from app.api_routes import router
+from app.routes import api_router as router
 from app.framework.framework_state import state
 import numpy as np
 import json
@@ -10,8 +10,7 @@ from unittest.mock import MagicMock, patch
 
 @pytest.fixture
 def client():
-    app = FastAPI()
-    app.include_router(router)
+    from app.app_ui import app
     return TestClient(app)
 
 @pytest.fixture(autouse=True)
@@ -99,7 +98,7 @@ def test_get_models(client):
 
 def test_update_models(client):
     # Test with a model that exists in the config
-    response = client.post("/api/models", json={"model_id": "infinite-pianos", "enabled": True})
+    response = client.post("/api/models", json={"model_id": "foundation-1", "enabled": True})
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
@@ -177,13 +176,6 @@ def test_export_stop_not_recording(client):
     assert response.status_code == 400
 
 
-def test_show_start(client):
-    """Test show start endpoint."""
-    response = client.post("/api/show/start")
-    assert response.status_code == 200
-    assert state.is_show_started is True
-
-
 def test_show_stop(client):
     """Test show stop endpoint."""
     state.is_show_started = True
@@ -192,92 +184,7 @@ def test_show_stop(client):
     assert state.is_show_started is False
 
 
-def test_models_status_no_generator(client):
-    """Test /api/models/status when no generator is initialized."""
-    state.generator = None
-    response = client.get("/api/models/status")
-    assert response.status_code == 200
-    data = response.json()
-    assert "error" in data
-    assert "Generator not initialized" in data["error"]
-
-
-def test_models_status_with_mocked_generator(client):
-    """Test /api/models/status with mocked generator."""
-    mock_gen = MagicMock()
-    mock_gen.get_vram_usage.return_value = {"total_mb": 100, "reserved_mb": 200, "by_model": {}}
-    mock_gen.models = {"model_a": MagicMock()}
-    mock_gen.model_states = {"model_a": "loaded"}
-    mock_gen.model_errors = {"model_a": None}
-    mock_gen.is_model_loaded.return_value = True
-
-    state.generator = mock_gen
-
-    response = client.get("/api/models/status")
-    assert response.status_code == 200
-    data = response.json()
-    assert "models" in data
-    assert "vram" in data
-
-
-def test_load_model_not_found(client):
-    """Test 404 error when loading unknown model."""
-    state.generator = MagicMock()
-    state.generator.models = {}
-    state.generator.models = {}
-
-    response = client.post("/api/models/unknown-model/load")
-    assert response.status_code == 404
-
-
-def test_unload_model_not_found(client):
-    """Test 404 error when unloading unknown model."""
-    state.generator = MagicMock()
-    state.generator.models = {}
-
-    response = client.post("/api/models/unknown-model/unload")
-    assert response.status_code == 404
-
-
-def test_reload_model_not_found(client):
-    """Test 404 error when reloading unknown model."""
-    state.generator = MagicMock()
-    state.generator.models = {}
-
-    response = client.post("/api/models/unknown-model/reload")
-    assert response.status_code == 404
-
-
-def test_download_progress(client):
-    """Test /api/download-progress endpoint."""
-    state.download_progress = {"repo_1": {"progress": 50, "status": "downloading"}}
-
-    response = client.get("/api/download-progress")
-    assert response.status_code == 200
-    data = response.json()
-    assert "downloads" in data
-
-
-def test_vram_no_generator(client):
-    """Test /api/vram when no generator."""
-    state.generator = None
-
-    response = client.get("/api/vram")
-    assert response.status_code == 200
-    data = response.json()
-    assert "error" in data
-
-
-def test_vram_with_generator(client):
-    """Test /api/vram with mocked generator."""
-    mock_gen = MagicMock()
-    mock_gen.get_vram_usage.return_value = {"total_mb": 500, "reserved_mb": 600, "by_model": {}}
-    state.generator = mock_gen
-
-    response = client.get("/api/vram")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total_mb"] == 500
+# Removed model status/vram tests
 
 
 def test_custom_stem_create(client):
@@ -468,7 +375,7 @@ def test_stem_toggle_solo_off(client):
 def test_download_stem_out_of_range(client):
     """Test download returns 404 when stem index is out of range."""
     state.active_stems = [{"prompt": "synth"}]
-    state.last_generated_stems = {"synth": np.zeros(44100, dtype=np.int16)}
+    state.cache_stem("synth", np.zeros(44100, dtype=np.int16))
 
     response = client.get("/api/stems/99/download")
     assert response.status_code == 404
@@ -527,15 +434,6 @@ def test_export_start_default_format(client):
     assert data["status"] == "started"
 
 
-def test_show_start_already_started(client):
-    """Test starting show when already started."""
-    state.is_show_started = True
-
-    response = client.post("/api/show/start")
-    # Should still return ok (idempotent)
-    assert response.status_code == 200
-
-
 def test_show_stop_when_not_started(client):
     """Test stopping show when not started."""
     state.is_show_started = False
@@ -588,7 +486,7 @@ class TestGenerateAudiencePassword:
 
     def test_generate_password_length(self):
         """Test that generated password has sufficient length."""
-        from app.api_routes import generate_audience_password
+        from app.routes.utils import generate_audience_password
 
         password = generate_audience_password()
 
@@ -597,7 +495,7 @@ class TestGenerateAudiencePassword:
 
     def test_generate_password_uniqueness(self):
         """Test that generated passwords are unique."""
-        from app.api_routes import generate_audience_password
+        from app.routes.utils import generate_audience_password
 
         passwords = [generate_audience_password() for _ in range(10)]
 

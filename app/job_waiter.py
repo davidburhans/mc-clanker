@@ -17,9 +17,23 @@ import asyncio
 import uuid
 from typing import Optional
 
-# Note: This module is designed to work with asyncpg for PostgreSQL async support.
-# For now, we provide a polling-based implementation that can be enhanced with
-# LISTEN/NOTIFY when asyncpg is available.
+# Module-level asyncpg pool singleton (created lazily on first use)
+_asyncpg_pool: Optional["asyncpg.Pool"] = None
+_asyncpg_pool_lock = asyncio.Lock()
+
+
+async def _get_asyncpg_pool(dsn: str) -> "asyncpg.Pool":
+    """Get or create the module-level asyncpg pool singleton."""
+    global _asyncpg_pool
+    if _asyncpg_pool is None:
+        async with _asyncpg_pool_lock:
+            if _asyncpg_pool is None:  # Double-check after acquiring lock
+                _asyncpg_pool = await asyncpg.create_pool(
+                    dsn,
+                    min_size=2,
+                    max_size=10,
+                )
+    return _asyncpg_pool
 
 
 class JobWaiter:
@@ -192,16 +206,12 @@ async def wait_for_job_completion(
         has_asyncpg = False
 
     if has_asyncpg and db_manager is not None:
-        # Use asyncpg pool for LISTEN/NOTIFY
+        # Use the module-level asyncpg pool singleton for LISTEN/NOTIFY
         try:
-            pool = await asyncpg.create_pool(
-                db_manager.engine.url.render_as_string(hide_password=False),
-                min_size=1,
-                max_size=5
-            )
+            dsn = db_manager.engine.url.render_as_string(hide_password=False)
+            pool = await _get_asyncpg_pool(dsn)
             waiter = JobWaiter(pool)
             result = await waiter.wait_for_job_completion(job_id, timeout)
-            await pool.close()
             return result
         except Exception:
             # Fall back to polling on error

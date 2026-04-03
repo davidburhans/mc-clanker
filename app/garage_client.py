@@ -168,6 +168,36 @@ class GarageClient:
         except ClientError:
             return False
 
+    async def ensure_bucket_exists(self) -> bool:
+        """
+        Ensure the bucket exists, creating it if necessary.
+
+        Returns:
+            True if bucket exists or was created, False on error
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self._ensure_bucket_sync)
+            return True
+        except Exception as e:
+            print(f"Warning: Could not ensure bucket exists: {e}")
+            return False
+
+    def _ensure_bucket_sync(self) -> None:
+        """Synchronous bucket existence check and creation."""
+        try:
+            self._client.head_bucket(Bucket=self.bucket)
+        except ClientError:
+            # Bucket doesn't exist, try to create it
+            try:
+                self._client.create_bucket(Bucket=self.bucket)
+                print(f"Created MinIO bucket: {self.bucket}")
+            except ClientError as e:
+                error_code = e.response.get("Error", {}).get("Code", "")
+                # Bucket might already exist (race condition)
+                if error_code != "BucketAlreadyOwnedByYou" and error_code != "BucketAlreadyExists":
+                    raise
+
 
 def create_garage_client_from_env() -> "GarageClient":
     """Create GarageClient from environment variables."""

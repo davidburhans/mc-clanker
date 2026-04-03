@@ -107,10 +107,12 @@ def test_mixer_set_next_loop():
 
     # Set up next loop tracks
     tracks_audio = [(audio1, 0), (audio2, 1)]
-    mixer.set_next_loop(tracks_audio, loop_end_sample=10000)
+    mixer.set_next_loop(tracks_audio, next_loop_duration_samples=10000)
 
     assert len(mixer.next_loop_audio) == 2
-    assert mixer.current_loop_end_sample == 10000
+    assert mixer._next_loop_duration == 10000
+    # set_next_loop should NOT modify current_loop_end_sample (Bug 1 fix)
+    assert mixer.current_loop_end_sample == 0
 
 
 def test_mixer_loop_transition():
@@ -122,10 +124,12 @@ def test_mixer_loop_transition():
     audio = np.ones((4410, 1), dtype=np.float32) * 0.5  # 0.1 seconds
     mixer.add_track(audio, 0, stem_index=0)
     mixer.current_sample = 0
+    # Set current loop end BEFORE calling set_next_loop (framework manages this)
+    mixer.current_loop_end_sample = 4410
 
-    # Set up next loop
+    # Set up next loop with its duration
     next_audio = np.ones((4410, 1), dtype=np.float32) * 0.3
-    mixer.set_next_loop([(next_audio, 1)], loop_end_sample=4410)  # 0.1 seconds
+    mixer.set_next_loop([(next_audio, 1)], next_loop_duration_samples=4410)  # 0.1 seconds
 
     # Simulate callback at loop boundary
     state.is_generating = True
@@ -342,7 +346,7 @@ def test_loop_transition_next_loop_ready():
 
     # Set up next loop (ready before deadline)
     next_audio = np.ones((4410, 1), dtype=np.float32) * 0.3
-    mixer.set_next_loop([(next_audio, 1)], loop_end_sample=4410)
+    mixer.set_next_loop([(next_audio, 1)], next_loop_duration_samples=4410)
 
     state.is_generating = True
     outdata = np.zeros((4410, 1), dtype=np.float32)

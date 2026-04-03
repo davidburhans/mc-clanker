@@ -433,7 +433,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
 
         This is the main entry point for the async framework loop.
         """
-        with state.lock:
+        with state.sync_lock:
             current_bpm = state.current_bpm
             current_key = state.current_key
             active_stems = state.active_stems

@@ -410,12 +410,13 @@ def test_load_instruments_with_invalid_json():
 
 
 def test_broadcast_audio_with_recording():
-    """Test broadcast_audio writes to recording chunks when recording."""
+    """Test broadcast_audio writes to file handle when recording (not buffered list)."""
     state = GlobalState()
     import queue
 
+    mock_handle = MagicMock()
     state.is_recording = True
-    state.recording_chunks = []
+    state.recording_file_handle = mock_handle
     state.current_show_audio_file = None
     state.shutdown_event.clear()
 
@@ -424,9 +425,8 @@ def test_broadcast_audio_with_recording():
 
     state.broadcast_audio(b"test_data")
 
-    # Should add to recording chunks
-    assert len(state.recording_chunks) == 1
-    assert state.recording_chunks[0] == b"test_data"
+    # Should write to file handle (streaming, not buffered)
+    mock_handle.write.assert_called_once_with(b"test_data")
     # And put in queue
     assert q.get() == b"test_data"
 
@@ -554,30 +554,34 @@ class TestStateDefaults:
         assert state.is_recording is False
         assert state.recording_file_path is None
         assert state.recording_format == "wav"
-        assert state.recording_chunks == []
+        # recording_chunks removed; data streams to recording_file_handle instead
+        assert state.recording_file_handle is None
+        assert not hasattr(state, "recording_chunks")
 
 
 class TestStateLockBehavior:
     """Test state lock behavior."""
 
-    def test_lock_is_threading_lock(self):
-        """Test that state.lock is a threading.Lock."""
+    def test_lock_is_asyncio_lock(self):
+        """state.lock must be asyncio.Lock so it doesn't block the event loop."""
+        import asyncio
         state = GlobalState()
-        import threading
+        assert isinstance(state.lock, asyncio.Lock), (
+            f"state.lock should be asyncio.Lock, got {type(state.lock)}"
+        )
 
-        # threading.Lock() returns a _thread.lock object, check via type name
-        lock_type_name = type(state.lock).__name__
+    def test_sync_lock_is_threading_lock(self):
+        """state.sync_lock must be threading.Lock for the Mixer and broadcast_audio."""
+        import threading
+        state = GlobalState()
+        assert hasattr(state, "sync_lock")
+        # threading.Lock() returns a _thread.lock
+        lock_type_name = type(state.sync_lock).__name__
         assert "lock" in lock_type_name.lower()
 
-    def test_state_resets_lock(self):
-        """Test that reset() doesn't affect the lock itself."""
-        import threading
+    def test_state_resets_lock_unchanged(self):
+        """Test that reset() doesn't replace the lock object itself."""
         state = GlobalState()
-
         original_lock = state.lock
         state.reset()
-
-        # Lock should be the same object
         assert state.lock is original_lock
-        lock_type_name = type(state.lock).__name__
-        assert "lock" in lock_type_name.lower()

@@ -44,17 +44,27 @@ async def check_database() -> CheckResult:
     # Try to connect and run SELECT 1
     try:
         import asyncpg
-        # Parse the URL to extract connection params
+        from urllib.parse import urlparse
+
+        # Parse the URL properly to extract connection params
         # Expected format: postgresql://user:pass@host:port/db
-        url = database_url.replace("postgresql://", "")
-        parts = url.split("@")
-        if len(parts) == 2:
-            user_pass, host_db = parts
-            user, password = user_pass.split(":")
-            host, port_db = host_db.split(":")
-            port = int(port_db.split("/")[0])
-            db_name = port_db.split("/")[1] if "/" in port_db else "mcclanker"
-        else:
+        parsed = urlparse(database_url)
+        if parsed.scheme not in ("postgresql", "postgres"):
+            return CheckResult(
+                passed=False,
+                category="required",
+                name="database",
+                message="DATABASE_URL scheme must be postgresql://",
+                hint="Expected format: postgresql://user:pass@host:port/db",
+            )
+
+        user = parsed.username
+        password = parsed.password
+        host = parsed.hostname
+        port = parsed.port or 5432
+        db_name = parsed.path.lstrip("/") if parsed.path else "mcclanker"
+
+        if not user or not password or not host:
             return CheckResult(
                 passed=False,
                 category="required",

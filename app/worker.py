@@ -75,6 +75,10 @@ class GeneratorWorker:
         """Main entry point. Creates DB pool and starts worker loops."""
         logger.info(f"Worker {self.config.worker_id} starting...")
 
+        # Load audio generation models from config
+        self.generators.load()
+        logger.info(f"Loaded {len(self.generators.models)} audio models: {list(self.generators.models.keys())}")
+
         # Create connection pool (handles concurrent job processing)
         self.db = await asyncpg.create_pool(
             self.config.pg_dsn,

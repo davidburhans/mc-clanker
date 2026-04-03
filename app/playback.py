@@ -1,6 +1,6 @@
 import os
 import threading
-import queue
+import time
 
 from app.framework.framework_state import state
 
@@ -17,7 +17,6 @@ class ShowPlayback:
         self.db_session = db_session
         self.is_playing = False
         self.playback_thread = None
-        self.audio_queue = queue.Queue(maxsize=100)
 
     def start(self):
         """Start playing the pre-recorded audio file."""
@@ -30,7 +29,7 @@ class ShowPlayback:
         self.is_playing = True
 
         # Set state to indicate playback is active
-        with state.lock:
+        with state.sync_lock:
             state.currently_playing_show_id = self.show_id
             state.is_playback_active = True
 
@@ -44,7 +43,7 @@ class ShowPlayback:
         """Stop playback."""
         self.is_playing = False
 
-        with state.lock:
+        with state.sync_lock:
             state.is_playback_active = False
             state.currently_playing_show_id = None
 
@@ -56,7 +55,7 @@ class ShowPlayback:
 
     def get_progress(self) -> dict:
         """Get current playback progress."""
-        with state.lock:
+        with state.sync_lock:
             return {
                 "show_id": self.show_id,
                 "is_playing": self.is_playing,
@@ -66,79 +65,48 @@ class ShowPlayback:
     def _playback_loop(self):
         """Internal loop that reads the audio file and queues it for streaming."""
         import wave
-        import numpy as np
 
         try:
-            wav_file = wave.open(self.audio_file_path, "rb")
-            try:
+            # Audit 4.2 Fix: Use a with block to ensure file is closed even if loop fails
+            with wave.open(self.audio_file_path, "rb") as wav_file:
                 sample_rate = wav_file.getframerate()
                 channels = wav_file.getnchannels()
                 sampwidth = wav_file.getsampwidth()
 
                 chunk_size = 4096  # bytes per chunk
+                frames_per_chunk = chunk_size // (sampwidth * channels)
 
                 while self.is_playing:
                     try:
                         # Read audio data
-                        data = wav_file.readframes(chunk_size // (sampwidth * channels))
+                        data = wav_file.readframes(frames_per_chunk)
                         if not data:
                             # End of file — restart from beginning
                             if self.is_playing:
-                                wav_file.close()
-                                wav_file = wave.open(self.audio_file_path, "rb")
-                                data = wav_file.readframes(chunk_size // (sampwidth * channels))
+                                wav_file.rewind() # Audit 4.2 Fix: use rewind instead of close/reopen
+                                data = wav_file.readframes(frames_per_chunk)
                             else:
                                 break
 
-                        # Convert to PCM16 if needed
-                        if sampwidth == 2:
-                            pcm_data = data
-                        else:
-                            # Convert other formats to int16
-                            audio_data = np.frombuffer(data, dtype=np.int16)
-                            pcm_data = audio_data.tobytes()
+                        # Audit 4.3/5.4 Fix: Skip local queue, broadcast directly to mixer
+                        try:
+                            state.broadcast_audio(data)
+                        except Exception:
+                            pass 
 
-                        # Add to queue for streaming
-                        self.audio_queue.put_nowait(pcm_data)
+                        # Simulate realtime playback
+                        time.sleep(frames_per_chunk / sample_rate)
 
-                    except queue.Full:
-                        # Skip if queue is full (client too slow)
-                        continue
                     except Exception as e:
                         print(f"Playback error: {e}")
                         break
-            finally:
-                wav_file.close()
-
         except Exception as e:
             print(f"Failed to open audio file for playback: {e}")
         finally:
             self.is_playing = False
-            with state.lock:
+            with state.sync_lock:
                 state.is_playback_active = False
                 state.currently_playing_show_id = None
 
 
-class ReMixInterface:
-    """
-    Rich remix interface for regenerating/remixing recorded shows.
-    Future phase implementation.
-    """
-
-    def __init__(self, show_id: int, db_session=None):
-        self.show_id = show_id
-        self.db_session = db_session
-
-    def get_remix_context(self) -> dict:
-        """Get the context needed for the remix interface."""
-        return {
-            "show_id": self.show_id,
-            "message": "Remix interface - full implementation in future phase",
-        }
-
-    def regenerate_stem(self, loop_index: int, stem_index: int, params: dict) -> dict:
-        """Regenerate a specific stem from a specific loop."""
-        return {
-            "status": "not_implemented",
-            "message": "Remix interface - full implementation in future phase",
-        }
+# ReMixInterface removed (Audit 3.1)

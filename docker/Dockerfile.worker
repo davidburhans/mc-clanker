@@ -1,60 +1,41 @@
-# docker/Dockerfile.worker - Generator worker container for mc-clanker (GPU-enabled)
-# Multi-stage build: build stage installs deps, runtime stage is minimal
-# Runs the Foundation-1 model for audio stem generation using PyTorch/CUDA
+# docker/Dockerfile.worker - GPU worker container for mc-clanker
+# Single-stage: CUDA runtime + uv-managed venv from pyproject.toml worker group
 
-# =============================================================================
-# Build stage - install all Python dependencies
-# =============================================================================
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /build
-
-# Install build tools and Python
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-dev python3-pip ffmpeg curl git && \
-    rm -rf /var/lib/apt/lists/* && \
-    ln -sf /usr/bin/python3.10 /usr/bin/python
-
-# Install uv for fast dependency resolution
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-# Install Python dependencies (cached until requirements-worker.txt changes)
-COPY requirements-worker.txt .
-RUN uv pip install --system --prefix=/install -r requirements-worker.txt
-
-# =============================================================================
-# Runtime stage - minimal image with just runtime
-# =============================================================================
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    CUDA_HOME=/usr/local/cuda
 
 WORKDIR /app
 
-# Install only runtime dependencies
+# Install Python + system packages (ffmpeg for audio processing)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 libgomp1 ffmpeg && \
+    python3.10 python3.10-dev python3-pip \
+    ffmpeg libpq5 curl git && \
     rm -rf /var/lib/apt/lists/* && \
     ln -sf /usr/bin/python3.10 /usr/bin/python
 
-# Copy installed packages from builder
-COPY --from=builder /install /usr/local
+# Install uv (layer cached unless uv version changes)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy app code (this layer changes most often, will be cached separately)
+# Create virtual environment and install worker dependencies
+# - uv venv creates .venv in /app
+# - uv sync --group worker installs locked deps for GPU worker
+# - --extra-index-url = CUDA index for GPU-enabled torch
+COPY uv.lock pyproject.toml ./
+RUN uv venv /app/.venv && \
+    uv sync --frozen --group worker --extra-index-url https://download.pytorch.org/whl/cu124
+
+# Copy source (this layer changes most often)
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Create non-root user
-RUN useradd -m -u 1000 worker
-USER worker
-
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import fastapi" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD pgrep -f "python -m app.worker" > /dev/null || exit 1
 
-CMD ["python", "-m", "app.worker"]
+# Use venv Python
+CMD ["/app/.venv/bin/python", "-m", "app.worker"]

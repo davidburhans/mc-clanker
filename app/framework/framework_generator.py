@@ -128,43 +128,7 @@ class StableAudioEngine:
         torch.cuda.empty_cache()
 
 
-class AceStepEngine:
-    def __init__(self, repo_id, lora=None, prompt_template=None, supported_families=None):
-        self.repo_id = repo_id
-        self.lora = lora
-        self.prompt_template = prompt_template or "{timbre_tags} {sub_family} {major_family} loop, {notation_tag}, {fx_tag}, {bpm} bpm, {key}"
-        self.supported_families = supported_families or ["Any"]
-        self.model = None
-        self.device = None
-        self.sample_rate = 44100 # Adjust if ACE-Step uses a different SR natively
-
-    def load(self):
-        print(f"[{self.repo_id}] Loading ACE-Step engine (STUB). Lora: {self.lora}")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = "STUB_MODEL"
-        # Full implementation would load the ACE-Step foundation model and apply LoRA
-
-    def generate_batch(self, requests, bpm, cfg_scale=7.0, steps=50):
-        if self.model is None:
-            raise RuntimeError(f"[{self.repo_id}] Model not loaded.")
-            
-        results = []
-        for i, req in enumerate(requests):
-            text_prompt = req['prompt']
-            print(f"[{self.repo_id}] Generating stem {i+1}/{len(requests)}: '{text_prompt}' (STUB)...")
-            
-            # Generate silence as a stub
-            num_samples = int(req['duration'] * self.sample_rate)
-            audio_data = np.zeros((num_samples, 2), dtype=np.float32)
-            results.append(audio_data)
-            
-        return results, self.sample_rate
-
-    def unload(self):
-        if self.model is None:
-            return
-        self.model = None
-        torch.cuda.empty_cache()
+# AceStepEngine removed (Audit 1.1)
 
 
 class GeneratorRegistry:
@@ -195,13 +159,6 @@ class GeneratorRegistry:
                     repo_id=model_info.get("repo_id"),
                     filename=model_info.get("filename", "Foundation_1.safetensors"),
                     config_filename=model_info.get("config_filename", "model_config.json"),
-                    prompt_template=model_info.get("prompt_template"),
-                    supported_families=model_info.get("supported_families")
-                )
-            elif engine_type == "ace_step":
-                engine = AceStepEngine(
-                    repo_id=model_info.get("repo_id"),
-                    lora=model_info.get("lora"),
                     prompt_template=model_info.get("prompt_template"),
                     supported_families=model_info.get("supported_families")
                 )
@@ -410,9 +367,9 @@ class GeneratorRegistry:
         Raises:
             RuntimeError: If no models are available
         """
-        # Calculate duration from bars and bpm
+        # Calculate duration from bars and bpm (4/4 time assumed)
         beats_per_second = bpm / 60.0
-        duration = bars / beats_per_second
+        duration = (bars * 4) / beats_per_second  # bars × 4 beats/bar ÷ beats/s
 
         # Build request dict
         request = [{

@@ -1,63 +1,44 @@
 # docker/Dockerfile.web - FastAPI web application (CPU-only)
-# Multi-stage build: build stage installs deps, runtime stage is minimal
-# Serves HTTP/WebSocket API, does not need GPU
+# Single-stage: slim Python + uv-managed venv from pyproject.toml
 
-# =============================================================================
-# Build stage - install all Python dependencies
-# =============================================================================
-FROM python:3.10-slim AS builder
+FROM python:3.10-slim-bookworm
 
-ENV PYTHONUNBUFFERED=1
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install uv for fast dependency resolution
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-# Install Python dependencies into /install (cached until requirements.txt changes)
-COPY requirements.txt .
-RUN uv pip install --system --prefix=/install -r requirements.txt
-
-# =============================================================================
-# Runtime stage - minimal image
-# =============================================================================
-FROM python:3.10-slim
-
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Install only runtime dependencies
+# Install system packages first (shared base for all Python images)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 ffmpeg && \
+    ffmpeg libpq5 curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages from builder
-COPY --from=builder /install /usr/local
+# Install uv (layer cached unless uv version changes)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy app code (this layer changes most often, will be cached separately)
+# Create virtual environment and install dependencies
+# - uv venv creates .venv in /app
+# - uv sync installs locked deps into the venv
+COPY uv.lock pyproject.toml ./
+RUN uv venv /app/.venv && \
+    uv sync --frozen
+
+# Copy source (this layer changes most often)
 COPY app/ ./app/
 COPY config/ ./config/
 COPY static/ ./static/
 COPY migrations/ ./migrations/
-COPY tests/ ./tests/
 
-# Create exports directory
-RUN mkdir -p /exports/shows
+# Create exports directory and non-root user
+RUN mkdir -p /exports/shows && \
+    useradd -m -u 1000 appuser
 
-# Create non-root user
-RUN useradd -m -u 1000 appuser
 USER appuser
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/api/health')" || exit 1
 
-# Default command - run the FastAPI app
-CMD ["uvicorn", "app.app_ui:app", "--host", "0.0.0.0", "--port", "7860"]
+# Use venv Python
+CMD ["/app/.venv/bin/python", "-m", "uvicorn", "app.app_ui:app", "--host", "0.0.0.0", "--port", "7860"]

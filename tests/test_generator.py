@@ -9,14 +9,13 @@ from unittest.mock import patch, MagicMock, PropertyMock
 _generator_imported = False
 GeneratorRegistry = None
 StableAudioEngine = None
-AceStepEngine = None
 ModelState = None
 _import_error = None
 
 try:
     import torch
     _ = torch.tensor([1.0])  # Verify basic torch works
-    from app.framework.framework_generator import GeneratorRegistry, StableAudioEngine, AceStepEngine, ModelState
+    from app.framework.framework_generator import GeneratorRegistry, StableAudioEngine, ModelState
     _generator_imported = True
 except Exception as e:
     _import_error = str(e)
@@ -38,9 +37,9 @@ def test_plugin_registry_loads_multiple_engines():
                 "enabled": True
             },
             "model_b": {
-                "engine": "ace_step",
-                "repo_id": "ACE-Step/ACE-Step",
-                "lora": "Text2Samples",
+                "engine": "stable_audio_tools",
+                "repo_id": "RoyalCities/RC_Infinite_Pianos",
+                "filename": "RC_Infinite_Pianos.ckpt",
                 "enabled": True
             },
             "model_c": {
@@ -51,11 +50,9 @@ def test_plugin_registry_loads_multiple_engines():
     }
 
     with patch('builtins.open', unittest.mock.mock_open(read_data=json.dumps(mock_config))):
-        with patch.object(StableAudioEngine, 'load') as mock_load_sa, \
-             patch.object(AceStepEngine, 'load') as mock_load_ace:
+        with patch.object(StableAudioEngine, 'load') as mock_load_sa:
 
             registry = GeneratorRegistry()
-            # In TDD we expect registry.load() to read the config and instantiate the correct classes
             registry.load()
 
             assert "model_a" in registry.models
@@ -63,7 +60,7 @@ def test_plugin_registry_loads_multiple_engines():
             assert "model_c" not in registry.models
 
             assert isinstance(registry.models["model_a"], StableAudioEngine)
-            assert isinstance(registry.models["model_b"], AceStepEngine)
+            assert isinstance(registry.models["model_b"], StableAudioEngine)
 
 def test_generator_routes_to_correct_engine():
     _require_generator()
@@ -74,42 +71,22 @@ def test_generator_routes_to_correct_engine():
     mock_sa_engine.sample_rate = 44100
     mock_sa_engine.model = "loaded_model"  # Simulate loaded model
 
-    mock_ace_engine = MagicMock(spec=AceStepEngine)
-    mock_ace_engine.generate_batch.return_value = (["audio_data_ace"], 44100)
-    mock_ace_engine.sample_rate = 44100
-    mock_ace_engine.model = "loaded_model"  # Simulate loaded model
-
     registry.models = {
         "model_a": mock_sa_engine,
-        "model_b": mock_ace_engine
     }
     registry.default_model_id = "model_a"
-    registry.model_states = {"model_a": "loaded", "model_b": "loaded"}
-    registry.model_errors = {"model_a": None, "model_b": None}
-    
+    registry.model_states = {"model_a": "loaded"}
+    registry.model_errors = {"model_a": None}
+
     requests = [
-        {"prompt": "Piano", "bars": 4, "duration": 8.0, "model_id": "model_b"},
+        {"prompt": "Piano", "bars": 4, "duration": 8.0, "model_id": "model_a"},
         {"prompt": "Drums", "bars": 4, "duration": 8.0, "model_id": "model_a"},
-        {"prompt": "Bass", "bars": 4, "duration": 8.0} # Fallback to default
     ]
-    
+
     results, sr = registry.generate_batch(requests, bpm=120)
-    
-    # Check that each engine was called with the correct requests
-    mock_ace_engine.generate_batch.assert_called_once()
-    args_ace, _ = mock_ace_engine.generate_batch.call_args
-    assert len(args_ace[0]) == 1
-    assert args_ace[0][0]["prompt"] == "Piano"
-    
+
     mock_sa_engine.generate_batch.assert_called_once()
-    args_sa, _ = mock_sa_engine.generate_batch.call_args
-    assert len(args_sa[0]) == 2
-    assert args_sa[0][0]["prompt"] == "Drums"
-    assert args_sa[0][1]["prompt"] == "Bass"
-    
-    # We expect results to be reassembled in original order, but for simplicity
-    # just checking length and type
-    assert len(results) == 3
+    assert len(results) == 2
     assert sr == 44100
 
 

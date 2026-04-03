@@ -1,23 +1,69 @@
 [project]
 name = "mc-clanker"
 version = "0.1.0"
-description = "AI-Powered Continuous Music Generator - A professional DJ-style interface for real-time music generation using Foundation-1"
+description = "AI-Powered Continuous Music Generator — a professional DJ-style interface for real-time music generation using Foundation-1"
 readme = "README.md"
 requires-python = ">=3.10"
+
+# Core web-server dependencies (installed in all environments)
 dependencies = [
-    "stable-audio-tools==0.0.19",
-    "scipy",
-    "sounddevice",
-    "fastapi",
-    "uvicorn[standard]",
-    "pydantic",
-    "huggingface_hub",
-    "safetensors",
-    "openai",
-    "numpy",
+    # Web framework
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "starlette>=0.35.0",
+
+    # Database
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+
+    # Async PostgreSQL (used by job_waiter, worker, onboarding)
+    "asyncpg>=0.28.0",
+
+    # Object storage
+    "boto3>=1.34.0",
+    "botocore>=1.34.0",
+
+    # Auth
+    "bcrypt>=4.0.0",
+    "PyJWT>=2.8.0",
+
+    # HTTP client (used by onboarding llm check)
+    "httpx>=0.25.0",
+
+    # Schema validation
+    "pydantic[email]>=2.0.0",
+
+    # OpenAI-compatible LLM client
+    "openai>=1.0.0",
+
+    # Audio/scientific
+    "numpy>=1.23.5",
+    "scipy>=1.12.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest",
+[dependency-groups]
+# GPU worker process (needs torch + CUDA stack)
+worker = [
+    "torch>=2.0.0",
+    "stable-audio-tools==0.0.19",
+    "huggingface_hub>=0.20.0",
+    "safetensors>=0.4.0",
 ]
+
+# Development / testing
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+    "httpx>=0.25.0",
+    "ruff>=0.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

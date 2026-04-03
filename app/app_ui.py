@@ -12,7 +12,7 @@ import uuid
 
 from app.framework.framework_state import state
 from app.framework.framework_main_async import run_framework_loop_async
-from app.api_routes import router as api_router
+from app.routes import api_router
 from contextlib import asynccontextmanager, suppress
 import atexit
 
@@ -60,6 +60,12 @@ async def lifespan(app: FastAPI):
     from app.db import DatabaseManager
     db_manager = DatabaseManager.get_instance()
     db_manager.create_tables()
+
+    # Ensure MinIO bucket exists
+    print("FASTAPI LIFESPAN: Ensuring MinIO bucket exists...")
+    from app.garage_client import create_garage_client_from_env
+    garage = create_garage_client_from_env()
+    await garage.ensure_bucket_exists()
 
     print("FASTAPI LIFESPAN: Running onboarding checks...")
     try:
@@ -115,7 +121,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Import here to avoid circular imports
         from app.auth import decode_token
         from app.db import DatabaseManager
-        from app.models import Show
+        from app.models import Show, User
 
         auth_header = request.headers.get("Authorization")
         current_user = None
@@ -241,6 +247,7 @@ class SessionAffinityMiddleware(BaseHTTPMiddleware):
         "/",
         "/dj",
         "/dj/",
+        "/listen",
         "/stream.mp3",
         "/index.html",
         "/styles.css",
@@ -343,16 +350,10 @@ app.add_middleware(SessionAffinityMiddleware)
 app.include_router(api_router)
 
 # Mount static files for DJ UI
-static_dir = os.path.join(
-    os.path.abspath(os.path.dirname(__file__)), "static", "mc-clanker"
-)
+# __file__ is /app/app/app_ui.py, so go up two levels to /app
+static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "mc-clanker")
 if os.path.exists(static_dir):
     app.mount("/dj", StaticFiles(directory=static_dir, html=True), name="dj_ui")
-
-
-@app.get("/dj")
-def redirect_to_dj_slash():
-    return RedirectResponse(url="/dj/")
 
 
 @app.get("/setup")
@@ -360,7 +361,7 @@ def serve_setup():
     """Serve the setup/onboarding wizard."""
     import pathlib
     setup_path = os.path.join(
-        os.path.abspath(os.path.dirname(__file__)), "static", "mc-clanker", "setup.html"
+        os.path.dirname(os.path.dirname(__file__)), "static", "mc-clanker", "setup.html"
     )
     if os.path.exists(setup_path):
         from fastapi.responses import FileResponse
@@ -461,11 +462,14 @@ def audio_stream_generator():
     ]
 
     print(f"Starting audio stream with ffmpeg: {' '.join(ffmpeg_cmd)}")
+    # Use DEVNULL for stderr to prevent pipe buffer deadlocks (fix 3.4).
+    # FFmpeg writes metadata/stats to stderr; with a pipe the buffer can fill
+    # and deadlock the encoder if no one drains it.  We don't need stderr output.
     process = subprocess.Popen(
         ffmpeg_cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
 
     # Pre-feed the first chunk we already received
@@ -487,10 +491,7 @@ def audio_stream_generator():
                         print("DEBUG: Feeder received poison pill")
                         break
                     if process.poll() is not None:
-                        stderr = (
-                            process.stderr.read().decode() if process.stderr else ""
-                        )
-                        print(f"FFmpeg process died. stderr: {stderr}")
+                        print(f"FFmpeg process died with code {process.returncode}")
                         break
                     process.stdin.write(chunk)
                     process.stdin.flush()
@@ -506,9 +507,6 @@ def audio_stream_generator():
                 process.stdin.close()
             except Exception:
                 pass
-            stderr = process.stderr.read().decode() if process.stderr else ""
-            if stderr:
-                print(f"FFmpeg stderr: {stderr}")
 
     # Register for cleanup
     state.register_subprocess(process)
@@ -556,12 +554,10 @@ def stream_mp3():
 
 
 
-# Mount static files for Audience UI at root
-audience_dir = os.path.join(
-    os.path.abspath(os.path.dirname(__file__)), "static", "audience"
-)
+# Mount static files for Audience UI at /listen (not / to avoid shadowing /dj)
+audience_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "audience")
 if os.path.exists(audience_dir):
-    app.mount("/", StaticFiles(directory=audience_dir, html=True), name="audience_ui")
+    app.mount("/listen", StaticFiles(directory=audience_dir, html=True), name="audience_ui")
 
 
 if __name__ == "__main__":

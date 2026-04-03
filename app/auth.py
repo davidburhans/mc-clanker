@@ -1,19 +1,66 @@
+"""auth.py — JWT + HTTP Basic authentication for mc-clanker.
+
+Security fixes applied:
+- JWT_SECRET auto-generates a random ephemeral secret if the env var is
+  missing or is a known-weak value (2.1).
+- Password comparisons use hmac.compare_digest instead of == to prevent
+  timing attacks (2.2).
+- User model imported in module scope to fix NameError in AuthMiddleware (1.1).
+"""
+
+import hmac
+import logging
 import os
-import bcrypt
-import jwt
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+import bcrypt
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.db import DatabaseManager
-from app.models import User
+from app.models import User  # required — was missing, caused NameError in AuthMiddleware
 
+log = logging.getLogger(__name__)
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "change-me-in-production")
+# ---------------------------------------------------------------------------
+# JWT configuration
+# ---------------------------------------------------------------------------
+
+_WEAK_SECRETS = {
+    "change-me-in-production",
+    "secret",
+    "changeme",
+    "password",
+    "123456",
+    "",
+}
+
+_raw_secret = os.environ.get("JWT_SECRET", "")
+if not _raw_secret or _raw_secret.lower() in _WEAK_SECRETS:
+    JWT_SECRET = secrets.token_urlsafe(48)
+    if _raw_secret:
+        log.warning(
+            "JWT_SECRET is a known-weak value; using auto-generated ephemeral "
+            "secret for this session. Set JWT_SECRET in your environment."
+        )
+    else:
+        log.warning(
+            "JWT_SECRET is not set; using auto-generated ephemeral secret. "
+            "Tokens will be invalidated on restart. Set JWT_SECRET to persist sessions."
+        )
+else:
+    JWT_SECRET = _raw_secret
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
+
+# ---------------------------------------------------------------------------
+# Password helpers
+# ---------------------------------------------------------------------------
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt."""
@@ -22,8 +69,15 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify a password against its bcrypt hash."""
-    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except Exception:
+        return False
 
+
+# ---------------------------------------------------------------------------
+# JWT helpers
+# ---------------------------------------------------------------------------
 
 def create_access_token(user_id: int) -> str:
     """Generate a JWT token for a user."""
@@ -36,42 +90,60 @@ def create_access_token(user_id: int) -> str:
 
 
 def decode_token(token: str) -> Optional[dict]:
-    """Decode and validate a JWT token."""
+    """Decode and validate a JWT token. Returns None on any failure."""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:
         return None
 
 
-def get_current_user(
-    credentials: Optional[HTTPBasicCredentials] = Depends(HTTPBasic(auto_error=False))
-) -> Optional[User]:
-    """
-    Dependency that extracts the current user from JWT Bearer token or HTTP Basic auth.
-    Returns None if no valid auth is provided (for routes that allow anonymous access).
-    Raises HTTPException if credentials are invalid.
-    """
+# ---------------------------------------------------------------------------
+# Compat pseudo-users for env-var password auth (backwards compatibility)
+# ---------------------------------------------------------------------------
 
-    # This is called as a dependency but we need to check Bearer token too
-    # We'll handle this differently - see get_current_user_from_request
-    return None
+class CompatUser:
+    """Pseudo-user for backwards-compatible DJ Basic-auth sessions."""
+    id = 0
+    username = "djCompat"
+    email = "compat@local"
+    is_active = True
+
+    def to_dict(self):
+        return {"id": 0, "username": "djCompat", "email": "compat@local"}
 
 
-def get_current_user_from_request(request) -> Optional[User]:
+class CompatAudUser:
+    """Pseudo-user for backwards-compatible audience Basic-auth sessions."""
+    id = -1
+    username = "audienceCompat"
+    email = "audience@local"
+    is_active = True
+
+    def to_dict(self):
+        return {"id": -1, "username": "audienceCompat"}
+
+
+# ---------------------------------------------------------------------------
+# Request-level auth extraction
+# ---------------------------------------------------------------------------
+
+def get_current_user_from_request(request) -> Optional[object]:
+    """Extract and validate user from request.
+
+    Priority:
+      1. Authorization: Bearer <jwt>  — full user from DB
+      2. Authorization: Basic <creds> — env-var compat user
+      3. No auth configured          — anonymous (None)
+
+    Raises HTTPException(401) if credentials are present but invalid.
     """
-    Extract and validate user from request.
-    Checks Authorization: Bearer <token> header first, then falls back to HTTP Basic.
-    Falls back to env var passwords if no JWT provided (backwards compatibility).
-    Returns None if no valid auth, raises HTTPException if invalid.
-    """
-    from app.framework.framework_state import state
+    from app.framework.framework_state import state  # late import avoids circular dep
 
     auth_header = request.headers.get("Authorization")
 
-    # Try JWT Bearer token first
+    # 1. JWT Bearer token
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header[7:]
         payload = decode_token(token)
@@ -82,22 +154,21 @@ def get_current_user_from_request(request) -> Optional[User]:
                 user = session.query(User).filter(User.id == user_id).first()
                 if user and user.is_active:
                     return user
-        # Invalid or expired token
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Fall back to HTTP Basic auth
-    dj_pass = getattr(state, "dj_password", "")
-    aud_pass = getattr(state, "audience_password", "")
+    # 2. HTTP Basic auth (env-var compat)
+    dj_pass = getattr(state, "dj_password", "") or ""
+    aud_pass = getattr(state, "audience_password", "") or ""
 
     if not dj_pass and not aud_pass:
-        # No auth configured - allow anonymous
+        # No passwords configured — anonymous access allowed
         return None
 
-    provided_pass = None
+    provided_pass: Optional[str] = None
     if auth_header and auth_header.startswith("Basic "):
         import base64
         try:
@@ -107,31 +178,29 @@ def get_current_user_from_request(request) -> Optional[User]:
         except Exception:
             pass
 
-    if provided_pass == dj_pass:
-        # Create a pseudo-user for backwards compatibility
-        class CompatUser:
-            id = 0
-            username = "djCompat"
-            email = "compat@local"
-            is_active = True
+    if provided_pass is None:
+        return None
 
-            def to_dict(self):
-                return {"id": 0, "username": "djCompat", "email": "compat@local"}
-
+    # Use constant-time comparison to prevent timing attacks (fix 2.2)
+    if dj_pass and hmac.compare_digest(provided_pass, dj_pass):
         return CompatUser()
 
-    if provided_pass == aud_pass:
-        class CompatAudUser:
-            id = -1  # Special ID for audience compat
-            username = "audienceCompat"
-            email = "audience@local"
-            is_active = True
-
-            def to_dict(self):
-                return {"id": -1, "username": "audienceCompat"}
-
+    if aud_pass and hmac.compare_digest(provided_pass, aud_pass):
         return CompatAudUser()
 
+    return None
+
+
+# ---------------------------------------------------------------------------
+# FastAPI dependencies
+# ---------------------------------------------------------------------------
+
+def get_current_user(
+    credentials: Optional[HTTPBasicCredentials] = Depends(HTTPBasic(auto_error=False))
+) -> Optional[User]:
+    """FastAPI dependency — exists for route signature compatibility.
+    Actual auth is handled by get_current_user_from_request in middleware.
+    """
     return None
 
 
@@ -143,7 +212,7 @@ def get_db():
 
 
 def require_auth(user=None):
-    """Decorator-style dependency that requires authentication."""
+    """Raise 401 if user is None."""
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

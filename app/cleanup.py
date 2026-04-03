@@ -95,47 +95,43 @@ class JobExpirationCleanup:
         """
         Run a single cleanup cycle.
 
+        Atomically deletes expired jobs and collects their audio paths in one
+        CTE so we never query rows that were already deleted.
+
         Returns:
             Number of jobs cleaned up
         """
-        deleted_audio_paths: List[str] = []
-
         async with self.db.acquire() as conn:
-            # Delete expired jobs and get their audio paths
-            deleted_count = await conn.fetchval("""
+            # Single CTE: DELETE and return audio_path in one round-trip.
+            # This avoids the race where a separate SELECT finds nothing after
+            # the DELETE has already removed the rows.
+            rows = await conn.fetch("""
                 WITH deleted AS (
                     DELETE FROM generator_jobs
                     WHERE status IN ('completed', 'failed', 'expired')
                       AND expires_at < NOW()
                     RETURNING audio_path
                 )
-                SELECT COUNT(*) FROM deleted
+                SELECT audio_path FROM deleted WHERE audio_path IS NOT NULL
             """)
 
-            # Get audio paths to delete (only those with valid paths)
-            async with self.db.acquire() as conn2:
-                audio_paths = await conn2.fetch("""
-                    SELECT audio_path FROM generator_jobs
-                    WHERE status IN ('completed', 'failed', 'expired')
-                      AND expires_at < NOW()
-                      AND audio_path IS NOT NULL
-                """)
-
-            deleted_audio_paths = [row['audio_path'] for row in audio_paths]
+        deleted_audio_paths = [row["audio_path"] for row in rows]
+        deleted_count = len(rows)
 
         # Delete audio files from Garage (outside transaction)
         if self.garage and deleted_audio_paths:
             for audio_path in deleted_audio_paths:
                 try:
                     await self.garage.delete_object(audio_path)
-                    logger.debug(f"Deleted audio: {audio_path}")
+                    logger.debug("Deleted audio: %s", audio_path)
                 except Exception as e:
-                    logger.warning(f"Failed to delete audio {audio_path}: {e}")
+                    logger.warning("Failed to delete audio %s: %s", audio_path, e)
 
         if deleted_count > 0:
-            logger.info(f"Cleaned up {deleted_count} expired jobs")
+            logger.info("Cleaned up %d expired jobs", deleted_count)
 
         return deleted_count
+
 
     def stop(self):
         """Stop the cleanup loop."""
