@@ -918,6 +918,7 @@ class DJSlopApp {
     }
 
     play() {
+        console.log('[DJ-UI] play() called, isGenerating will be set to true');
         this.state.isPlaying = true;
         this.updatePlayButton();
         this.setStatus('connecting');
@@ -967,6 +968,7 @@ class DJSlopApp {
     }
 
     pause() {
+        console.log('[DJ-UI] pause() called, isGenerating will be set to false');
         this.state.isPlaying = false;
         this.updatePlayButton();
         this.setStatus('paused');
@@ -1681,6 +1683,13 @@ class DJSlopApp {
             const response = await fetch('/api/state');
             if (response.ok) {
                 const data = await response.json();
+                const prevGenerating = this.state.isPlaying;
+                const nowGenerating = data.is_generating || false;
+
+                // Log state changes with timestamps
+                if (prevGenerating !== nowGenerating) {
+                    console.log(`[DJ-UI] pollState: is_generating changed ${prevGenerating} -> ${nowGenerating} at ${Date.now()}`);
+                }
 
                 // Check if anything meaningful changed before updating UI
                 const hasChanged =
@@ -1698,8 +1707,7 @@ class DJSlopApp {
 
                 if (hasChanged) {
                     this.updateUIFromState(data);
-                    // Also refresh mixer data (volume, mute, solo)
-                    await this.loadModelsConfig();
+                    // Mixer data (volumes, mute, solo) is included in /api/state response
                     this.updateStemMixer();
                 }
 

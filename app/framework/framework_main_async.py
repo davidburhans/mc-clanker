@@ -231,8 +231,25 @@ class AsyncFrameworkLoop:
                 if not self.running or state.shutdown_event.is_set():
                     break
 
+                # Double-check: is_generating might have gone False while we were waiting
+                async with state.lock:
+                    still_generating = state.is_generating
+
+                if not still_generating:
+                    print(f"[AsyncLoop-{loop_idx or 1}] Stop detected before LLM call, returning to wait")
+                    continue
+
+                # After exiting wait loop, log why we exited
+                async with state.lock:
+                    current_gen = state.is_generating
+                print(f"[AsyncLoop-{loop_idx}] Exited is_generating wait: is_generating={current_gen}")
+
                 loop_idx += 1
                 print(f"\n[AsyncLoop-{loop_idx}] Starting loop...")
+                async with state.lock:
+                    debug_gen = state.is_generating
+                    debug_run = state.is_running
+                print(f"[AsyncLoop-{loop_idx}] DEBUG: is_generating={debug_gen}, is_running={debug_run}")
 
                 # PRE-GENERATION PIPELINE: Check if we already have pre-generated results
                 # from the previous iteration's background task
@@ -263,7 +280,14 @@ class AsyncFrameworkLoop:
                     # Skip to the section after job submission
                     goto_step_9 = True
                 else:
-                    print(f"[AsyncLoop-{loop_idx}] Requesting track state from LLM Conductor...")
+                    async with state.lock:
+                        will_call_llm = state.is_generating
+                    if will_call_llm:
+                        print(f"[AsyncLoop-{loop_idx}] Requesting track state from LLM Conductor...")
+                    else:
+                        print(f"[AsyncLoop-{loop_idx}] Skipping LLM call: is_generating={state.is_generating}")
+                        # Instead of proceeding, go back to waiting
+                        continue
                     goto_step_9 = False
 
                 # Step 1: Build Conductor prompt (only if not using pre-gen)
