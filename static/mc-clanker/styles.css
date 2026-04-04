@@ -327,7 +327,6 @@ body::after {
     margin: 0;
     line-height: 1;
     transition: all 0.3s ease;
-    animation: logoBreathe 4s ease-in-out infinite;
 }
 
 @keyframes logoBreathe {
@@ -384,7 +383,6 @@ body::after {
     border-radius: 50%;
     background: var(--amber-glow);
     box-shadow: 0 0 10px var(--amber-glow);
-    animation: ledPulse 1.5s ease-in-out infinite;
 }
 
 .loop-label {
@@ -453,7 +451,6 @@ body::after {
     border-radius: 50%;
     background: var(--led-red);
     box-shadow: 0 0 8px var(--led-red), 0 0 16px var(--led-red);
-    animation: ledPulse 1.5s ease-in-out infinite;
 }
 
 @keyframes ledPulse {
@@ -470,13 +467,11 @@ body::after {
 .status.connected.paused::before {
     background: var(--amber-glow);
     box-shadow: 0 0 8px var(--amber-glow);
-    animation: ledPulse 2s ease-in-out infinite;
 }
 
 .status.connecting::before {
     background: var(--amber-glow);
     box-shadow: 0 0 8px var(--amber-glow);
-    animation: ledBlink 0.5s ease-in-out infinite;
 }
 
 @keyframes ledBlink {
@@ -918,24 +913,18 @@ body::after {
 
 /* ========== GENERATING STATE ========== */
 .generating-indicator {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 16px;
-    padding: 32px 48px;
+    gap: 12px;
+    padding: 10px 18px;
     background: rgba(8, 8, 18, 0.95);
     border: 1px solid var(--amber-dim);
-    border-radius: 24px;
+    border-radius: 14px;
     z-index: 20;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.3s ease;
-    backdrop-filter: blur(12px);
-    box-shadow: 0 0 60px rgba(255, 170, 0, 0.15), 0 20px 60px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 0 30px rgba(255, 170, 0, 0.15), 0 4px 20px rgba(0, 0, 0, 0.4);
 }
 
 .generating-indicator.visible {
@@ -946,8 +935,8 @@ body::after {
 /* Concentric ring generator */
 .generating-rings {
     position: relative;
-    width: 100px;
-    height: 100px;
+    width: 40px;
+    height: 40px;
 }
 
 .generating-ring {
@@ -959,27 +948,27 @@ body::after {
 }
 
 .generating-ring:nth-child(1) {
-    width: 100px;
-    height: 100px;
-    margin: -50px 0 0 -50px;
+    width: 40px;
+    height: 40px;
+    margin: -20px 0 0 -20px;
     border-top-color: var(--amber-glow);
     border-right-color: var(--amber-dim);
     animation: spinClockwise 1.5s linear infinite;
 }
 
 .generating-ring:nth-child(2) {
-    width: 76px;
-    height: 76px;
-    margin: -38px 0 0 -38px;
+    width: 30px;
+    height: 30px;
+    margin: -15px 0 0 -15px;
     border-bottom-color: var(--cyan-glow);
     border-left-color: var(--cyan-dim);
     animation: spinCounterClockwise 1.2s linear infinite;
 }
 
 .generating-ring:nth-child(3) {
-    width: 52px;
-    height: 52px;
-    margin: -26px 0 0 -26px;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
     border-top-color: var(--magenta-pulse);
     border-right-color: var(--magenta-dim);
     animation: spinClockwise 0.9s linear infinite;
@@ -987,27 +976,27 @@ body::after {
 
 .generating-core {
     position: absolute;
-    width: 28px;
-    height: 28px;
+    width: 10px;
+    height: 10px;
     top: 50%;
     left: 50%;
-    margin: -14px 0 0 -14px;
+    margin: -5px 0 0 -5px;
     background: radial-gradient(circle, var(--amber-glow) 0%, var(--amber-dim) 100%);
     border-radius: 50%;
-    box-shadow: 0 0 20px var(--amber-glow), 0 0 40px rgba(255, 170, 0, 0.5);
+    box-shadow: 0 0 12px var(--amber-glow), 0 0 24px rgba(255, 170, 0, 0.5);
     animation: corePulse 1s ease-in-out infinite;
 }
 
 /* Orbiting particles */
 .generating-particle {
     position: absolute;
-    width: 6px;
-    height: 6px;
+    width: 4px;
+    height: 4px;
     background: var(--amber-glow);
     border-radius: 50%;
     top: 50%;
     left: 50%;
-    box-shadow: 0 0 8px var(--amber-glow);
+    box-shadow: 0 0 6px var(--amber-glow);
 }
 
 .generating-particle:nth-child(5) {
@@ -1017,25 +1006,25 @@ body::after {
 .generating-particle:nth-child(6) {
     animation: orbitParticle 2s linear infinite 0.5s;
     background: var(--cyan-glow);
-    box-shadow: 0 0 8px var(--cyan-glow);
+    box-shadow: 0 0 6px var(--cyan-glow);
 }
 
 .generating-particle:nth-child(7) {
     animation: orbitParticle 2s linear infinite 1s;
     background: var(--magenta-pulse);
-    box-shadow: 0 0 8px var(--magenta-pulse);
+    box-shadow: 0 0 6px var(--magenta-pulse);
 }
 
 @keyframes orbitParticle {
     0% {
-        transform: rotate(0deg) translateX(45px) rotate(0deg);
+        transform: rotate(0deg) translateX(18px) rotate(0deg);
         opacity: 1;
     }
     50% {
         opacity: 0.5;
     }
     100% {
-        transform: rotate(360deg) translateX(45px) rotate(-360deg);
+        transform: rotate(360deg) translateX(18px) rotate(-360deg);
         opacity: 1;
     }
 }
@@ -1061,11 +1050,11 @@ body::after {
 
 .generating-text {
     font-family: 'Syne', sans-serif;
-    font-size: 0.8rem;
-    letter-spacing: 4px;
+    font-size: 0.65rem;
+    letter-spacing: 3px;
     text-transform: uppercase;
     color: var(--amber-glow);
-    text-shadow: 0 0 20px rgba(255, 170, 0, 0.8);
+    text-shadow: 0 0 15px rgba(255, 170, 0, 0.8);
     animation: textPulse 1.5s ease-in-out infinite;
 }
 
@@ -1076,7 +1065,7 @@ body::after {
 
 .generating-label {
     font-family: 'Fira Code', monospace;
-    font-size: 0.65rem;
+    font-size: 0.55rem;
     color: var(--text-dim);
     letter-spacing: 1px;
 }
@@ -1495,6 +1484,7 @@ body::after {
     flex-direction: column;
     align-items: center;
     gap: 8px;
+    z-index: 100;
 }
 
 .rotary-key-selector {
@@ -2212,7 +2202,6 @@ select option {
 .status-badge.active .badge-dot {
     background: var(--amber-glow);
     box-shadow: 0 0 8px var(--amber-glow);
-    animation: ledPulse 1.5s ease-in-out infinite;
 }
 
 .status-badge.success {
@@ -3647,7 +3636,6 @@ select option {
     background: linear-gradient(135deg, var(--amber-glow) 0%, var(--amber-hot) 100%);
     color: var(--bg-deep);
     box-shadow: 0 4px 25px rgba(255, 170, 0, 0.5), 0 2px 10px rgba(0, 0, 0, 0.3);
-    animation: startShowPulse 2s ease-in-out infinite;
 }
 
 .show-btn.start-show::before {
@@ -3846,7 +3834,7 @@ select option {
     flex-direction: column;
     gap: 12px;
     padding: 12px;
-    overflow-y: auto;
+    overflow: visible;
     background: linear-gradient(180deg, var(--bg-surface) 0%, rgba(14, 14, 26, 0.4) 100%);
     min-height: 0;
 }
@@ -5832,7 +5820,7 @@ select option {
 .stem-deck {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 10px;
     padding: 6px 8px;
     overflow-y: auto;
     flex: 1;
