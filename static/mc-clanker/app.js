@@ -1039,7 +1039,7 @@ class DJSlopApp {
                 if (btnText) btnText.textContent = 'STARTING...';
             }
 
-            await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_generating: true }) });
+            await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_generating: true, is_show_started: true }) });
             this.state.isShowStarted = true;
             this.updateShowControls();
             this.startShowTimer();
@@ -1093,7 +1093,7 @@ class DJSlopApp {
         if (this.showStatusText) this.showStatusText.textContent = 'Ending broadcast...';
 
         try {
-            await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_generating: false }) });
+            await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_generating: false, is_show_started: false }) });
             this.state.isShowStarted = false;
             this.updateShowControls();
             this.showToast('Show ended - Audience sees waiting screen');
