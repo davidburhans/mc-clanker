@@ -20,7 +20,7 @@ async def get_models():
     with open(config_path, "r") as f:
         config = json.load(f)
     
-    return {"models": config}
+    return config
 
 @router.post("/models")
 async def update_model_config(update: ModelConfigUpdate):
