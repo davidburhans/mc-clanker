@@ -56,6 +56,7 @@ class AudienceApp {
         this.waitingTimerInterval = null;
         this.audioContext = null;
         this.analyser = null;
+        this.gainNode = null;
         this.currentStems = [];
         this.lastVolume = 80;
 
@@ -64,7 +65,7 @@ class AudienceApp {
 
     init() {
         // Initialize audio player
-        this.audioPlayer.volume = this.volumeSlider.value / 100;
+        this.audioPlayer.volume = 1.0; // Fixed - volume controlled via gainNode
         // Don't set src here - only request stream when show is playing
         // This prevents browser from connecting to stream before audio is actually available
         this.updateVolumeFill(this.volumeSlider.value);
@@ -72,7 +73,9 @@ class AudienceApp {
         // Event listeners
         this.playBtn.addEventListener('click', () => this.togglePlay());
         this.volumeSlider.addEventListener('input', (e) => {
-            this.audioPlayer.volume = e.target.value / 100;
+            const vol = e.target.value / 100;
+            this.audioPlayer.volume = 1.0; // Always max on element
+            if (this.gainNode) this.gainNode.gain.value = vol;
             this.volumeValue.textContent = e.target.value;
             this.updateVolumeFill(e.target.value);
         });
@@ -115,6 +118,9 @@ class AudienceApp {
             this.playBtn.classList.remove('playing');
             this.setStatus('paused');
         } else {
+            // Set up audio chain BEFORE playing to ensure analyser is ready
+            this.setupAudio();
+
             // Resume AudioContext if suspended (Chrome autoplay policy)
             if (this.audioContext && this.audioContext.state === 'suspended') {
                 this.audioContext.resume();
@@ -124,25 +130,41 @@ class AudienceApp {
             this.audioPlayer.play().catch(e => console.error("Play error:", e));
             this.isPlaying = true;
             this.playBtn.classList.add('playing');
-            this.setupAudio();
         }
     }
 
     setupAudio() {
+        // If analyser exists and context is running, nothing to do
+        if (this.analyser && this.audioContext && this.audioContext.state !== 'suspended') {
+            return;
+        }
+
+        // If we have a context but no analyser (setup failed before), recreate both
+        if (this.audioContext && !this.analyser) {
+            this.audioContext.close().catch(() => {});
+            this.audioContext = null;
+        }
+
         if (!this.audioContext) {
             try {
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 this.analyser = this.audioContext.createAnalyser();
                 this.analyser.fftSize = 256;
                 this.analyser.smoothingTimeConstant = 0.8;
+                this.gainNode = this.audioContext.createGain();
+                this.gainNode.gain.value = this.volumeSlider.value / 100;
                 const source = this.audioContext.createMediaElementSource(this.audioPlayer);
                 source.connect(this.analyser);
-                this.analyser.connect(this.audioContext.destination);
+                this.analyser.connect(this.gainNode);
+                this.gainNode.connect(this.audioContext.destination);
             } catch (e) {
                 console.error("Analyser setup failed:", e);
+                this.audioContext = null;
+                this.analyser = null;
+                this.gainNode = null;
             }
         } else if (this.audioContext.state === 'suspended') {
-            // If context was suspended, resume it and reconnect source
+            // If context was suspended, resume it
             this.audioContext.resume();
         }
     }
@@ -183,7 +205,8 @@ class AudienceApp {
             if (res.ok) {
                 const data = await res.json();
                 this.updateTrackInfo(data);
-                this.updateStems(data.active_stems || []);
+                // Use currently_playing_stems for accurate "what's actually playing"
+                this.updateStems(data.currently_playing_stems || data.active_stems || []);
                 this.updateShowState(data.is_show_started || false);
 
                 // Check for new DJ message
@@ -340,6 +363,9 @@ class AudienceApp {
                 this.goingLiveOverlay.classList.remove('active');
             }
 
+            // Set up audio chain BEFORE playing to ensure analyser is ready
+            this.setupAudio();
+
             // Resume AudioContext if suspended (Chrome autoplay policy)
             if (this.audioContext && this.audioContext.state === 'suspended') {
                 this.audioContext.resume();
@@ -448,7 +474,8 @@ class AudienceApp {
     }
 
     updateTrackInfo(data) {
-        this.trackName.textContent = data.current_set_name || 'Waiting for stream...';
+        // Use currently_playing_set_name for accurate "what's actually playing"
+        this.trackName.textContent = data.currently_playing_set_name || data.current_set_name || 'Waiting for stream...';
 
         const bpmBadge = document.getElementById('bpm-badge');
         const keyBadge = document.getElementById('key-badge');
@@ -693,8 +720,21 @@ class AudienceApp {
         this.ctx.fillRect(0, 0, width, height);
 
         if (!this.analyser || !this.isPlaying) {
-            // Ambient mode router
-            if (this.currentVizMode === 'starfield') {
+            // Ambient mode router for when audio isn't playing
+            if (this.currentVizMode === 'dual_spectrum') {
+                const emptyData = new Uint8Array(64);
+                this.drawDualSpectrum(emptyData, width, height, 0);
+            } else if (this.currentVizMode === 'mirror_wave') {
+                const emptyTimeData = new Uint8Array(128);
+                emptyTimeData.fill(128);
+                this.drawMirrorWave(emptyTimeData, cx, cy, width, height, 0);
+            } else if (this.currentVizMode === 'inferno') {
+                const emptyData = new Uint8Array(64);
+                this.drawInferno(emptyData, width, height, 0);
+            } else if (this.currentVizMode === 'pixel_grid') {
+                const emptyData = new Uint8Array(64);
+                this.drawPixelGrid(emptyData, width, height, 0);
+            } else if (this.currentVizMode === 'starfield') {
                 const emptyData = new Uint8Array(64);
                 this.drawStarfieldVisualizer(emptyData, cx, cy, width, height, 0);
             } else if (this.currentVizMode === 'osc') {
@@ -745,6 +785,18 @@ class AudienceApp {
             case 'starfield':
                 this.drawStarfieldVisualizer(dataArray, cx, cy, width, height, bassEnergy);
                 break;
+            case 'dual_spectrum':
+                this.drawDualSpectrum(dataArray, width, height, bassEnergy);
+                break;
+            case 'mirror_wave':
+                this.drawMirrorWave(timeData, cx, cy, width, height, bassEnergy);
+                break;
+            case 'inferno':
+                this.drawInferno(dataArray, width, height, bassEnergy);
+                break;
+            case 'pixel_grid':
+                this.drawPixelGrid(dataArray, width, height, bassEnergy);
+                break;
             default:
                 this.drawNeonPulse(dataArray, cx, cy, width, height, bassEnergy);
         }
@@ -758,11 +810,11 @@ class AudienceApp {
 
         // Update VU label based on level
         if (this.vuStatus) {
-            if (vuPercent > 0.7) {
+            if (vuPercent > 0.85) {
                 this.vuStatus.textContent = 'HOT';
-            } else if (vuPercent > 0.4) {
+            } else if (vuPercent > 0.5) {
                 this.vuStatus.textContent = 'OK';
-            } else if (vuPercent > 0.1) {
+            } else if (vuPercent > 0.05) {
                 this.vuStatus.textContent = 'LOW';
             }
         }
@@ -935,6 +987,283 @@ class AudienceApp {
             this.particlesCtx.shadowColor = `hsla(${hue}, 100%, 60%, ${alpha})`;
             this.particlesCtx.fill();
         });
+    }
+
+    // Dual Spectrum - L/R channel bar graph with peak indicators
+    drawDualSpectrum(dataArray, width, height, bassEnergy) {
+        const numBars = 32;
+        const barWidth = Math.floor(width / (numBars * 2 + 1));
+        const gap = barWidth;
+        const maxHeight = height - 20;
+
+        // Initialize peak holders
+        this.leftPeaks = this.leftPeaks || new Array(numBars).fill(0);
+        this.rightPeaks = this.rightPeaks || new Array(numBars).fill(0);
+        this.peakDecay = this.peakDecay || new Array(numBars).fill(0);
+
+        // Left channel (lower half of spectrum)
+        for (let i = 0; i < numBars; i++) {
+            const dataIndex = Math.floor(i * dataArray.length / (numBars * 2));
+            const value = dataArray[dataIndex];
+            const percent = value / 255;
+            const barHeight = Math.max(4, maxHeight * 0.5 * percent);
+
+            const x = gap + i * (barWidth + gap);
+            const y = height / 2 - barHeight;
+
+            // Color gradient from green to yellow to red
+            const hue = 120 - (percent * 120);
+            this.ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+            this.ctx.shadowBlur = 8;
+            this.ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+            this.ctx.fillRect(x, y, barWidth, barHeight);
+
+            // Peak indicator
+            if (barHeight > this.leftPeaks[i]) {
+                this.leftPeaks[i] = barHeight;
+                this.peakDecay[i] = 0;
+            }
+            if (this.leftPeaks[i] > 0) {
+                this.peakDecay[i] += 0.5;
+                if (this.peakDecay[i] > 30) {
+                    this.leftPeaks[i] -= 2;
+                }
+            }
+            this.ctx.fillStyle = `hsl(${hue}, 100%, 70%)`;
+            this.ctx.shadowBlur = 4;
+            this.ctx.fillRect(x, height / 2 - this.leftPeaks[i] - 3, barWidth, 3);
+        }
+
+        // Right channel (upper half of spectrum, mirrored)
+        for (let i = 0; i < numBars; i++) {
+            const dataIndex = Math.floor((i + numBars) * dataArray.length / (numBars * 2));
+            const value = dataArray[dataIndex];
+            const percent = value / 255;
+            const barHeight = Math.max(4, maxHeight * 0.5 * percent);
+
+            const x = gap + i * (barWidth + gap);
+            const y = height / 2;
+
+            const hue = 120 - (percent * 120);
+            this.ctx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+            this.ctx.shadowBlur = 8;
+            this.ctx.shadowColor = `hsl(${hue}, 100%, 50%)`;
+            this.ctx.fillRect(x, y, barWidth, barHeight);
+
+            // Peak indicator
+            if (barHeight > this.rightPeaks[i]) {
+                this.rightPeaks[i] = barHeight;
+                this.peakDecay[i + numBars] = 0;
+            }
+            if (this.rightPeaks[i] > 0) {
+                this.peakDecay[i + numBars] += 0.5;
+                if (this.peakDecay[i + numBars] > 30) {
+                    this.rightPeaks[i] -= 2;
+                }
+            }
+            this.ctx.fillStyle = `hsl(${hue}, 100%, 70%)`;
+            this.ctx.shadowBlur = 4;
+            this.ctx.fillRect(x, height / 2 + this.rightPeaks[i], barWidth, 3);
+        }
+
+        // Center line
+        this.ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, height / 2);
+        this.ctx.lineTo(width, height / 2);
+        this.ctx.stroke();
+    }
+
+    // Mirror Wave - mirrored oscilloscope with glow
+    drawMirrorWave(timeData, cx, cy, width, height, bassEnergy) {
+        // Top half - forward
+        this.ctx.lineWidth = 2;
+        this.ctx.lineJoin = 'round';
+        this.ctx.lineCap = 'round';
+
+        // Glow layers
+        const layers = [
+            { blur: 30, alpha: 0.15, width: 12, color: '0, 255, 136' },
+            { blur: 20, alpha: 0.2, width: 8, color: '0, 255, 136' },
+            { blur: 10, alpha: 0.3, width: 4, color: '0, 255, 200' },
+            { blur: 0, alpha: 0.9, width: 2, color: '255, 255, 255' }
+        ];
+
+        const midY = height * 0.3;
+
+        layers.forEach(layer => {
+            this.ctx.shadowBlur = layer.blur;
+            this.ctx.shadowColor = `rgba(${layer.color}, ${layer.alpha})`;
+            this.ctx.strokeStyle = `rgba(${layer.color}, ${layer.alpha})`;
+            this.ctx.lineWidth = layer.width;
+
+            this.ctx.beginPath();
+            const sliceWidth = width / timeData.length;
+            let x = 0;
+
+            for (let i = 0; i < timeData.length; i++) {
+                const v = timeData[i] / 128.0;
+                const y = midY + (v - 1) * midY * 0.8;
+
+                if (i === 0) this.ctx.moveTo(x, y);
+                else this.ctx.lineTo(x, y);
+                x += sliceWidth;
+            }
+            this.ctx.stroke();
+        });
+
+        // Bottom half - mirrored
+        const midY2 = height * 0.7;
+
+        layers.forEach(layer => {
+            this.ctx.shadowBlur = layer.blur;
+            this.ctx.shadowColor = `rgba(${layer.color}, ${layer.alpha})`;
+            this.ctx.strokeStyle = `rgba(${layer.color}, ${layer.alpha})`;
+            this.ctx.lineWidth = layer.width;
+
+            this.ctx.beginPath();
+            const sliceWidth = width / timeData.length;
+            let x = 0;
+
+            for (let i = 0; i < timeData.length; i++) {
+                const v = timeData[i] / 128.0;
+                const y = midY2 + (1 - v) * midY * 0.8;
+
+                if (i === 0) this.ctx.moveTo(x, y);
+                else this.ctx.lineTo(x, y);
+                x += sliceWidth;
+            }
+            this.ctx.stroke();
+        });
+
+        // Baseline indicators
+        this.ctx.strokeStyle = 'rgba(0, 255, 136, 0.1)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([5, 5]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, midY);
+        this.ctx.lineTo(width, midY);
+        this.ctx.moveTo(0, midY2);
+        this.ctx.lineTo(width, midY2);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+    }
+
+    // Inferno - flame-like visualization rising from bottom
+    drawInferno(dataArray, width, height, bassEnergy) {
+        // Seed the fire array if needed
+        this.fireSeed = this.fireSeed || (() => {
+            const arr = [];
+            for (let i = 0; i < 64; i++) arr.push(Math.random());
+            return arr;
+        })();
+
+        // Propagate fire upward
+        const cols = 64;
+        const rows = 32;
+        this.fireGrid = this.fireGrid || new Array(cols).fill(0).map(() => new Array(rows).fill(0));
+
+        // Map frequency data to fire intensity at base
+        for (let i = 0; i < cols; i++) {
+            const dataIndex = Math.floor(i * dataArray.length / cols);
+            const intensity = dataArray[dataIndex] / 255;
+            this.fireGrid[i][0] = Math.floor(intensity * 28) + Math.floor(bassEnergy * 10);
+        }
+
+        // Spread fire upward
+        for (let y = 1; y < rows; y++) {
+            for (let x = 0; x < cols; x++) {
+                const left = this.fireGrid[(x - 1 + cols) % cols][y - 1];
+                const center = this.fireGrid[x][y - 1];
+                const right = this.fireGrid[(x + 1) % cols][y - 1];
+                const below = this.fireGrid[x][y - 1];
+
+                let avg = (left + center + right + below) / 4;
+                avg -= 0.1 + Math.random() * 0.2;
+                avg = Math.max(0, Math.min(30, avg));
+                this.fireGrid[x][y] = avg;
+            }
+        }
+
+        // Draw fire as pixels
+        const pixelW = width / cols;
+        const pixelH = height / rows;
+
+        for (let y = 0; y < rows; y++) {
+            for (let x = 0; x < cols; x++) {
+                const intensity = this.fireGrid[x][y];
+                if (intensity < 1) continue;
+
+                const t = intensity / 30;
+                // Fire gradient: black -> red -> orange -> yellow -> white
+                let r, g, b;
+                if (t < 0.25) {
+                    r = 255; g = 0; b = 0;
+                } else if (t < 0.5) {
+                    r = 255; g = Math.floor((t - 0.25) * 4 * 165); b = 0;
+                } else if (t < 0.75) {
+                    r = 255; g = 165 + Math.floor((t - 0.5) * 4 * 90); b = Math.floor((t - 0.5) * 4 * 50);
+                } else {
+                    r = 255; g = 255; b = Math.floor((t - 0.75) * 4 * 200);
+                }
+
+                this.ctx.fillStyle = `rgb(${r},${g},${b})`;
+                this.ctx.shadowBlur = pixelW * 0.5;
+                this.ctx.shadowColor = `rgb(${r},${g},${b})`;
+                this.ctx.fillRect(x * pixelW, height - (y + 1) * pixelH, pixelW + 1, pixelH + 1);
+            }
+        }
+    }
+
+    // Pixel Grid - blocky waveform grid
+    drawPixelGrid(dataArray, width, height, bassEnergy) {
+        const gridX = 24;
+        const gridY = 16;
+        const cellW = width / gridX;
+        const cellH = height / gridY;
+        const time = Date.now() * 0.002;
+
+        // Map frequency data to grid
+        for (let y = 0; y < gridY; y++) {
+            for (let x = 0; x < gridX; x++) {
+                const freqIndex = Math.floor((x / gridX) * dataArray.length);
+                const freqValue = dataArray[freqIndex] / 255;
+
+                // Create wave pattern based on time and position
+                const wave = Math.sin(time + x * 0.3 + y * 0.2) * 0.5 + 0.5;
+                const threshold = freqValue * 0.7 + wave * 0.3;
+                const isActive = freqValue > (1 - y / gridY) * 0.3;
+
+                if (isActive) {
+                    const hue = 180 + (x / gridX) * 60; // Cyan to green
+                    const lightness = 30 + freqValue * 50;
+                    const alpha = 0.5 + freqValue * 0.5;
+
+                    this.ctx.fillStyle = `hsla(${hue}, 100%, ${lightness}%, ${alpha})`;
+                    this.ctx.shadowBlur = 10;
+                    this.ctx.shadowColor = `hsla(${hue}, 100%, 50%, 0.8)`;
+                    this.ctx.fillRect(x * cellW + 1, y * cellH + 1, cellW - 2, cellH - 2);
+
+                    // Inner glow for active cells
+                    if (freqValue > 0.5) {
+                        this.ctx.fillStyle = `hsla(${hue}, 100%, 80%, 0.3)`;
+                        this.ctx.fillRect(x * cellW + cellW * 0.2, y * cellH + cellH * 0.2, cellW * 0.6, cellH * 0.6);
+                    }
+                } else {
+                    // Dim inactive cells
+                    this.ctx.fillStyle = 'rgba(20, 30, 40, 0.3)';
+                    this.ctx.shadowBlur = 0;
+                    this.ctx.fillRect(x * cellW + 1, y * cellH + 1, cellW - 2, cellH - 2);
+                }
+            }
+        }
+
+        // Scanline effect
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+        for (let y = 0; y < height; y += 4) {
+            this.ctx.fillRect(0, y, width, 2);
+        }
     }
 
     drawAmbientRadial(cx, cy, radius) {
