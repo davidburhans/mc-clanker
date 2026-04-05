@@ -158,7 +158,6 @@ def test_export_stop(client):
     state.recording_file_path = "/exports/test.wav"
     state.recording_format = "wav"
     state.recording_start_time = time.time() - 10
-    state.recording_chunks = []
 
     with patch("threading.Thread"):
         response = client.post("/api/export/stop")
