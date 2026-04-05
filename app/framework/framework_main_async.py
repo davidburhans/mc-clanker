@@ -263,7 +263,6 @@ class AsyncFrameworkLoop:
                     print(f"[AsyncLoop-{loop_idx}] Using pre-generated audio from background task")
                     print(f"[AsyncLoop-{loop_idx}] DEBUG: pregen_results keys = {list(self._pregen_results.keys()) if self._pregen_results else None}")
                     print(f"[AsyncLoop-{loop_idx}] DEBUG: mixer.current_sample = {self.mixer.current_sample if self.mixer else None}")
-                    print(f"[AsyncLoop-{loop_idx}] Using pre-generated audio from background task")
                     # Use the pre-generated results directly
                     # Extract conductor_response-like data from pre_gen_results
                     conductor_response = {
@@ -531,7 +530,7 @@ class AsyncFrameworkLoop:
                     # Subsequent loops: queue audio without touching current loop boundary.
                     # The mixer will fire the transition when it reaches current_loop_end_sample
                     # and then set the new boundary from duration_samples.
-                    self.mixer.set_next_loop(tracks_to_use, next_loop_duration_samples=duration_samples)
+                    self.mixer.set_next_loop(tracks_to_use, next_loop_duration_samples=duration_samples, loop_idx=loop_idx)
                     with self.mixer.lock:
                         current_loop_end_sample = self.mixer.current_loop_end_sample
 
@@ -543,6 +542,12 @@ class AsyncFrameworkLoop:
 
                 # Step 10: Update state
                 # When using pre-gen, we need to use pregen_results['next_stems'] as our active_stems
+                # For loop_idx == 1 (first loop), record the initial "now playing" state after the
+                # lock releases since record_loop_transition acquires sync_lock.
+                needs_initial_record = False
+                _rec_stems = []
+                _rec_set_name = ""
+                _rec_reasoning = ""
                 if pregen_ready:
                     # Update state from pre-gen results
                     async with state.lock:
@@ -564,6 +569,13 @@ class AsyncFrameworkLoop:
                         state.current_key = self._pregen_results.get('master_key', state.current_key)
                         state.current_set_name = self._pregen_results.get('set_name', 'Unknown Set')
                         state.llm_reasoning = self._pregen_results.get('reasoning', 'No reasoning provided.')
+
+                        # Capture for initial recording (loop_idx == 1 has no mixer transition event)
+                        if loop_idx == 1:
+                            needs_initial_record = True
+                            _rec_stems = list(state.active_stems)
+                            _rec_set_name = state.current_set_name
+                            _rec_reasoning = state.llm_reasoning
 
                         # Take state snapshot for pre-generation (before releasing lock)
                         state_snapshot = {
@@ -594,6 +606,13 @@ class AsyncFrameworkLoop:
                         state.stem_volumes.clear()
                         state.loop_count += 1
 
+                        # Capture for initial recording (loop_idx == 1 has no mixer transition event)
+                        if loop_idx == 1:
+                            needs_initial_record = True
+                            _rec_stems = list(state.active_stems)
+                            _rec_set_name = state.current_set_name
+                            _rec_reasoning = state.llm_reasoning
+
                         # Take state snapshot for pre-generation (before releasing lock)
                         state_snapshot = {
                             'current_bpm': state.current_bpm,
@@ -608,6 +627,10 @@ class AsyncFrameworkLoop:
                                 'model': state.llm_model
                             }
                         }
+
+                # Record initial "now playing" state for first loop (no mixer transition fires for loop 1)
+                if needs_initial_record:
+                    state.record_loop_transition(1, _rec_stems, _rec_set_name, _rec_reasoning)
 
                 # Cache maintenance
                 current_time = time.time()
@@ -642,6 +665,17 @@ class AsyncFrameworkLoop:
                 # Wait for pre-generation to complete (it runs the LLM call for us)
                 if self.running and not state.shutdown_event.is_set():
                     while self.running:
+                        # Check if mixer transitioned to a new loop and record it
+                        transitioned_loop_idx = self.mixer.pop_transition_event()
+                        if transitioned_loop_idx is not None and transitioned_loop_idx > 0:
+                            with state.lock:
+                                state.record_loop_transition(
+                                    transitioned_loop_idx,
+                                    state.active_stems,
+                                    state.current_set_name,
+                                    state.llm_reasoning
+                                )
+
                         # Check if pre-gen is done first
                         if self._pregen_done.is_set():
                             print(f"[AsyncLoop-{loop_idx}] Pre-generation complete, using results")
