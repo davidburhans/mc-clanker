@@ -60,6 +60,7 @@ services:
       - ../exports:/exports:rw
       - ../.env:/app/.env:rw
       - ../app:/app/app:rw
+      - ../config:/app/config:ro
     depends_on:
       postgres:
         condition: service_healthy
