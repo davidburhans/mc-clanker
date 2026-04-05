@@ -1960,10 +1960,13 @@ class DJSlopApp {
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 256;
             this.analyser.smoothingTimeConstant = 0.8;
+            this.gainNode = this.audioContext.createGain();
+            this.gainNode.gain.value = this.state.volume; // Match current volume
 
             this.source = this.audioContext.createMediaElementSource(this.audioPlayer);
             this.source.connect(this.analyser);
-            this.analyser.connect(this.audioContext.destination);
+            this.analyser.connect(this.gainNode);
+            this.gainNode.connect(this.audioContext.destination);
         } catch (e) {
             console.log('Audio analyser setup failed (likely due to autoplay policy):', e);
         }
