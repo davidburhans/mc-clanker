@@ -135,12 +135,12 @@ class AudienceApp {
 
     setupAudio() {
         // If analyser exists and context is running, nothing to do
-        if (this.analyser && this.audioContext && this.audioContext.state !== 'suspended') {
+        if (this.analyser && this.gainNode && this.audioContext && this.audioContext.state !== 'suspended') {
             return;
         }
 
-        // If we have a context but no analyser (setup failed before), recreate both
-        if (this.audioContext && !this.analyser) {
+        // If we have a context but no analyser or gainNode (setup failed before), recreate both
+        if (this.audioContext && (!this.analyser || !this.gainNode)) {
             this.audioContext.close().catch(() => {});
             this.audioContext = null;
         }
