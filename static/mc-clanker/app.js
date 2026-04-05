@@ -22,7 +22,14 @@ class DJSlopApp {
             isEngineRunning: false,
             lastActions: null,
             stemMixerData: [],
-            loopCount: 0
+            loopCount: 0,
+            // Loop sync fields
+            loopHistory: [],                    // Past loops for navigation
+            currentVisibleLoopIndex: 1,         // Which loop DJ is viewing
+            currentlyPlayingLoopIndex: 0,       // Which loop is actually audible
+            currentlyPlayingSetName: '',         // Set name actually playing
+            currentlyPlayingReasoning: '',       // Reasoning actually playing
+            nextQueuedStems: [],                // Next queued stems (planned)
         };
 
         this.recordingStartTime = null;
@@ -31,6 +38,7 @@ class DJSlopApp {
         this.audioContext = null;
         this.analyser = null;
         this.source = null;
+        this.gainNode = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
         this.reconnectDelay = 2000;
@@ -49,6 +57,8 @@ class DJSlopApp {
         this.startPolling();
         this.animateVisualizer();
         this.bindInstrumentRackToggle();
+        this.bindVibeSectionToggle();
+        this.bindInfoPanelCollapsibles();
         this.bindKeyPicker();
         this.bindShowModeToggle();
         this.resizeVisualizer();
@@ -128,6 +138,13 @@ class DJSlopApp {
         this.stemDeck = document.getElementById('stem-deck');
         this.loopCounter = document.getElementById('loop-counter');
         this.headerLoopCounter = document.getElementById('header-loop-counter');
+        this.loopSelector = document.getElementById('loop-selector');
+        this.loopNum = document.getElementById('loop-num');
+        this.loopTotal = document.getElementById('loop-total');
+        this.nowPlayingBadge = document.getElementById('now-playing-badge');
+        this.loopPrevBtn = document.getElementById('loop-prev');
+        this.loopNextBtn = document.getElementById('loop-next');
+        this.jumpToCurrentBtn = document.getElementById('jump-current');
         this.cfgScale = document.getElementById('cfg-scale');
         this.cfgVal = document.getElementById('cfg-val');
         this.stepsRange = document.getElementById('steps-range');
@@ -256,6 +273,17 @@ class DJSlopApp {
             }
         });
 
+        // Loop selector navigation
+        if (this.loopPrevBtn) {
+            this.loopPrevBtn.addEventListener('click', () => this.navigateToLoop(this.state.currentVisibleLoopIndex - 1));
+        }
+        if (this.loopNextBtn) {
+            this.loopNextBtn.addEventListener('click', () => this.navigateToLoop(this.state.currentVisibleLoopIndex + 1));
+        }
+        if (this.jumpToCurrentBtn) {
+            this.jumpToCurrentBtn.addEventListener('click', () => this.jumpToCurrent());
+        }
+
         // Window resize
         window.addEventListener('resize', () => this.resizeVisualizer());
 
@@ -324,6 +352,44 @@ class DJSlopApp {
                 }
             });
         }
+    }
+
+    bindVibeSectionToggle() {
+        const header = document.querySelector('.vibe-section .panel-header');
+        if (header) {
+            header.addEventListener('click', () => this.toggleVibeSection(header));
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    this.toggleVibeSection(header);
+                }
+            });
+        }
+    }
+
+    toggleVibeSection(header) {
+        const section = header.parentElement;
+        const isCollapsed = section.classList.toggle('collapsed');
+        header.setAttribute('aria-expanded', !isCollapsed);
+    }
+
+    bindInfoPanelCollapsibles() {
+        const sections = document.querySelectorAll('.info-panel .panel-header.collapsible');
+        sections.forEach(header => {
+            header.addEventListener('click', () => this.toggleInfoPanelSection(header));
+            header.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    this.toggleInfoPanelSection(header);
+                }
+            });
+        });
+    }
+
+    toggleInfoPanelSection(header) {
+        const section = header.parentElement;
+        const isCollapsed = section.classList.toggle('collapsed');
+        header.setAttribute('aria-expanded', !isCollapsed);
     }
 
     bindKeyPicker() {
@@ -403,7 +469,7 @@ class DJSlopApp {
     }
 
     initAudio() {
-        this.audioPlayer.volume = this.state.volume;
+        this.audioPlayer.volume = 1.0; // Fixed - volume controlled via gainNode
         // Don't set src here - only request stream when user clicks Play
         // This prevents browser from connecting to stream before audio is actually playing
         this.audioPlayer.crossOrigin = 'anonymous';
@@ -664,7 +730,32 @@ class DJSlopApp {
             }
         }
 
-
+        // Loop sync fields — currently playing (authoritative "now audible")
+        if (data.currently_playing_loop_index !== undefined) {
+            const prevPlaying = this.state.currentlyPlayingLoopIndex;
+            this.state.currentlyPlayingLoopIndex = data.currently_playing_loop_index;
+            // Auto-jump to current when a new loop becomes audible (if DJ is viewing the previous loop)
+            if (data.currently_playing_loop_index > prevPlaying &&
+                this.state.currentVisibleLoopIndex < data.currently_playing_loop_index) {
+                this.state.currentVisibleLoopIndex = data.currently_playing_loop_index;
+            }
+        }
+        if (data.currently_playing_set_name !== undefined) {
+            this.state.currentlyPlayingSetName = data.currently_playing_set_name;
+        }
+        if (data.currently_playing_reasoning !== undefined) {
+            this.state.currentlyPlayingReasoning = data.currently_playing_reasoning;
+        }
+        if (data.loop_history) {
+            this.state.loopHistory = data.loop_history;
+        }
+        if (data.next_queued_stems) {
+            this.state.nextQueuedStems = data.next_queued_stems;
+        }
+        // Initialize visible loop index if not set
+        if (this.state.currentVisibleLoopIndex === 0) {
+            this.state.currentVisibleLoopIndex = this.state.currentlyPlayingLoopIndex || 1;
+        }
 
         // Action Log
         if (this.actionLog && data.last_actions) {
@@ -689,56 +780,114 @@ class DJSlopApp {
         return note;
     }
 
+    // ========== LOOP NAVIGATION ==========
 
+    jumpToCurrent() {
+        this.state.currentVisibleLoopIndex = this.state.currentlyPlayingLoopIndex;
+        this.updateLoopSelectorUI();
+        this.renderStemDeck();
+    }
+
+    navigateToLoop(loopIdx) {
+        const maxLoop = this.state.currentlyPlayingLoopIndex + 1; // Can view current + next
+        if (loopIdx < 1) return;
+        if (loopIdx > maxLoop) return;
+        this.state.currentVisibleLoopIndex = loopIdx;
+        this.updateLoopSelectorUI();
+        this.renderStemDeck();
+    }
+
+    updateLoopSelectorUI() {
+        if (!this.loopSelector) return;
+        const visible = this.state.currentVisibleLoopIndex;
+        const audible = this.state.currentlyPlayingLoopIndex;
+        const total = audible + 1; // current + next
+
+        if (this.loopNum) this.loopNum.textContent = visible;
+        if (this.loopTotal) this.loopTotal.textContent = total;
+
+        // Show "NOW PLAYING" badge if viewing the currently audible loop
+        if (this.nowPlayingBadge) {
+            this.nowPlayingBadge.style.display = visible === audible ? 'inline' : 'none';
+        }
+    }
+
+    getDisplayStems() {
+        const visible = this.state.currentVisibleLoopIndex;
+        const audible = this.state.currentlyPlayingLoopIndex;
+
+        // If viewing the currently playing loop, use loopHistory if available,
+        // otherwise fall back to currentStems (handles first loop before history exists)
+        if (visible === audible) {
+            const historyEntry = this.state.loopHistory.find(h => h.loop_index === visible);
+            return {
+                stems: historyEntry?.stems || this.state.currentStems || [],
+                position: 'current'
+            };
+        }
+
+        // If viewing the next (queued) loop
+        if (visible === audible + 1) {
+            return {
+                stems: this.state.nextQueuedStems,
+                position: 'next'
+            };
+        }
+
+        // If viewing a history loop
+        const historyEntry = this.state.loopHistory.find(h => h.loop_index === visible);
+        if (historyEntry) {
+            return {
+                stems: historyEntry.stems,
+                position: 'previous'
+            };
+        }
+
+        return { stems: [], position: 'current' };
+    }
 
     renderStemDeck() {
-        // Current track name
-        this.currentTrackName.textContent = this.state.current_set_name || 'Waiting for track...';
+        // Update loop selector UI
+        this.updateLoopSelectorUI();
+
+        // Current track name — use "now playing" name for accuracy
+        this.currentTrackName.textContent = this.state.currentlyPlayingSetName
+            || this.state.current_set_name
+            || 'Waiting for track...';
 
         if (!this.stemDeck) return;
 
-        // Build unified list of all stems with position
-        const allStems = [];
-
-        // Previous stems
-        this.state.prevStems.forEach((stem, idx) => {
-            allStems.push({ ...stem, position: 'previous', index: idx });
-        });
-
-        // Current stems - merge with mixer data
+        const { stems: displayStems, position } = this.getDisplayStems();
         const mixerData = this.state.stemMixerData || [];
-        this.state.currentStems.forEach((stem, idx) => {
-            const mixer = mixerData.find(m => m.index === idx) || {};
-            allStems.push({
-                ...stem,
-                position: 'current',
-                index: idx,
-                volume: mixer.volume ?? 1.0,
-                is_muted: mixer.is_muted ?? false,
-                is_soloed: mixer.is_soloed ?? false,
-                hasMixerControls: true
-            });
-        });
 
-        // Next stems
-        this.state.nextStems.forEach((stem, idx) => {
-            allStems.push({ ...stem, position: 'next', index: idx });
-        });
-
-        if (allStems.length === 0) {
+        if (displayStems.length === 0) {
             this.stemDeck.innerHTML = `
                 <div class="empty-state">
                     <div class="empty-state-icon">
                         <div class="vinyl-record"></div>
                         <div class="vinyl-tonearm"></div>
                     </div>
-                    <span class="empty-state-title">No Stems Yet</span>
+                    <span class="empty-state-title">No Stems</span>
                     <span class="empty-state-desc">Press play to start generating stems</span>
                     <span class="empty-state-hint">Ready to Create</span>
                 </div>
             `;
             return;
         }
+
+        // Build unified list with position tracking
+        const allStems = displayStems.map((stem, idx) => {
+            const mixer = mixerData.find(m => m.index === idx) || {};
+            return {
+                ...stem,
+                position,
+                index: idx,
+                volume: mixer.volume ?? 1.0,
+                is_muted: mixer.is_muted ?? false,
+                is_soloed: mixer.is_soloed ?? false,
+                hasMixerControls: position === 'current'
+            };
+        });
 
         this.stemDeck.innerHTML = allStems.map(stem => this.renderStemRow(stem)).join('');
     }
@@ -893,6 +1042,14 @@ class DJSlopApp {
                 toggleEl.addEventListener('click', () => {
                     const isActive = toggleEl.classList.toggle('active');
                     this.showToast(`${item} ${isActive ? 'enabled' : 'disabled'}`, 'info', 2000);
+                    // Auto-collapse category if all instruments disabled
+                    if (!isActive) {
+                        const anyActive = Array.from(togglesGrid.querySelectorAll('.instrument-toggle.active')).some(el => el !== toggleEl);
+                        if (!anyActive) {
+                            categoryEl.classList.add('collapsed');
+                            header.classList.remove('expanded');
+                        }
+                    }
                 });
             });
 
