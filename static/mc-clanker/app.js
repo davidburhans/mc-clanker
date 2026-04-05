@@ -1091,12 +1091,17 @@ class DJSlopApp {
                 this.audioContext.resume();
             }
             // If analyser was set up with a suspended context, reconnect the audio
-            if (this.source && this.analyser) {
+            if (this.source && this.analyser && this.gainNode) {
                 try {
                     this.source.disconnect();
                 } catch (e) {}
                 try {
+                    this.analyser.disconnect();
+                } catch (e) {}
+                try {
                     this.source.connect(this.analyser);
+                    this.analyser.connect(this.gainNode);
+                    this.gainNode.connect(this.audioContext.destination);
                 } catch (e) {}
             }
         }
