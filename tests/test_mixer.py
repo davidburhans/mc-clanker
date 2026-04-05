@@ -129,7 +129,7 @@ def test_mixer_loop_transition():
 
     # Set up next loop with its duration
     next_audio = np.ones((4410, 1), dtype=np.float32) * 0.3
-    mixer.set_next_loop([(next_audio, 1)], next_loop_duration_samples=4410)  # 0.1 seconds
+    mixer.set_next_loop([(next_audio, 1)], next_loop_duration_samples=4410, loop_idx=1)  # 0.1 seconds
 
     # Simulate callback at loop boundary
     state.is_generating = True
@@ -502,3 +502,95 @@ def test_clear_resets_transition_state():
 
     assert mixer.current_loop_end_sample == 0
     assert len(mixer.next_loop_audio) == 0
+
+
+def test_pop_transition_event_no_transition():
+    """Test pop_transition_event returns None when no transition occurred."""
+    mixer = Mixer()
+    mixer._just_transitioned = False
+
+    result = mixer.pop_transition_event()
+
+    assert result is None
+    # Flag should remain False
+    assert mixer._just_transitioned is False
+
+
+def test_pop_transition_event_with_transition():
+    """Test pop_transition_event returns index and clears flag."""
+    mixer = Mixer()
+    mixer._just_transitioned = True
+    mixer._last_transition_loop_index = 5
+
+    result = mixer.pop_transition_event()
+
+    assert result == 5
+    # Flag should now be cleared
+    assert mixer._just_transitioned is False
+
+
+def test_pop_transition_event_clears_flag_atomically():
+    """Test that pop_transition_event clears flag after returning."""
+    mixer = Mixer()
+    mixer._just_transitioned = True
+    mixer._last_transition_loop_index = 3
+
+    result1 = mixer.pop_transition_event()
+    result2 = mixer.pop_transition_event()
+
+    assert result1 == 3
+    assert result2 is None
+
+
+def test_clear_resets_transition_flags():
+    """Test that clear() resets transition tracking flags."""
+    mixer = Mixer()
+    mixer._just_transitioned = True
+    mixer._last_transition_loop_index = 7
+    mixer._next_loop_idx = 5
+
+    mixer.clear()
+
+    assert mixer._just_transitioned is False
+    assert mixer._last_transition_loop_index == 0
+    assert mixer._next_loop_idx == 0
+
+
+def test_set_next_loop_accepts_loop_idx():
+    """Test that set_next_loop accepts and stores loop_idx."""
+    mixer = Mixer()
+    audio = np.ones((1000, 2), dtype=np.float32)
+    mixer.set_next_loop([(audio, 0)], next_loop_duration_samples=10000, loop_idx=42)
+
+    assert mixer._next_loop_idx == 42
+
+
+def test_transition_sets_flag_and_index():
+    """Test that transition in callback sets _just_transitioned and _last_transition_loop_index."""
+    mixer = Mixer(channels=1)
+    mixer.sample_rate = 44100
+    mixer.blocksize = 2048
+    mixer.loop_switch_deadline_ms = 50
+
+    # Add current track
+    audio = np.ones((4410, 1), dtype=np.float32) * 0.5
+    mixer.add_track(audio, 0, stem_index=0)
+    mixer.current_sample = 0
+    mixer.current_loop_end_sample = 4410
+
+    # Set up next loop with loop_idx = 5
+    next_audio = np.ones((4410, 1), dtype=np.float32) * 0.3
+    mixer.set_next_loop([(next_audio, 1)], next_loop_duration_samples=4410, loop_idx=5)
+
+    state.is_generating = True
+    outdata = np.zeros((4410, 1), dtype=np.float32)
+
+    # Advance to trigger transition
+    mixer.current_sample = 4300
+    mixer._callback(outdata, 4410, None, None)
+
+    # Transition flag should be set
+    assert mixer._just_transitioned is True
+    assert mixer._last_transition_loop_index == 5
+
+    state.is_generating = False
