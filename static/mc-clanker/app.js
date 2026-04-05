@@ -1356,7 +1356,8 @@ class DJSlopApp {
 
     setVolume(value) {
         this.state.volume = value / 100;
-        this.audioPlayer.volume = this.state.volume;
+        this.audioPlayer.volume = 1.0; // Fixed - volume controlled via gainNode
+        if (this.gainNode) this.gainNode.gain.value = this.state.volume;
         this.volumeValue.textContent = `${value}%`;
     }
 
