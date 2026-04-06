@@ -10,8 +10,6 @@ class AudienceApp {
         this.statusIndicator = document.getElementById('status-indicator');
         this.signalBars = document.getElementById('signal-bars');
         this.trackName = document.getElementById('current-track-name');
-        this.stemsGrid = document.getElementById('stems-grid');
-        this.stemCount = document.getElementById('stem-count');
         this.visualizer = document.getElementById('visualizer');
         this.ctx = this.visualizer.getContext('2d');
         this.particlesCanvas = document.getElementById('particles-bg');
@@ -58,7 +56,6 @@ class AudienceApp {
         this.analyser = null;
         this.gainNode = null;
         this.source = null;
-        this.currentStems = [];
         this.lastVolume = 80;
 
         this.init();
@@ -93,13 +90,6 @@ class AudienceApp {
         window.addEventListener('resize', () => this.resizeCanvas());
         this.resizeCanvas();
         this.animate();
-
-        // Entrance animations timing
-        setTimeout(() => {
-            document.querySelectorAll('.stem-card').forEach((card, i) => {
-                card.style.animationDelay = `${0.6 + i * 0.08}s`;
-            });
-        }, 500);
 
         // Initial state - show waiting overlay
         this.updateShowState(false);
@@ -220,8 +210,6 @@ class AudienceApp {
             if (res.ok) {
                 const data = await res.json();
                 this.updateTrackInfo(data);
-                // Use currently_playing_stems for accurate "what's actually playing"
-                this.updateStems(data.currently_playing_stems || data.active_stems || []);
                 this.updateShowState(data.is_show_started || false);
 
                 // Check for new DJ message
@@ -501,148 +489,6 @@ class AudienceApp {
         }
         if (keyBadge && data.current_key) {
             keyBadge.querySelector('.badge-value').textContent = data.current_key;
-        }
-    }
-
-    parseStemPrompt(prompt) {
-        const parts = prompt.split(',').map(p => p.trim());
-        return {
-            major_family: parts[0] || 'Unknown',
-            sub_family: parts[1] || 'Unknown',
-            timbre_tags: parts.slice(2, 5).filter(p => p && !this.isStyleTag(p)),
-            notation: parts.find(p => this.isNotationTag(p)) || 'melody',
-            fx: parts.find(p => this.isFxTag(p)) || 'Dry',
-            key: parts[parts.length - 1] || ''
-        };
-    }
-
-    isStyleTag(tag) {
-        const styleTags = ['melody', 'arp', 'chord progression', 'top melody', 'triplets', 'simple', 'complex', 'rising', 'falling', 'strummed', 'sustained', 'catchy', 'epic', 'slow', 'fast'];
-        return styleTags.some(s => tag.toLowerCase().includes(s));
-    }
-
-    isNotationTag(tag) {
-        const notationTags = ['melody', 'arp', 'chord progression', 'top melody', 'triplets', 'simple', 'complex', 'rising', 'falling', 'strummed', 'sustained', 'catchy', 'epic', 'slow', 'fast'];
-        return notationTags.some(n => tag.toLowerCase().includes(n));
-    }
-
-    isFxTag(tag) {
-        const fxTags = ['reverb', 'delay', 'distortion', 'phaser', 'bitcrush', 'dry', 'wet'];
-        return fxTags.some(f => tag.toLowerCase().includes(f));
-    }
-
-    getStemClass(majorFamily) {
-        const family = (majorFamily || '').toLowerCase();
-        if (family.includes('drum') || family.includes('percussion')) return 'drums';
-        if (family.includes('bass')) return 'bass';
-        if (family.includes('synth') || family.includes('pad') || family.includes('lead')) return 'synth';
-        if (family.includes('vocal') || family.includes('voice') || family.includes('choir')) return 'vocal';
-        if (family.includes('keys') || family.includes('piano') || family.includes('organ')) return 'keys';
-        if (family.includes('guitar')) return 'guitar';
-        if (family.includes('brass') || family.includes('trumpet') || family.includes('sax')) return 'brass';
-        if (family.includes('string') || family.includes('violin') || family.includes('cello')) return 'strings';
-        if (family.includes('wind') || family.includes('flute') || family.includes('saxophone')) return 'wind';
-        if (family.includes('mallet') || family.includes('bell') || family.includes('marimba')) return 'mallet';
-        if (family.includes('pluck') || family.includes('harp') || family.includes('koto')) return 'plucked';
-        return '';
-    }
-
-    getAgeClass(age) {
-        if (age === undefined || age <= 2) return 'fresh';
-        if (age <= 5) return 'aging';
-        return 'stale';
-    }
-
-    extractTimbreTags(prompt) {
-        const knownTimbreTags = [
-            'Acoustic', 'Electronic', 'Groovy', 'Driving', 'Upper Mids', 'Mids', 'Highs',
-            'Warm', 'Wide', 'Bright', 'Low Mids', 'Thick', 'Airy', 'Rich', 'Tight',
-            'Full', 'Bass', 'Gritty', 'Clean', 'Retro', 'Saw', 'Snappy', 'Pluck', 'Crisp',
-            'Focused', 'Metallic', 'Chiptune', 'Dark', 'Shiny', 'Analog', 'Square',
-            'Present', 'Silky', 'Sparkly', 'Ambient', 'Near', 'Thin', 'Soft', 'Spacey',
-            'Smooth', 'Cold', 'Buzzy', 'Big', 'Subdued', 'Plucked', 'Far', 'Overdriven',
-            'Sub Bass', 'Deep', 'Woody', 'Dubstep', 'Round', 'Biting', 'Sine', 'Hollow',
-            'Fat', 'Punchy', 'Staccato', 'Nasal', 'Vintage', 'Growl', 'Intimate', 'Pulse',
-            'Harsh', 'Pitch Bend', 'Knock', 'Triangle', 'Bitcrush', 'Atmosphere',
-            'Formant Vocal', 'Ensemble', 'Acid', 'Muddy', 'Glassy', 'Breathy', 'Muffled',
-            'Laser', 'White Noise', 'Steel', 'Veiled', 'Rubbery', 'Mono', 'Reese',
-            'Synthetic Vox', 'Sub', 'Rumble', 'Noisy', 'Distant', 'Spiccato', 'Small',
-            'Bell', 'Boomy', 'Crispy', 'Bitcrushed', '808', 'Lead', 'Filter', 'Digital',
-            'Synthetic Choir', 'Nylon', 'Organ', 'Supersaw', 'Pizzicato', 'Armosphere',
-            'Pad', 'Choir', 'Siren', 'FX', 'Heavy', 'Electric Guitar', 'Dreamy', 'Tiny'
-        ];
-
-        const parts = prompt.split(',').map(p => p.trim());
-        return parts.filter(p =>
-            knownTimbreTags.some(t => t.toLowerCase() === p.toLowerCase())
-        ).slice(0, 3);
-    }
-
-    formatNotation(notation) {
-        if (!notation) return '';
-        return notation.split(' ').map(w =>
-            w.charAt(0).toUpperCase() + w.slice(1)
-        ).join(' ');
-    }
-
-    formatFx(fx) {
-        if (!fx) return '';
-        return fx.replace(/([A-Z])/g, ' $1').trim();
-    }
-
-    renderStemCard(stem, index) {
-        const parsed = this.parseStemPrompt(stem.prompt || '');
-        const age = stem._age || stem.age || 0;
-        const stemClass = this.getStemClass(parsed.major_family);
-        const ageClass = this.getAgeClass(age);
-        const timbreTags = this.extractTimbreTags(stem.prompt || '');
-
-        return `
-            <div class="stem-card ${ageClass}" style="animation-delay: ${0.1 + index * 0.06}s">
-                <div class="stem-card-header">
-                    <span class="stem-family ${stemClass}">${parsed.major_family}</span>
-                    <span class="stem-age">LOOP ${age}</span>
-                </div>
-                <div class="stem-name">${parsed.sub_family}</div>
-                <div class="stem-tags">
-                    ${timbreTags.map(t => `<span class="tag timbre">${t}</span>`).join('')}
-                    <span class="tag notation">${this.formatNotation(parsed.notation)}</span>
-                    <span class="tag fx">${this.formatFx(parsed.fx)}</span>
-                </div>
-                <div class="stem-footer">
-                    <span class="stem-bars"><span>${stem.bars || 8}</span> BARS</span>
-                </div>
-            </div>
-        `;
-    }
-
-    updateStems(stems) {
-        const newPrompts = stems.map(s => s.prompt).join('|');
-        const oldPrompts = this.currentStems.map(s => s.prompt).join('|');
-
-        if (newPrompts === oldPrompts) return;
-
-        this.currentStems = stems;
-
-        if (this.stemCount) {
-            this.stemCount.querySelector('.count-number').textContent = stems.length;
-        }
-
-        if (stems.length === 0) {
-            this.stemsGrid.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-icon">
-                        <svg viewBox="0 0 48 48" fill="none">
-                            <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2"/>
-                            <path d="M24 14v10M24 34v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        </svg>
-                    </div>
-                    <p class="empty-text">Awaiting generation</p>
-                    <div class="empty-pulse"></div>
-                </div>
-            `;
-        } else {
-            this.stemsGrid.innerHTML = stems.map((stem, i) => this.renderStemCard(stem, i)).join('');
         }
     }
 
