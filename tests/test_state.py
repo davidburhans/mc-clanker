@@ -1,5 +1,6 @@
 import pytest
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 from app.framework.framework_state import GlobalState
 
 def test_initial_state():
@@ -532,6 +533,7 @@ def test_broadcast_audio_to_multiple_clients_with_full_queue():
 class TestStateDefaults:
     """Test state default values."""
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_default_llm_config(self):
         """Test default LLM configuration values."""
         state = GlobalState()
@@ -585,3 +587,86 @@ class TestStateLockBehavior:
         original_lock = state.lock
         state.reset()
         assert state.lock is original_lock
+
+
+class TestLoopSyncState:
+    """Test the loop synchronization state fields."""
+
+    def test_initial_loop_sync_fields(self):
+        """Test that loop sync fields are properly initialized."""
+        state = GlobalState()
+
+        assert state.currently_playing_loop_index == 0
+        assert state.currently_playing_stems == []
+        assert state.currently_playing_set_name == ""
+        assert state.currently_playing_reasoning == ""
+        assert state.loop_history == []
+
+    def test_record_loop_transition(self):
+        """Test record_loop_transition updates state correctly."""
+        state = GlobalState()
+
+        stems = [{"prompt": "stem1"}, {"prompt": "stem2"}]
+        state.record_loop_transition(1, stems, "Test Set", "Test reasoning")
+
+        assert state.currently_playing_loop_index == 1
+        assert state.currently_playing_stems == stems
+        assert state.currently_playing_set_name == "Test Set"
+        assert state.currently_playing_reasoning == "Test reasoning"
+        assert len(state.loop_history) == 1
+        assert state.loop_history[0]["loop_index"] == 1
+        assert state.loop_history[0]["set_name"] == "Test Set"
+        assert state.loop_history[0]["stems"] == stems
+
+    def test_record_loop_transition_rolling_history(self):
+        """Test that loop_history is capped at 10 entries."""
+        state = GlobalState()
+
+        # Add 12 transitions
+        for i in range(1, 13):
+            stems = [{"prompt": f"stem{j}"} for j in range(3)]
+            state.record_loop_transition(i, stems, f"Set {i}", f"Reasoning {i}")
+
+        # Should only keep last 10
+        assert len(state.loop_history) == 10
+        assert state.loop_history[0]["loop_index"] == 3  # First one was dropped
+        assert state.loop_history[9]["loop_index"] == 12  # Last one kept
+
+    def test_reset_clears_loop_sync_fields(self):
+        """Test that reset() clears all loop sync fields."""
+        state = GlobalState()
+
+        state.currently_playing_loop_index = 5
+        state.currently_playing_stems = [{"prompt": "test"}]
+        state.currently_playing_set_name = "Test"
+        state.currently_playing_reasoning = "Test reason"
+        state.loop_history.append({"loop_index": 1})
+
+        state.reset()
+
+        assert state.currently_playing_loop_index == 0
+        assert state.currently_playing_stems == []
+        assert state.currently_playing_set_name == ""
+        assert state.currently_playing_reasoning == ""
+        assert state.loop_history == []
+
+    def test_record_loop_transition_thread_safety(self):
+        """Test that record_loop_transition uses sync_lock."""
+        import threading
+        state = GlobalState()
+
+        results = []
+
+        def record(idx):
+            state.record_loop_transition(idx, [{"prompt": f"stem{idx}"}], f"Set {idx}", f"Reason {idx}")
+            results.append(idx)
+
+        threads = [threading.Thread(target=record, args=(i,)) for i in range(1, 6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # All should have recorded successfully
+        assert len(state.loop_history) == 5
+        assert sorted(results) == [1, 2, 3, 4, 5]

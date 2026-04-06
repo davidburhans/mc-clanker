@@ -26,7 +26,7 @@ def test_system_message_content():
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
     assert "DJ" in messages[0]["content"]
-    assert "FLOW & RETENTION" in messages[0]["content"]
+    assert "RETAIN" in messages[0]["content"]
 
 
 def test_user_message_contains_bpm():

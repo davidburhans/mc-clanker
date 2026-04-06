@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from slop_harness.llm_client import LLMClient
@@ -36,20 +37,18 @@ async def test_call_returns_content():
     from unittest.mock import AsyncMock, patch, MagicMock
 
     mock_response = MagicMock()
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value={
-        "choices": [{"message": {"content": '{"actions": [], "reasoning": "test"}'}}]
-    })
-    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-    mock_response.__aexit__ = AsyncMock(return_value=None)
+    mock_response.choices = [MagicMock(message=MagicMock(content='{"actions": [], "reasoning": "test"}'))]
 
-    mock_post = AsyncMock(return_value=mock_response)
+    mock_create = AsyncMock(return_value=mock_response)
 
-    with patch("aiohttp.ClientSession.post", mock_post):
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = mock_create
+
+    with patch.object(LLMClient, "_get_client", return_value=mock_client):
         client = LLMClient()
         result = await client.call([{"role": "user", "content": "hello"}])
         assert result == '{"actions": [], "reasoning": "test"}'
-        mock_post.assert_called_once()
+        mock_create.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -59,26 +58,20 @@ async def test_call_retry_on_429():
 
     call_count = 0
 
-    async def mock_post(*args, **kwargs):
+    async def mock_create(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count < 3:
-            mock_resp = MagicMock()
-            mock_resp.status = 429
-            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-            mock_resp.__aexit__ = AsyncMock(return_value=None)
-            return mock_resp
+            raise Exception("429 rate limit")
         else:
             mock_resp = MagicMock()
-            mock_resp.status = 200
-            mock_resp.json = AsyncMock(return_value={
-                "choices": [{"message": {"content": '{"ok": true}'}}]
-            })
-            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-            mock_resp.__aexit__ = AsyncMock(return_value=None)
+            mock_resp.choices = [MagicMock(message=MagicMock(content='{"ok": true}'))]
             return mock_resp
 
-    with patch("aiohttp.ClientSession.post", mock_post):
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = mock_create
+
+    with patch.object(LLMClient, "_get_client", return_value=mock_client):
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             client = LLMClient()
             result = await client.call([{"role": "user", "content": "hello"}])
@@ -89,28 +82,27 @@ async def test_call_retry_on_429():
 
 @pytest.mark.asyncio
 async def test_call_raises_after_3_failures():
-    """call() raises after 3 consecutive aiohttp failures."""
+    """call() raises after 3 consecutive failures (rate-limit errors)."""
     from unittest.mock import MagicMock
 
     call_count = 0
 
-    async def mock_post(*args, **kwargs):
+    async def mock_create(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        raise asyncio.TimeoutError("simulated timeout")
+        raise Exception("429 rate limit exceeded")
 
-    mock_session = MagicMock()
-    mock_session.post = mock_post
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = mock_create
 
-    async def mock_get_session():
-        return mock_session
-
-    client = LLMClient()
-    client._get_session = mock_get_session
-    with pytest.raises(Exception) as exc_info:
-        await client.call([{"role": "user", "content": "hello"}])
-    assert "LLM call failed after 3 retries" in str(exc_info.value)
-    assert call_count == 3
+    with patch.object(LLMClient, "_get_client", return_value=mock_client):
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            client = LLMClient()
+            with pytest.raises(Exception) as exc_info:
+                await client.call([{"role": "user", "content": "hello"}])
+            assert "LLM call failed after 3 retries" in str(exc_info.value)
+            assert call_count == 3
+            assert mock_sleep.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -118,32 +110,22 @@ async def test_call_uses_correct_payload():
     """call() sends correct payload to the API."""
     from unittest.mock import AsyncMock, MagicMock
 
-    captured_payload = {}
+    captured_kwargs = {}
 
     mock_resp = MagicMock()
-    mock_resp.status = 200
-    mock_resp.json = AsyncMock(return_value={
-        "choices": [{"message": {"content": "{}"}}]
-    })
-    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-    mock_resp.__aexit__ = AsyncMock(return_value=None)
+    mock_resp.choices = [MagicMock(message=MagicMock(content="{}"))]
 
-    mock_post = AsyncMock(return_value=mock_resp)
+    async def mock_create(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_resp
 
-    def capture_post(*args, **kwargs):
-        captured_payload.update(kwargs)
-        return mock_post(*args, **kwargs)
-
-    mock_session = MagicMock()
-    mock_session.post = capture_post
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-
-    async def mock_get_session():
-        return mock_session
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = mock_create
 
     messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}]
-    client = LLMClient()
-    client._get_session = mock_get_session
-    await client.call(messages)
-    assert "json" in captured_payload
+
+    with patch.object(LLMClient, "_get_client", return_value=mock_client):
+        client = LLMClient()
+        await client.call(messages)
+    assert "response_format" in captured_kwargs
+    assert captured_kwargs["model"] == "local-model"
