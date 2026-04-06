@@ -57,6 +57,7 @@ class AudienceApp {
         this.audioContext = null;
         this.analyser = null;
         this.gainNode = null;
+        this.source = null;
         this.currentStems = [];
         this.lastVolume = 80;
 
@@ -122,8 +123,21 @@ class AudienceApp {
             this.setupAudio();
 
             // Resume AudioContext if suspended (Chrome autoplay policy)
-            if (this.audioContext && this.audioContext.state === 'suspended') {
-                this.audioContext.resume();
+            if (this.audioContext) {
+                if (this.audioContext.state === 'suspended') {
+                    this.audioContext.resume();
+                }
+                // If analyser was set up with a suspended context, reconnect the audio chain
+                // This is the same robust pattern used in the DJ interface
+                if (this.source && this.analyser && this.gainNode) {
+                    try { this.source.disconnect(); } catch (e) {}
+                    try { this.analyser.disconnect(); } catch (e) {}
+                    try {
+                        this.source.connect(this.analyser);
+                        this.analyser.connect(this.gainNode);
+                        this.gainNode.connect(this.audioContext.destination);
+                    } catch (e) {}
+                }
             }
 
             this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
@@ -134,38 +148,39 @@ class AudienceApp {
     }
 
     setupAudio() {
-        // If analyser exists and context is running, nothing to do
-        if (this.analyser && this.gainNode && this.audioContext && this.audioContext.state !== 'suspended') {
-            return;
-        }
-
-        // If we have a context but no analyser or gainNode (setup failed before), recreate both
-        if (this.audioContext && (!this.analyser || !this.gainNode)) {
-            this.audioContext.close().catch(() => {});
-            this.audioContext = null;
-        }
-
-        if (!this.audioContext) {
-            try {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                this.analyser = this.audioContext.createAnalyser();
-                this.analyser.fftSize = 256;
-                this.analyser.smoothingTimeConstant = 0.8;
-                this.gainNode = this.audioContext.createGain();
-                this.gainNode.gain.value = this.volumeSlider.value / 100;
-                const source = this.audioContext.createMediaElementSource(this.audioPlayer);
-                source.connect(this.analyser);
-                this.analyser.connect(this.gainNode);
-                this.gainNode.connect(this.audioContext.destination);
-            } catch (e) {
-                console.error("Analyser setup failed:", e);
-                this.audioContext = null;
-                this.analyser = null;
-                this.gainNode = null;
+        try {
+            // Always close existing context to start fresh - avoids state confusion
+            if (this.audioContext) {
+                this.audioContext.close().catch(() => {});
             }
-        } else if (this.audioContext.state === 'suspended') {
-            // If context was suspended, resume it
-            this.audioContext.resume();
+
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 256;
+            this.analyser.smoothingTimeConstant = 0.8;
+            this.gainNode = this.audioContext.createGain();
+            this.gainNode.gain.value = this.volumeSlider.value / 100;
+            this.source = this.audioContext.createMediaElementSource(this.audioPlayer);
+
+            // Chain: source -> analyser -> gainNode -> destination
+            // Analyser processes before gain so visualizer sees full-level audio
+            this.source.connect(this.analyser);
+            this.analyser.connect(this.gainNode);
+            this.gainNode.connect(this.audioContext.destination);
+
+            // Explicitly resume context
+            if (this.audioContext.state === 'suspended') {
+                this.audioContext.resume();
+            }
+        } catch (e) {
+            console.error("Analyser setup failed:", e);
+            if (this.audioContext) {
+                this.audioContext.close().catch(() => {});
+            }
+            this.audioContext = null;
+            this.analyser = null;
+            this.gainNode = null;
+            this.source = null;
         }
     }
 
@@ -363,7 +378,10 @@ class AudienceApp {
                 this.goingLiveOverlay.classList.remove('active');
             }
 
-            // Set up audio chain BEFORE playing to ensure analyser is ready
+            // Set audio source BEFORE setupAudio - createMediaElementSource needs the element to have a src
+            this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
+
+            // Set up audio chain to ensure analyser is ready
             this.setupAudio();
 
             // Resume AudioContext if suspended (Chrome autoplay policy)
@@ -372,7 +390,6 @@ class AudienceApp {
             }
 
             // Auto-start playing when show begins
-            this.audioPlayer.src = '/stream.mp3?t=' + Date.now();
             this.audioPlayer.play().catch(e => console.error("Auto-play error:", e));
             this.isPlaying = true;
             this.playBtn.classList.remove('disabled');
@@ -581,7 +598,7 @@ class AudienceApp {
         const timbreTags = this.extractTimbreTags(stem.prompt || '');
 
         return `
-            <div class="stem-card ${ageClass}" style="animation-delay: ${0.6 + index * 0.08}s">
+            <div class="stem-card ${ageClass}" style="animation-delay: ${0.1 + index * 0.06}s">
                 <div class="stem-card-header">
                     <span class="stem-family ${stemClass}">${parsed.major_family}</span>
                     <span class="stem-age">LOOP ${age}</span>
@@ -759,11 +776,16 @@ class AudienceApp {
             bassSum += dataArray[i];
         }
         const currentBass = (bassSum / 5) / 255;
-        
+
         // Smooth the bass energy so it pulses to the beat instead of jittering
-        this.lastBass = this.lastBass || 0;
+        this.lastBass = (this.lastBass && !isNaN(this.lastBass)) ? this.lastBass : 0;
         this.lastBass = this.lastBass * 0.85 + currentBass * 0.15;
-        const bassEnergy = this.lastBass;
+        let bassEnergy = this.lastBass;
+
+        // Guard against NaN or invalid bassEnergy
+        if (isNaN(bassEnergy) || bassEnergy < 0) {
+            bassEnergy = 0;
+        }
         
         // Draw particles with smoothed bass energy
         this.drawParticles(bassEnergy);
@@ -823,6 +845,9 @@ class AudienceApp {
     }
 
     drawNeonPulse(dataArray, cx, cy, width, height, bassEnergy) {
+        // Clear the canvas to prevent state bleed from previous visualizers
+        this.ctx.clearRect(0, 0, width, height);
+
         const centerRadius = 60 + (bassEnergy * 15);
         const maxRadius = Math.min(width, height) / 2 - 40;
         const barCount = 128; // Increased density for pulse
@@ -859,6 +884,9 @@ class AudienceApp {
     }
 
     drawOscilloscope(timeData, cx, cy, width, height, bassEnergy) {
+        // Clear the canvas to prevent state bleed from previous visualizers
+        this.ctx.clearRect(0, 0, width, height);
+
         this.ctx.lineWidth = 4 + (bassEnergy * 4);
         this.ctx.lineJoin = 'round';
         this.ctx.lineCap = 'round';
@@ -902,6 +930,9 @@ class AudienceApp {
     }
 
     drawRetroBars(dataArray, width, height, bassEnergy) {
+        // Clear the canvas to prevent state bleed from previous visualizers
+        this.ctx.clearRect(0, 0, width, height);
+
         const barWidth = 12;
         const gap = 4;
         const numBars = Math.floor(width / (barWidth + gap));
@@ -938,13 +969,17 @@ class AudienceApp {
 
     drawStarfieldVisualizer(dataArray, cx, cy, width, height, bassEnergy) {
         if (!this.stars) this.initStarfield();
+
+        // Always clear the main canvas first, even if particlesCtx is missing
+        this.ctx.clearRect(0, 0, width, height);
+
         if (!this.particlesCtx) return;
-        
+
         const w = this.particlesCanvas.width;
         const h = this.particlesCanvas.height;
-        
+
         this.particlesCtx.clearRect(0, 0, w, h);
-        
+
         // Draw deep space frequency rings on main canvas
         this.ctx.shadowBlur = 30;
         const ringCount = 8;
@@ -991,15 +1026,24 @@ class AudienceApp {
 
     // Dual Spectrum - L/R channel bar graph with peak indicators
     drawDualSpectrum(dataArray, width, height, bassEnergy) {
+        // Clear the canvas to prevent state bleed from previous visualizers
+        this.ctx.clearRect(0, 0, width, height);
+
         const numBars = 32;
         const barWidth = Math.floor(width / (numBars * 2 + 1));
         const gap = barWidth;
         const maxHeight = height - 20;
 
-        // Initialize peak holders
-        this.leftPeaks = this.leftPeaks || new Array(numBars).fill(0);
-        this.rightPeaks = this.rightPeaks || new Array(numBars).fill(0);
-        this.peakDecay = this.peakDecay || new Array(numBars).fill(0);
+        // Initialize peak holders - always reset to correct size in case canvas was resized
+        if (!this.leftPeaks || this.leftPeaks.length !== numBars) {
+            this.leftPeaks = new Array(numBars).fill(0);
+        }
+        if (!this.rightPeaks || this.rightPeaks.length !== numBars) {
+            this.rightPeaks = new Array(numBars).fill(0);
+        }
+        if (!this.peakDecay || this.peakDecay.length !== numBars) {
+            this.peakDecay = new Array(numBars).fill(0);
+        }
 
         // Left channel (lower half of spectrum)
         for (let i = 0; i < numBars; i++) {
@@ -1077,6 +1121,9 @@ class AudienceApp {
 
     // Mirror Wave - mirrored oscilloscope with glow
     drawMirrorWave(timeData, cx, cy, width, height, bassEnergy) {
+        // Clear the canvas to prevent state bleed from previous visualizers
+        this.ctx.clearRect(0, 0, width, height);
+
         // Top half - forward
         this.ctx.lineWidth = 2;
         this.ctx.lineJoin = 'round';
@@ -1152,6 +1199,9 @@ class AudienceApp {
 
     // Inferno - flame-like visualization rising from bottom
     drawInferno(dataArray, width, height, bassEnergy) {
+        // Clear the canvas to prevent state bleed from previous visualizers
+        this.ctx.clearRect(0, 0, width, height);
+
         // Seed the fire array if needed
         this.fireSeed = this.fireSeed || (() => {
             const arr = [];
@@ -1162,7 +1212,10 @@ class AudienceApp {
         // Propagate fire upward
         const cols = 64;
         const rows = 32;
-        this.fireGrid = this.fireGrid || new Array(cols).fill(0).map(() => new Array(rows).fill(0));
+        // Always reset fire grid to correct size in case canvas was resized
+        if (!this.fireGrid || this.fireGrid.length !== cols || (this.fireGrid[0] && this.fireGrid[0].length !== rows)) {
+            this.fireGrid = new Array(cols).fill(0).map(() => new Array(rows).fill(0));
+        }
 
         // Map frequency data to fire intensity at base
         for (let i = 0; i < cols; i++) {
@@ -1218,6 +1271,9 @@ class AudienceApp {
 
     // Pixel Grid - blocky waveform grid
     drawPixelGrid(dataArray, width, height, bassEnergy) {
+        // Clear the canvas to prevent state bleed from previous visualizers
+        this.ctx.clearRect(0, 0, width, height);
+
         const gridX = 24;
         const gridY = 16;
         const cellW = width / gridX;
@@ -1259,11 +1315,6 @@ class AudienceApp {
             }
         }
 
-        // Scanline effect
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-        for (let y = 0; y < height; y += 4) {
-            this.ctx.fillRect(0, y, width, 2);
-        }
     }
 
     drawAmbientRadial(cx, cy, radius) {
