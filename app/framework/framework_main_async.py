@@ -548,85 +548,60 @@ class AsyncFrameworkLoop:
                 _rec_stems = []
                 _rec_set_name = ""
                 _rec_reasoning = ""
-                if pregen_ready:
-                    # Update state from pre-gen results
-                    async with state.lock:
-                        if state.active_stems:
-                            state.previous_stems = list(state.active_stems)
-                            state.stem_history.append(state.active_stems)
-                            if len(state.stem_history) > 8:
-                                state.stem_history.pop(0)
+                async with state.lock:
+                    if state.active_stems:
+                        state.previous_stems = list(state.active_stems)
+                        state.stem_history.append(state.active_stems)
+                        if len(state.stem_history) > 8:
+                            state.stem_history.pop(0)
 
+                    if pregen_ready:
                         state.active_stems = list(self._pregen_results['next_stems'])
-                        state.next_stems = []
-                        state.muted_stems.clear()
-                        state.soloed_stems.clear()
-                        state.stem_volumes.clear()
-                        state.loop_count += 1
+                    else:
+                        state.active_stems = list(state.next_stems)
 
+                    state.next_stems = []
+                    state.muted_stems.clear()
+                    state.soloed_stems.clear()
+                    state.stem_volumes.clear()
+                    state.loop_count += 1
+
+                    if pregen_ready:
                         # Update BPM, key, etc. from pre-gen results
                         state.current_bpm = self._pregen_results.get('master_bpm', state.current_bpm)
                         state.current_key = self._pregen_results.get('master_key', state.current_key)
                         state.current_set_name = self._pregen_results.get('set_name', 'Unknown Set')
                         state.llm_reasoning = self._pregen_results.get('reasoning', 'No reasoning provided.')
 
-                        # Capture for initial recording (loop_idx == 1 has no mixer transition event)
-                        if loop_idx == 1:
-                            needs_initial_record = True
-                            _rec_stems = list(state.active_stems)
-                            _rec_set_name = state.current_set_name
-                            _rec_reasoning = state.llm_reasoning
+                    # Capture for initial recording (loop_idx == 1 has no mixer transition event)
+                    if loop_idx == 1:
+                        needs_initial_record = True
+                        _rec_stems = list(state.active_stems)
+                        _rec_set_name = state.current_set_name
+                        _rec_reasoning = state.llm_reasoning
 
-                        # Take state snapshot for pre-generation (before releasing lock)
-                        state_snapshot = {
-                            'current_bpm': state.current_bpm,
-                            'current_key': state.current_key,
-                            'active_stems': list(state.active_stems),
-                            'user_override': state.user_override,
-                            'available_instruments': list(state.available_instruments),
-                            'stem_history': list(state.stem_history),
-                            'llm_config': {
-                                'base_url': state.llm_base_url,
-                                'api_key': state.llm_api_key,
-                                'model': state.llm_model
-                            }
+                    # Apply pending UI overrides
+                    if state.target_bpm_override:
+                        state.current_bpm = state.target_bpm_override
+                        state.target_bpm_override = None
+                    if state.target_key_override:
+                        state.current_key = state.target_key_override
+                        state.target_key_override = None
+
+                    # Take state snapshot for pre-generation (before releasing lock)
+                    state_snapshot = {
+                        'current_bpm': state.current_bpm,
+                        'current_key': state.current_key,
+                        'active_stems': list(state.active_stems),
+                        'user_override': state.user_override,
+                        'available_instruments': list(state.available_instruments),
+                        'stem_history': list(state.stem_history),
+                        'llm_config': {
+                            'base_url': state.llm_base_url,
+                            'api_key': state.llm_api_key,
+                            'model': state.llm_model
                         }
-                else:
-                    async with state.lock:
-                        if state.active_stems:
-                            state.previous_stems = list(state.active_stems)
-                            state.stem_history.append(state.active_stems)
-                            if len(state.stem_history) > 8:
-                                state.stem_history.pop(0)
-
-                        state.active_stems = list(state.next_stems)
-                        state.next_stems = []
-                        state.muted_stems.clear()
-                        state.soloed_stems.clear()
-                        state.stem_volumes.clear()
-                        state.loop_count += 1
-
-                        # Capture for initial recording (loop_idx == 1 has no mixer transition event)
-                        if loop_idx == 1:
-                            needs_initial_record = True
-                            _rec_stems = list(state.active_stems)
-                            _rec_set_name = state.current_set_name
-                            _rec_reasoning = state.llm_reasoning
-
-                        # Take state snapshot for pre-generation (before releasing lock)
-                        state_snapshot = {
-                            'current_bpm': state.current_bpm,
-                            'current_key': state.current_key,
-                            'active_stems': list(state.active_stems),
-                            'user_override': state.user_override,
-                            'available_instruments': list(state.available_instruments),
-                            'stem_history': list(state.stem_history),
-                            'llm_config': {
-                                'base_url': state.llm_base_url,
-                                'api_key': state.llm_api_key,
-                                'model': state.llm_model
-                            }
-                        }
+                    }
 
                 # Record initial "now playing" state for first loop (no mixer transition fires for loop 1)
                 if needs_initial_record:
@@ -668,7 +643,7 @@ class AsyncFrameworkLoop:
                         # Check if mixer transitioned to a new loop and record it
                         transitioned_loop_idx = self.mixer.pop_transition_event()
                         if transitioned_loop_idx is not None and transitioned_loop_idx > 0:
-                            with state.lock:
+                            async with state.lock:
                                 state.record_loop_transition(
                                     transitioned_loop_idx,
                                     state.active_stems,

@@ -87,7 +87,7 @@ CRITICAL OVERRIDE RULE:
 - If an OVERRIDE directive is provided in the prompt, you MUST incorporate that vibe/mood/style into ALL your musical decisions. The override is the user's creative intent and must be honored. Choose instruments, timbres, and FX that match the requested vibe.
 
 DJ ACTION RULES:
-- For 'add' actions: You MUST provide a valid musical selection for EVERY instrument field (major_family, sub_family, timbre_tags, etc.). You are strictly FORBIDDEN from using `null` or empty values for these fields when adding a stem.
+- For 'add' actions: You MUST provide a valid musical selection for EVERY instrument field (major_family, sub_family, timbre_tags, etc.). The `sub_family` MUST be chosen STRICTLY from the provided "Available Instrument Types" list. Do not invent new instruments. You are strictly FORBIDDEN from using `null` or empty values for these fields when adding a stem.
 - For 'add' actions: You MUST also provide a `model_id` from the available models list to generate the stem.
 - For 'retain' or 'remove' actions: You only need to provide the `stem_index`. Other instrument fields should be `null`.
 
