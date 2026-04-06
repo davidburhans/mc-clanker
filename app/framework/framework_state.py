@@ -7,10 +7,12 @@ Framework code that runs in sync threads (Mixer._callback) uses the separate
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
 import threading
+import time
 from collections import OrderedDict
 
 log = logging.getLogger(__name__)
@@ -114,6 +116,13 @@ class GlobalState:
         self.stem_ages = {}      # index → int (loops active)
         self.last_actions = []   # List of descriptive action strings
 
+        # Loop synchronization — what is ACTUALLY playing vs what was decided
+        self.currently_playing_loop_index = 0    # Authoritative "now audible" index
+        self.currently_playing_stems = []         # Stems currently audible
+        self.currently_playing_set_name = ""       # Set name currently audible
+        self.currently_playing_reasoning = ""      # Reasoning currently audible
+        self.loop_history = []                   # Rolling buffer of past loops
+
         # Loop transition coordination
         self.next_loop_ready = threading.Event()
         self.next_loop_tracks = []
@@ -215,6 +224,34 @@ class GlobalState:
         self.next_loop_ready.clear()
         self.next_loop_tracks = []
         self.current_loop_end_sample = 0
+        # Loop sync fields
+        self.currently_playing_loop_index = 0
+        self.currently_playing_stems = []
+        self.currently_playing_set_name = ""
+        self.currently_playing_reasoning = ""
+        self.loop_history = []
+
+    # ------------------------------------------------------------------
+    # Loop transition recording — called by main async loop when mixer
+    # actually transitions to new audio (vs when Conductor decided).
+    # ------------------------------------------------------------------
+
+    def record_loop_transition(self, loop_index: int, stems: list, set_name: str, reasoning: str):
+        """Record that the mixer transitioned to a new loop."""
+        with self.sync_lock:
+            self.currently_playing_loop_index = loop_index
+            self.currently_playing_stems = copy.deepcopy(stems)
+            self.currently_playing_set_name = set_name
+            self.currently_playing_reasoning = reasoning
+            self.loop_history.append({
+                'loop_index': loop_index,
+                'set_name': set_name,
+                'reasoning': reasoning,
+                'stems': copy.deepcopy(stems),
+                'timestamp': time.time()
+            })
+            if len(self.loop_history) > 10:
+                self.loop_history.pop(0)
 
     def _load_instruments(self):
         if os.path.exists(self.instruments_file):

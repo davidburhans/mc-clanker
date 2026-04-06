@@ -22,6 +22,13 @@ async def get_state():
             "current_set_name": state.current_set_name,
             "current_bpm": state.current_bpm,
             "current_key": state.current_key,
+            "target_bpm_override": state.target_bpm_override,
+            "target_key_override": state.target_key_override,
+            "user_override": state.user_override,
+            "available_instruments": state.available_instruments,
+            "muted_stems": list(state.muted_stems),
+            "soloed_stems": list(state.soloed_stems),
+            "stem_volumes": state.stem_volumes,
             "active_stems": state.active_stems,
             "llm_reasoning": state.llm_reasoning,
             "is_generating": state.is_generating,
@@ -30,6 +37,24 @@ async def get_state():
             "is_show_started": state.is_show_started,
             "audience_message": state.audience_message,
             "audience_message_ts": state.audience_message_ts,
+            # Currently playing (authoritative "now audible" — updated when mixer transitions)
+            "currently_playing_loop_index": state.currently_playing_loop_index,
+            "currently_playing_stems": state.currently_playing_stems,
+            "currently_playing_set_name": state.currently_playing_set_name,
+            "currently_playing_reasoning": state.currently_playing_reasoning,
+            # Loop history for DJ navigation
+            "loop_history": [
+                {
+                    "loop_index": h['loop_index'],
+                    "set_name": h['set_name'],
+                    "reasoning": h['reasoning'],
+                    "stems": h['stems'],
+                    "timestamp": h['timestamp']
+                }
+                for h in state.loop_history
+            ],
+            # Next queued (what's coming next — planned but not yet playing)
+            "next_queued_stems": state.next_stems,
         }
 
 @router.post("/state")

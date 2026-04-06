@@ -10,6 +10,7 @@ because the _callback runs in a normal daemon thread, never in async context.
 import logging
 import threading
 import time
+from typing import Optional
 
 import numpy as np
 
@@ -43,6 +44,10 @@ class Mixer:
         self._running = False
         self._stream_thread = None
         self._debug_count = 0
+        # Loop transition tracking
+        self._just_transitioned = False
+        self._last_transition_loop_index = 0
+        self._next_loop_idx = 0  # Loop index being queued for next transition
 
     # ------------------------------------------------------------------
     # Public track management
@@ -58,7 +63,7 @@ class Mixer:
         """Add without re-normalizing; caller must hold self.lock."""
         self.tracks.append(Track(audio_data, start_sample, stem_index))
 
-    def set_next_loop(self, tracks_audio: list, next_loop_duration_samples: int = 0):
+    def set_next_loop(self, tracks_audio: list, next_loop_duration_samples: int = 0, loop_idx: int = 0):
         """Pre-register the next loop's tracks for seamless transition.
 
         tracks_audio: list of (audio_data, stem_index) tuples.
@@ -66,10 +71,12 @@ class Mixer:
             transition fires to set the new current_loop_end_sample). Does NOT
             touch current_loop_end_sample — the current loop's boundary is
             preserved so tracks are not orphaned before the transition.
+        loop_idx: the loop index being queued (used to notify state when transition fires).
         """
         with self.lock:
             self.next_loop_audio = tracks_audio
             self._next_loop_duration = next_loop_duration_samples
+            self._next_loop_idx = loop_idx
 
     def clear(self):
         with self.lock:
@@ -79,6 +86,17 @@ class Mixer:
             self.current_loop_end_sample = 0
             self._next_loop_duration = 0
             self._current_loop_duration = 0
+            self._just_transitioned = False
+            self._last_transition_loop_index = 0
+            self._next_loop_idx = 0
+
+    def pop_transition_event(self):
+        """Atomically check and clear transition flag. Returns loop index if transitioned."""
+        with self.lock:
+            if self._just_transitioned:
+                self._just_transitioned = False
+                return self._last_transition_loop_index
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -163,6 +181,7 @@ class Mixer:
                         # Start new tracks at the ALIGNED boundary so there are no
                         # gaps/overlaps regardless of when this callback fires.
                         transition_sample = self.current_loop_end_sample
+                        transitioning_loop_idx = self._next_loop_idx
                         log.debug("Switching to next loop at boundary sample %d (current=%d)",
                                   transition_sample, self.current_sample)
                         for audio_data, stem_index in self.next_loop_audio:
@@ -184,6 +203,9 @@ class Mixer:
                                 self.current_loop_end_sample = 0
                                 self._current_loop_duration = 0
                         self._next_loop_duration = 0
+                        # Signal that a transition occurred so the async loop can record it in state
+                        self._just_transitioned = True
+                        self._last_transition_loop_index = transitioning_loop_idx
                     else:
                         # Next audio not ready yet — extend current tracks by exactly one
                         # loop duration so the boundary stays bar-aligned at every BPM.
