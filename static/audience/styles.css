@@ -90,47 +90,6 @@ body {
    TEXTURE OVERLAYS
 ======================================== */
 
-/* CRT Scanlines */
-.scanlines {
-    position: fixed;
-    inset: 0;
-    background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 2px,
-        rgba(0, 0, 0, 0.1) 2px,
-        rgba(0, 0, 0, 0.1) 4px
-    );
-    pointer-events: none;
-    z-index: 1000;
-    opacity: 0.25;
-}
-
-/* Film grain noise */
-.grain {
-    position: fixed;
-    inset: -50%;
-    width: 200%;
-    height: 200%;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-    opacity: 0.03;
-    pointer-events: none;
-    z-index: 999;
-    animation: grain 0.5s steps(1) infinite;
-}
-
-@keyframes grain {
-    0%, 100% { transform: translate(0, 0); }
-    10% { transform: translate(-5%, -10%); }
-    20% { transform: translate(-15%, 5%); }
-    30% { transform: translate(7%, -25%); }
-    40% { transform: translate(-5%, 25%); }
-    50% { transform: translate(-15%, 10%); }
-    60% { transform: translate(15%, 0%); }
-    70% { transform: translate(0%, 15%); }
-    80% { transform: translate(3%, 35%); }
-    90% { transform: translate(-10%, 10%); }
-}
 
 /* Ambient background gradient */
 body::before {
@@ -198,8 +157,6 @@ body::before {
 ======================================== */
 .audience-header {
     background: linear-gradient(180deg, var(--bg-panel-glass) 0%, rgba(10, 10, 15, 0.9) 100%);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
     border: 1px solid var(--border-subtle);
     border-radius: 16px;
     padding: 20px 24px;
@@ -433,8 +390,6 @@ body::before {
 .visualizer-wrapper {
     height: 100%;
     background: linear-gradient(180deg, rgba(15, 15, 20, 0.4) 0%, rgba(5, 5, 8, 0.8) 100%);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
     border: 1px solid var(--border-subtle);
     border-radius: 16px;
     position: relative;
@@ -459,8 +414,6 @@ body::before {
 
 .viz-select {
     background: rgba(10, 10, 15, 0.6);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
     border: 1px solid var(--border-subtle);
     color: var(--text-warm);
     padding: 6px 12px;
@@ -1137,8 +1090,6 @@ body::before {
 ======================================== */
 .stems-section {
     background: linear-gradient(180deg, var(--bg-panel-glass) 0%, rgba(10, 10, 15, 0.9) 100%);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
     border: 1px solid var(--border-subtle);
     border-radius: 16px;
     padding: 20px;
@@ -1272,8 +1223,6 @@ body::before {
 /* Stem Card */
 .stem-card {
     background: var(--bg-card-glass);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
     border: 1px solid var(--border-subtle);
     border-radius: 16px;
     padding: 16px;
@@ -1312,21 +1261,19 @@ body::before {
 @keyframes stemEnter {
     from {
         opacity: 0;
-        transform: translateY(20px) scale(0.95);
+        transform: translateY(12px);
     }
     to {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translateY(0);
     }
 }
 
-/* Staggered entrance for stem cards */
-.stem-card:nth-child(1) { animation-delay: 0.05s; }
-.stem-card:nth-child(2) { animation-delay: 0.12s; }
-.stem-card:nth-child(3) { animation-delay: 0.19s; }
-.stem-card:nth-child(4) { animation-delay: 0.26s; }
-.stem-card:nth-child(5) { animation-delay: 0.33s; }
-.stem-card:nth-child(6) { animation-delay: 0.4s; }
+/* Staggered entrance for stem cards - no replay on re-render */
+.stem-card {
+    animation: stemEnter 0.4s var(--ease-out-expo) forwards;
+    opacity: 0;
+}
 
 .stem-card.fresh {
     border-left-color: var(--led-green);
@@ -1483,8 +1430,6 @@ body::before {
     align-items: center;
     padding: 16px 24px;
     background: linear-gradient(180deg, var(--bg-panel-glass) 0%, rgba(10, 10, 15, 0.9) 100%);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
     border: 1px solid var(--border-subtle);
     border-radius: 16px;
     box-shadow: var(--shadow-deep), inset 0 1px 0 rgba(255, 255, 255, 0.05);
