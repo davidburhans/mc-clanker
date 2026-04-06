@@ -14,8 +14,6 @@
 </head>
 <body>
     <div class="floating-particles"></div>
-    <div class="scanlines"></div>
-    <div class="grain"></div>
 
     <!-- Toast Container -->
     <div class="toast-container" id="toast-container"></div>
@@ -270,15 +268,24 @@
 
                 <!-- Vibe Section -->
                 <div class="vibe-section">
-                    <label class="section-label" for="vibe-input">VIBE</label>
-                    <div class="vibe-input-wrapper">
-                        <input type="text" id="vibe-input" placeholder="Describe the mood..." maxlength="200" aria-describedby="vibe-char-count">
-                        <span class="vibe-active-indicator" id="vibe-active-indicator" aria-hidden="true">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                                <polygon points="12,2 15,9 22,9 17,14 19,22 12,17 5,22 7,14 2,9 9,9"/>
+                    <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="vibe-content">
+                        <h3>VIBE</h3>
+                        <span class="collapse-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
                             </svg>
                         </span>
                     </div>
+                    <div class="vibe-content" id="vibe-content">
+                        <label class="section-label" for="vibe-input">VIBE</label>
+                        <div class="vibe-input-wrapper">
+                            <input type="text" id="vibe-input" placeholder="Describe the mood..." maxlength="200" aria-describedby="vibe-char-count">
+                            <span class="vibe-active-indicator" id="vibe-active-indicator" aria-hidden="true">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <polygon points="12,2 15,9 22,9 17,14 19,22 12,17 5,22 7,14 2,9 9,9"/>
+                                </svg>
+                            </span>
+                        </div>
                     <!-- Quick vibe presets -->
                     <div class="vibe-presets">
                         <button class="vibe-chip" data-vibe="aggressive">
@@ -327,6 +334,7 @@
                     <div class="input-footer">
                         <span class="char-count" id="vibe-char-count">0/200</span>
                     </div>
+                    </div>
                 </div>
 
                 <!-- Instrument Rack -->
@@ -358,7 +366,7 @@
             <div class="panel info-panel">
                 <!-- Conductor Reasoning -->
                 <div class="reasoning-section">
-                    <div class="panel-header">
+                    <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="reasoning-content">
                         <h3>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <circle cx="12" cy="12" r="10"/>
@@ -367,18 +375,25 @@
                             </svg>
                             CONDUCTOR
                         </h3>
+                        <span class="collapse-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </span>
                     </div>
-                    <div class="reasoning-box" id="reasoning-box">
-                        <p class="placeholder">Initializing engine...</p>
-                    </div>
-                    <div class="action-log" id="action-log">
-                        <!-- Populated by JS -->
+                    <div class="reasoning-content" id="reasoning-content">
+                        <div class="reasoning-box" id="reasoning-box">
+                            <p class="placeholder">Initializing engine...</p>
+                        </div>
+                        <div class="action-log" id="action-log">
+                            <!-- Populated by JS -->
+                        </div>
                     </div>
                 </div>
 
                 <!-- Stem Deck Timeline -->
                 <div class="stem-deck-section">
-                    <div class="panel-header">
+                    <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="stem-deck">
                         <h3>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
@@ -388,16 +403,32 @@
                             STEMS
                         </h3>
                         <div class="loop-counter" id="loop-counter">0</div>
+                        <span class="collapse-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </span>
                     </div>
 
                     <div class="stem-deck" id="stem-deck">
                         <!-- Populated by JS for detailed stem controls -->
                     </div>
+
+                    <!-- Loop Navigation Selector -->
+                    <div class="loop-selector" id="loop-selector">
+                        <button class="loop-nav" id="loop-prev" title="Previous loop">&#8592;</button>
+                        <span class="loop-indicator">
+                            Loop <span id="loop-num">1</span> / <span id="loop-total">1</span>
+                        </span>
+                        <span class="now-playing-badge" id="now-playing-badge" style="display:none;">NOW PLAYING</span>
+                        <button class="loop-nav" id="loop-next" title="Next loop">&#8594;</button>
+                        <button class="jump-to-current" id="jump-current" title="Jump to currently playing">Jump to Current</button>
+                    </div>
                 </div>
 
                 <!-- Custom Stem Creator -->
                 <div class="custom-stem-section">
-                    <div class="panel-header">
+                    <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="custom-stem-form">
                         <h3>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 2L2 7l10 5 10-5-10-5z"/>
@@ -406,8 +437,13 @@
                             </svg>
                             CUSTOM STEM
                         </h3>
+                        <span class="collapse-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </span>
                     </div>
-                    <div class="custom-stem-form">
+                    <div class="custom-stem-form" id="custom-stem-form">
                         <div class="stem-form-row">
                             <select id="custom-stem-instrument" class="stem-select">
                                 <option value="">Select instrument...</option>
@@ -435,7 +471,7 @@
 
                 <!-- Audience Message Broadcast -->
                 <div class="broadcast-section">
-                    <div class="panel-header">
+                    <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="broadcast-form">
                         <h3>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/>
@@ -446,8 +482,13 @@
                             </svg>
                             BROADCAST
                         </h3>
+                        <span class="collapse-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </span>
                     </div>
-                    <div class="broadcast-form">
+                    <div class="broadcast-form" id="broadcast-form">
                         <div class="broadcast-input-wrapper">
                             <input type="text" id="audience-message-input" class="broadcast-input"
                                    placeholder="Send a message to your audience..." maxlength="200">
@@ -471,7 +512,7 @@
 
                 <!-- Export Section -->
                 <div class="export-section">
-                    <div class="panel-header">
+                    <div class="panel-header collapsible" role="button" tabindex="0" aria-expanded="true" aria-controls="export-controls">
                         <h3>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
@@ -480,8 +521,13 @@
                             </svg>
                             EXPORT
                         </h3>
+                        <span class="collapse-icon">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                        </span>
                     </div>
-                    <div class="export-controls">
+                    <div class="export-controls" id="export-controls">
                         <button id="record-btn" class="record-btn">
                             <span class="record-icon">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">

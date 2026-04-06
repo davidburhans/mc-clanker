@@ -160,47 +160,6 @@ body::after {
     100% { transform: translateY(-110vh) translateX(50px) scale(0.5); opacity: 0; }
 }
 
-/* CRT Scanlines - Same as audience interface */
-.scanlines {
-    position: fixed;
-    inset: 0;
-    background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 2px,
-        rgba(0, 0, 0, 0.08) 2px,
-        rgba(0, 0, 0, 0.08) 4px
-    );
-    pointer-events: none;
-    z-index: 1000;
-    opacity: 0.15;
-}
-
-/* Film grain noise - Same as audience interface */
-.grain {
-    position: fixed;
-    inset: -50%;
-    width: 200%;
-    height: 200%;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-    opacity: 0.025;
-    pointer-events: none;
-    z-index: 999;
-    animation: grain 0.5s steps(1) infinite;
-}
-
-@keyframes grain {
-    0%, 100% { transform: translate(0, 0); }
-    10% { transform: translate(-5%, -10%); }
-    20% { transform: translate(-15%, 5%); }
-    30% { transform: translate(7%, -25%); }
-    40% { transform: translate(-5%, 25%); }
-    50% { transform: translate(-15%, 10%); }
-    60% { transform: translate(15%, 0%); }
-    70% { transform: translate(0%, 15%); }
-    80% { transform: translate(3%, 35%); }
-    90% { transform: translate(-10%, 10%); }
-}
 
 .dj-container {
     position: relative;
@@ -1124,7 +1083,6 @@ body::after {
     pointer-events: auto;
     animation: toastSlideIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
     max-width: 400px;
-    backdrop-filter: blur(12px);
 }
 
 .toast.toast-exit {
@@ -2242,7 +2200,6 @@ select option {
     position: fixed;
     inset: 0;
     background: rgba(3, 3, 10, 0.85);
-    backdrop-filter: blur(8px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3909,7 +3866,7 @@ select option {
     border-radius: 12px;
     border: 1px solid var(--border-subtle);
     position: relative;
-    overflow: hidden;
+    overflow: visible;
     box-shadow: 0 0 30px rgba(255, 170, 0, 0.05);
     animation: tempoSectionBreath 4s ease-in-out infinite;
 }
@@ -4663,6 +4620,79 @@ select option {
     transform: rotate(-90deg);
 }
 
+/* Info panel collapsible sections */
+.reasoning-section.collapsed .reasoning-content,
+.stem-deck-section.collapsed .stem-deck,
+.custom-stem-section.collapsed .custom-stem-form,
+.broadcast-section.collapsed .broadcast-form,
+.export-section.collapsed .export-controls {
+    display: none;
+}
+
+/* Vibe section collapsible */
+.vibe-section.collapsed .vibe-content {
+    display: none;
+}
+
+.vibe-section .panel-header.collapsible {
+    cursor: pointer;
+    transition: background 0.2s;
+    margin: 0 8px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.vibe-section .panel-header.collapsible:hover {
+    background: var(--bg-hover);
+}
+
+.vibe-section .panel-header.collapsible h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'Syne', sans-serif;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-normal);
+}
+
+.vibe-section .panel-header.collapsible .collapse-icon {
+    margin-left: auto;
+}
+
+.info-panel .panel-header.collapsible {
+    cursor: pointer;
+    transition: background 0.2s;
+    margin: 0 8px;
+    padding: 10px 14px;
+    border-radius: 10px;
+}
+
+.info-panel .panel-header.collapsible:hover {
+    background: var(--bg-hover);
+}
+
+.info-panel .panel-header.collapsible {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.info-panel .panel-header.collapsible h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.info-panel .panel-header.collapsible .collapse-icon {
+    margin-left: auto;
+}
+
 .instrument-category {
     margin-bottom: 4px;
     padding: 0 6px;
@@ -5294,6 +5324,80 @@ select option {
     background: linear-gradient(145deg, rgba(136, 255, 136, 0.12) 0%, rgba(136, 255, 136, 0.05) 100%);
 }
 .stem-mini.texture::before { background: linear-gradient(180deg, #88ff88, #66cc66); box-shadow: 0 0 8px #88ff88; }
+
+/* ========== LOOP SELECTOR ========== */
+.loop-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    margin: 0 12px 8px;
+}
+
+.loop-nav {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+}
+
+.loop-nav:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: var(--amber-glow);
+}
+
+.loop-indicator {
+    font-family: 'Exo 2', sans-serif;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    letter-spacing: 1px;
+}
+
+.now-playing-badge {
+    font-family: 'Exo 2', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--amber-glow);
+    background: rgba(255, 170, 0, 0.15);
+    border: 1px solid rgba(255, 170, 0, 0.4);
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: 2px;
+    text-shadow: 0 0 10px rgba(255, 170, 0, 0.6);
+    animation: nowPlayingPulse 2s ease-in-out infinite;
+}
+
+@keyframes nowPlayingPulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(255, 170, 0, 0.4); }
+    50% { opacity: 0.7; box-shadow: 0 0 15px rgba(255, 170, 0, 0.6); }
+}
+
+.jump-to-current {
+    margin-left: auto;
+    background: linear-gradient(135deg, rgba(255, 170, 0, 0.2) 0%, rgba(255, 170, 0, 0.1) 100%);
+    border: 1px solid rgba(255, 170, 0, 0.4);
+    border-radius: 6px;
+    color: var(--amber-glow);
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    transition: all 0.2s ease;
+}
+
+.jump-to-current:hover {
+    background: rgba(255, 170, 0, 0.25);
+    box-shadow: 0 0 15px rgba(255, 170, 0, 0.3);
+}
 
 .stem-deck {
     flex: 1;
@@ -6256,8 +6360,6 @@ select option {
     width: 100%;
     height: 100%;
     background: rgba(3, 3, 10, 0.95);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
     z-index: 1000;
     align-items: center;
     justify-content: center;

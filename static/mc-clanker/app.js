@@ -648,6 +648,69 @@ class DJSlopApp {
     }
 
     updateUIFromState(data) {
+        // Track Overrides and Instruments
+        this.state.availableInstruments = data.available_instruments || [];
+        this.state.targetBpmOverride = data.target_bpm_override;
+        this.state.targetKeyOverride = data.target_key_override;
+        this.state.userOverride = data.user_override;
+
+        // Sync Instrument Checkboxes
+        if (this.instrumentCategories) {
+            this.instrumentCategories.querySelectorAll('.instrument-toggle').forEach(toggle => {
+                const label = toggle.querySelector('.toggle-label').textContent.trim();
+                if (this.state.availableInstruments.includes(label)) {
+                    toggle.classList.add('active');
+                } else {
+                    toggle.classList.remove('active');
+                }
+            });
+        }
+
+        // Sync BPM Override Input
+        if (this.state.targetBpmOverride !== null && this.state.targetBpmOverride !== undefined) {
+            if (this.bpmOverride && document.activeElement !== this.bpmOverride) {
+                this.bpmOverride.value = this.state.targetBpmOverride;
+                this.bpmOverride.classList.add('override-active');
+            }
+        } else {
+            if (this.bpmOverride && document.activeElement !== this.bpmOverride) {
+                this.bpmOverride.value = '';
+                this.bpmOverride.classList.remove('override-active');
+            }
+        }
+
+        // Sync Key Override Input
+        if (this.state.targetKeyOverride) {
+            if (this.keyOverride && document.activeElement !== this.keyOverride) {
+                this.keyOverride.value = this.state.targetKeyOverride;
+                this.keyOverride.classList.add('override-active');
+            }
+        } else {
+            if (this.keyOverride && document.activeElement !== this.keyOverride) {
+                this.keyOverride.value = '';
+                this.keyOverride.classList.remove('override-active');
+            }
+        }
+
+        // Sync Vibe Override Input
+        if (this.state.userOverride) {
+            if (this.vibeInput && document.activeElement !== this.vibeInput) {
+                this.vibeInput.value = this.state.userOverride;
+            }
+            this.state.vibeActive = true;
+            if (this.vibeActiveIndicator) this.vibeActiveIndicator.classList.add('active');
+            if (this.activeVibeText) this.activeVibeText.textContent = this.state.userOverride;
+            if (this.activeVibeDisplay) this.activeVibeDisplay.classList.add('visible');
+        } else {
+            if (this.vibeInput && document.activeElement !== this.vibeInput) {
+                this.vibeInput.value = '';
+            }
+            this.state.vibeActive = false;
+            if (this.vibeActiveIndicator) this.vibeActiveIndicator.classList.remove('active');
+            if (this.activeVibeText) this.activeVibeText.textContent = '';
+            if (this.activeVibeDisplay) this.activeVibeDisplay.classList.remove('visible');
+        }
+
         // Set Name
         this.state.current_set_name = data.current_set_name || 'Waiting for track...';
 
@@ -1369,8 +1432,8 @@ class DJSlopApp {
     // DJ Controls - Unified Apply
     applyAll() {
         const selectedInstruments = [];
-        this.instrumentCategories.querySelectorAll('.instrument-item input:checked').forEach(cb => {
-            selectedInstruments.push(cb.value);
+        this.instrumentCategories.querySelectorAll('.instrument-toggle.active .toggle-label').forEach(label => {
+            selectedInstruments.push(label.textContent.trim());
         });
 
         const bpmVal = this.bpmOverride.value ? parseInt(this.bpmOverride.value) : null;
@@ -1398,26 +1461,23 @@ class DJSlopApp {
         this.applyState(updates)
             .then(() => {
                 if (bpmVal) {
-                    this.state.bpm = bpmVal;
                     this.bpmDisplay.textContent = bpmVal;
                     this.bpmOverride.classList.add('override-active');
                     this.bpmOverride.value = '';
                 }
                 if (keyVal) {
-                    this.state.key = keyVal;
                     if (this.keyDisplay) this.keyDisplay.textContent = keyVal;
                     if (this.rotaryKeyDisplay) this.updateKeyDisplay(keyVal);
                     this.keyOverride.classList.add('override-active');
                     this.keyOverride.value = '';
                 }
                 if (vibeVal) {
-                    this.state.vibe = vibeVal;
                     this.state.vibeActive = true;
                     this.vibeActiveIndicator.classList.add('active');
                     this.activeVibeText.textContent = vibeVal;
                     this.activeVibeDisplay.classList.add('visible');
                     this.vibeInput.value = '';
-                    this.vibeCharCount.textContent = '0/200';
+                    if (this.vibeCharCount) this.vibeCharCount.textContent = '0/200';
                 }
 
                 let msg = 'Settings applied';
@@ -1859,6 +1919,10 @@ class DJSlopApp {
                     data.current_set_name !== this.state.current_set_name ||
                     data.current_bpm !== this.state.bpm ||
                     data.current_key !== this.state.key ||
+                    data.target_bpm_override !== this.state.targetBpmOverride ||
+                    data.target_key_override !== this.state.targetKeyOverride ||
+                    data.user_override !== this.state.userOverride ||
+                    JSON.stringify(data.available_instruments || []) !== JSON.stringify(this.state.availableInstruments || []) ||
                     data.llm_reasoning !== this.state.reasoning ||
                     data.loop_count !== this.state.loop_count ||
                     JSON.stringify(data.active_stems) !== JSON.stringify(this.state.currentStems) ||
