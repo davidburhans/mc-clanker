@@ -25,8 +25,8 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 │         │                                    │             │
 │         ▼                                    ▼             │
 │  ┌──────────────┐              ┌─────────────────────┐   │
-│  │  Job Queue   │              │   Garage S3 Store   │   │
-│  │  (PostgreSQL)│              │   (Audio Storage)  │   │
+│  │  Job Queue   │              │   MinIO S3 Store    │   │
+│  │  (PostgreSQL)│              │   (Audio Storage)   │   │
 │  └──────────────┘              └─────────────────────┘   │
 │         │                                                      │
 │         ▼                                                      │
@@ -61,17 +61,29 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 
 | Component | Description |
 |-----------|-------------|
-| `app/app_ui.py` | FastAPI server with Gradio UI and DJ interface |
-| `app/api_routes.py` | REST API endpoints for DJ UI and Stem Mixer |
+| `app/app_ui.py` | FastAPI server with DJ web interface |
+| `app/routes/__init__.py` | API router aggregating all route modules |
+| `app/routes/shows.py` | Show management, recording, playback |
+| `app/routes/jobs.py` | Job submission and status |
+| `app/routes/stems.py` | Stem volume/mute/solo control |
+| `app/routes/config.py` | LLM config, generation params, instruments |
+| `app/routes/models.py` | Model loading/unloading |
+| `app/routes/auth.py` | JWT authentication endpoints |
+| `app/routes/schemas.py` | Pydantic request/response schemas |
+| `app/routes/utils.py` | Route utilities (require_show_owner, etc.) |
 | `app/framework/framework_main_async.py` | Async generation loop and audio mixing |
 | `app/framework/framework_conductor_async.py` | LLM-powered track arrangement logic |
 | `app/framework/framework_generator.py` | Foundation-1 audio generation |
 | `app/framework/framework_mixer.py` | Multi-track audio mixing engine with Stem support |
 | `app/framework/framework_state.py` | Shared global state and process management |
 | `app/worker.py` | Async job worker for distributed GPU generation |
+| `app/worker_routes.py` | Worker health check/stats endpoints |
 | `app/job_waiter.py` | LISTEN/NOTIFY job completion waiter |
-| `app/garage_client.py` | Garage S3-compatible object storage |
+| `app/garage_client.py` | Garage/MinIO S3-compatible object storage |
 | `app/cleanup.py` | Expired job cleanup service |
+| `app/onboarding.py` | Pre-flight configuration health checks |
+| `app/playback.py` | Pre-recorded show playback |
+| `app/aac_encoder.py` | FFmpeg-based AAC encoding/decoding |
 
 ## Requirements
 
@@ -85,12 +97,11 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 ### Option 1: Docker (Recommended)
 
 ```bash
-# Build and run
-cd docker
-podman compose up -d
+# Build and run from repo root
+docker compose -f docker/compose.yaml up -d
 
 # Access interfaces
-Gradio UI:  http://localhost:7860
+Audience UI: http://localhost:7860
 DJ UI:      http://localhost:7860/dj
 Audio Stream: http://localhost:7860/stream.mp3
 ```
@@ -143,9 +154,9 @@ export LLM_MODEL=local-model
 6. Watch the **Conductor Reasoning** panel to see AI decisions
 7. Click **Record to File** to capture your session
 
-### Gradio Interface (`/`)
+### Audience Interface (`/`)
 
-The Gradio UI at `http://localhost:7860` provides the same functionality through a different interface style.
+The audience-facing web UI at `http://localhost:7860` provides real-time audio streaming and visualization.
 
 ### API Endpoints
 
@@ -198,21 +209,7 @@ curl -X POST http://localhost:7860/api/export/start \
 
 ### Icecast Streaming (Optional)
 
-To enable Icecast output, uncomment the `icecast` service in `docker/compose.yaml`:
-
-```yaml
-services:
-  web:
-    # ... existing config ...
-
-  icecast:
-    image: insomniaicecast/icecast
-    ports:
-      - "8000:8000"
-    environment:
-      - ICECAST_SOURCE_PASSWORD=sourcepass
-      - ICECAST_ADMIN_PASSWORD=adminpass
-```
+Icecast streaming is configured via environment variables (`ICECAST_ENABLED`, `ICECAST_HOST`, `ICECAST_PORT`, `ICECAST_PASSWORD`). See `docker/compose.yaml` for the current Icecast configuration if enabled.
 
 ## Troubleshooting
 
@@ -249,10 +246,19 @@ podman exec <container> nvidia-smi
 ```
 mc-clanker/
 ├── app/                     # Application code
-│   ├── app_ui.py           # FastAPI server with Gradio + DJ UI
-│   ├── api_routes.py       # REST API endpoints
+│   ├── app_ui.py           # FastAPI server with DJ web interface
 │   ├── auth.py             # JWT authentication
 │   ├── db.py               # Database singleton
+│   ├── routes/             # Modular REST API
+│   │   ├── __init__.py     # API router aggregating all routes
+│   │   ├── auth.py         # Auth endpoints
+│   │   ├── shows.py        # Show management
+│   │   ├── jobs.py         # Job submission
+│   │   ├── stems.py        # Stem mixer control
+│   │   ├── models.py       # Model management
+│   │   ├── config.py       # LLM/instrument config
+│   │   ├── schemas.py      # Pydantic request/response models
+│   │   └── utils.py        # Route utilities
 │   ├── framework/          # Audio generation pipeline (async)
 │   │   ├── framework_main_async.py
 │   │   ├── framework_conductor_async.py
@@ -266,17 +272,21 @@ mc-clanker/
 │   │   ├── llm_interaction.py
 │   │   └── generator_job.py
 │   ├── worker.py           # Async job worker for distributed generation
+│   ├── worker_routes.py    # Worker health check/stats endpoints
 │   ├── job_waiter.py       # LISTEN/NOTIFY job completion waiter
-│   ├── garage_client.py    # Garage S3-compatible object storage
+│   ├── garage_client.py    # Garage/MinIO S3-compatible object storage
 │   ├── cleanup.py          # Expired job cleanup service
+│   ├── onboarding.py       # Pre-flight configuration health checks
+│   ├── playback.py         # Pre-recorded show playback
 │   └── aac_encoder.py      # AAC audio encoding/decoding
 ├── config/
 │   └── models_config.json   # Audio model registry
 ├── docker/
-│   ├── compose.yaml         # Container orchestration (podman)
+│   ├── compose.yaml         # Container orchestration
 │   ├── Dockerfile.web       # Web server container
 │   └── Dockerfile.worker   # GPU worker container
-├── slop_harness/            # Dataset generation for training
+├── slop_harness/            # Dataset generation harness for Conductor training
+├── simulation/              # Stateful DJ session simulation
 ├── training/                # SFT/DPO fine-tuning pipeline
 ├── static/mc-clanker/       # DJ web interface assets
 │   ├── index.html
@@ -284,7 +294,6 @@ mc-clanker/
 │   └── app.js
 ├── tests/                   # Test suite
 ├── requirements.txt         # Python dependencies
-├── requirements-worker.txt  # Worker dependencies
 └── README.md
 ```
 

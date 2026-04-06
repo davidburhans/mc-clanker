@@ -6,7 +6,7 @@ This file provides guidance to [Claude Code](https://claude.com/code) when worki
 
 **mc-clanker** is an AI-powered continuous music generator that transforms Foundation-1 text-to-sample models into a DJ-style experience. It generates seamless, infinitely-running music controlled by an LLM "Conductor" that makes DJ-style arrangement decisions.
 
-**Core pipeline:** `Conductor (LLM)` → `Job Queue (PostgreSQL)` → `Generator (GPU worker)` → `Garage S3` → `Mixer (FFmpeg MP3 stream)`
+**Core pipeline:** `Conductor (LLM)` → `Job Queue (PostgreSQL)` → `Generator (GPU worker)` → `Garage/MinIO S3` → `Mixer (FFmpeg MP3 stream)`
 
 ---
 
@@ -34,7 +34,7 @@ This file provides guidance to [Claude Code](https://claude.com/code) when worki
 │                                │                                          │
 │                                ▼                                          │
 │                    ┌─────────────────────┐                               │
-│                    │   Garage S3 Store  │                               │
+│                    │ Garage/MinIO S3 Store│                              │
 │                    │   (audio storage)   │                               │
 │                    └─────────────────────┘                               │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -43,8 +43,8 @@ This file provides guidance to [Claude Code](https://claude.com/code) when worki
 │                         WORKER PROCESS (separate)                        │
 │                                                                          │
 │   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐             │
-│   │   Job       │────▶│  GENERATOR  │────▶│   Garage    │             │
-│   │   Fetcher   │     │  (GPU)      │     │   Upload    │             │
+│   │   Job       │────▶│  GENERATOR  │────▶│ Garage/    │             │
+│   │   Fetcher   │     │  (GPU)      │     │ MinIO S3   │             │
 │   └─────────────┘     └─────────────┘     └─────────────┘             │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -144,6 +144,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 
 | File | Class/Functions | Responsibility |
 |------|-----------------|----------------|
+| `framework_main_async.py` | `AsyncFrameworkLoop` | Async DJ set orchestrator — coordinates conductor, jobs, fetching, mixing |
 | `framework_state.py` | `GlobalState`, `state` | Thread-safe shared state |
 | `framework_conductor_async.py` | `ConductorLLMAsync`, `ConductorPromptBuilder` | Async LLM client, prompt construction, JSON parsing |
 | `framework_generator.py` | `GeneratorRegistry`, `generate_stem()` | Audio model management (Foundation-1, ACE-Step) |
@@ -153,41 +154,52 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 
 | File | Responsibility |
 |------|----------------|
-| `api_routes.py` | REST endpoints (~1500 lines, all in one router) |
-| `auth.py` | JWT tokens, bcrypt password hashing |
-| `db.py` | SQLAlchemy DatabaseManager singleton (thread-safe) |
-| `models/` | SQLAlchemy ORM models (User, Show, GeneratorJob, etc.) |
-| `playback.py` | Pre-recorded show playback |
-| `worker.py` | Async job processor (separate container) |
-| `garage_client.py` | Async boto3 wrapper for Garage S3 |
-| `job_waiter.py` | Async LISTEN/NOTIFY waiter for job completion |
-| `cleanup.py` | Periodic expired job/audio cleanup |
-| `onboarding.py` | Pre-flight configuration health checks |
+| `app/routes/__init__.py` | API router that aggregates all route modules |
+| `app/routes/auth.py` | JWT authentication endpoints |
+| `app/routes/shows.py` | Show management, recording, playback |
+| `app/routes/jobs.py` | Job submission and status |
+| `app/routes/stems.py` | Stem volume/mute/solo control |
+| `app/routes/models.py` | Model loading/unloading |
+| `app/routes/config.py` | LLM config, generation params, instruments |
+| `app/auth.py` | JWT tokens, bcrypt password hashing |
+| `app/db.py` | SQLAlchemy DatabaseManager singleton (thread-safe) |
+| `app/models/` | SQLAlchemy ORM models (User, Show, GeneratorJob, etc.) |
+| `app/playback.py` | Pre-recorded show playback |
+| `app/worker.py` | Async job processor (separate container) |
+| `app/worker_routes.py` | Worker health check/stats endpoints |
+| `app/garage_client.py` | Async boto3 wrapper for Garage/MinIO S3 |
+| `app/job_waiter.py` | Async LISTEN/NOTIFY waiter for job completion |
+| `app/cleanup.py` | Periodic expired job/audio cleanup |
+| `app/onboarding.py` | Pre-flight configuration health checks |
+| `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage |
 
 ---
 
 ## GlobalState Reference
 
-### State Attributes
+> **Note:** This is a partial reference. Run `grep "self\." app/framework/framework_state.py` for the complete list of state attributes.
+
+### Key State Attributes
 
 ```python
 # Musical parameters
-state.current_bpm           # int — Current tempo
+state.current_bpm           # int — Current tempo (default 120)
 state.current_key          # str — Musical key (e.g., "C minor")
-state.active_stems          # list[Stem] — Currently playing stems
+state.active_stems         # list[Stem] — Stems currently audible
 state.previous_stems        # list[Stem] — Stems from previous loop
-state.next_stems            # list[Stem] — Stems queued for next loop
-state.stem_history          # list[list[Stem]] — Rolling last 8 stem sets
+state.next_stems           # list[Stem] — Stems queued for next loop
+state.stem_history         # list[list[Stem]] — Rolling last 8 stem sets
 
 # Generation control
-state.is_generating          # bool — Framework loop running
-state.user_override          # str — Vibe prompt from user
-state.target_bpm_override    # int|None — Manual BPM override
-state.target_key_override    # str|None — Manual key override
-state.available_instruments  # list — Enabled instruments
+state.is_generating         # bool — Framework loop running
+state.user_override         # str — Vibe prompt from user
+state.target_bpm_override   # int|None — Manual BPM override
+state.target_key_override   # str|None — Manual key override
+state.should_reset          # bool — Signal to reset framework
 
 # LLM configuration
 state.llm_base_url          # str — LLM API endpoint
+state.llm_api_key           # str — API key (default "not-needed")
 state.llm_model             # str — Model name
 
 # Mixer state (per-stem)
@@ -197,18 +209,26 @@ state.soloed_stems          # set[int] — soloed stem indices
 state.stem_ages             # dict[int, int] — index → loop count
 
 # Loop coordination
-state.loop_count             # int — Total loops completed
-state.last_actions           # list[dict] — Recent Conductor actions
-state.llm_reasoning          # str — Conductor's decision text
+state.loop_count            # int — Total loops completed
+state.last_actions          # list[dict] — Recent Conductor actions
+state.llm_reasoning        # str — Conductor's decision text
 
 # Recording
 state.is_recording          # bool — Session recording active
+state.recording_format      # str — "wav" or "mp3"
 state.is_show_recording     # bool — Show recording active
 
 # Show/playback
-state.is_show_started        # bool — Audience can access
+state.is_show_started       # bool — Audience can access
 state.currently_playing_show_id  # int|None
-state.is_playback_active     # bool
+state.is_playback_active    # bool
+
+# Framework internals
+state.next_loop_ready       # threading.Event — signals mixer to crossfade
+state.currently_playing_loop_index  # int — authoritative loop count
+state.loop_history          # list — rolling buffer of past loops
+state.generation_cfg_scale  # float — CFG scale for generation
+state.generation_steps      # int — Steps for generation
 ```
 
 ### Stem Data Structure
@@ -285,7 +305,7 @@ state.is_playback_active     # bool
    - Submit job to PostgreSQL queue
    - Wait for job completion via LISTEN/NOTIFY
 
-8. Fetch generated audio from Garage S3
+8. Fetch generated audio from Garage/MinIO S3
 
 9. with state.lock:
    - previous_stems = active_stems
@@ -305,9 +325,9 @@ The async framework uses PostgreSQL as a job queue:
 
 1. **Job Submission**: When the conductor requests a new stem, a job record is inserted into `generator_jobs` table
 2. **Job Processing**: The worker process (separate container) claims jobs via `FOR UPDATE SKIP LOCKED`
-3. **Audio Generation**: Worker generates audio using GPU, uploads to Garage S3
+3. **Audio Generation**: Worker generates audio using GPU, uploads to Garage/MinIO S3
 4. **Completion**: Worker marks job complete and sends PostgreSQL NOTIFY
-5. **Collection**: Async framework waits for NOTIFY and fetches audio from Garage
+5. **Collection**: Async framework waits for NOTIFY and fetches audio from MinIO
 
 ### Crossfade Timing
 
@@ -431,25 +451,35 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 
 | File | What to Test |
 |------|-------------|
-| `test_api.py` | REST endpoints |
-| `test_state.py` | GlobalState lock behavior |
-| `test_mixer.py` | Audio mixing |
-| `test_generator.py` | Model loading |
-| `test_auth.py` | JWT tokens |
-| `test_db.py` | Database operations |
-| `test_worker.py` | Job queue worker |
+| `test_api.py` | REST API endpoints |
+| `test_app_ui.py` | FastAPI app startup and lifespan |
 | `test_async_framework.py` | Async framework loop |
-| `test_job_waiter.py` | Job waiting/LISTEN-NOTIFY |
+| `test_audit_fixes.py` | Audit trail and fix verification |
+| `test_auth.py` | JWT tokens and auth middleware |
+| `test_constants.py` | Server and frontend constants validation |
+| `test_custom_instruments.py` | Custom instrument handling |
+| `test_db.py` | Database operations |
+| `test_dpo_pipeline.py` | DPO training pipeline |
+| `test_frontend_constants.py` | Frontend constant definitions |
+| `test_generator.py` | Audio model loading and generation |
+| `test_job_waiter.py` | LISTEN/NOTIFY job completion |
+| `test_mixer.py` | Audio mixing and crossfades |
+| `test_shows_api.py` | Show management endpoints |
+| `test_shows_model.py` | Show SQLAlchemy model |
+| `test_simulation.py` | Stateful DJ session simulation |
+| `test_state.py` | GlobalState lock behavior |
+| `test_worker.py` | Job queue worker and job claiming |
+| `test_worker_fetch_audio.py` | Worker audio fetching from storage |
 
 ### Mocking Patterns
 
 ```python
-# Mock the LLM client
+# Mock the async LLM client
 @pytest.fixture
 def mock_conductor(monkeypatch):
-    def fake_call(self, prompt):
+    async def fake_call_async(self, prompt):
         return {"actions": [], "reasoning": "test"}
-    monkeypatch.setattr(ConductorLLM, "call", fake_call)
+    monkeypatch.setattr(ConductorLLMAsync, "call_async", fake_call_async)
 
 # Mock sounddevice
 @pytest.fixture
@@ -475,8 +505,8 @@ def mock_sounddevice(monkeypatch):
 
 **3. LLM not responding**
 - Verify `LLM_BASE_URL` is reachable
-- Confirm model is loaded in Ollama
-- Check ConductorLLM.call() timeout
+- Confirm LLM server (Ollama, LM Studio, etc.) has the model loaded
+- Check `ConductorLLMAsync.call_async()` timeout
 
 **4. Model out of memory**
 - Reduce concurrent stems
@@ -532,29 +562,60 @@ Auto-created from defaults if missing.
 
 ## Dependencies
 
-### Core
+### Core (from pyproject.toml)
 ```toml
-stable-audio-tools==0.0.19  # Foundation-1 model interface
-scipy                       # Audio processing
-fastapi                     # Web framework
-uvicorn[standard]           # ASGI server
-pydantic>=2.0.0             # Data validation
-huggingface_hub             # Model downloads
-openai                      # LLM API client
-numpy                       # Array operations
-bcrypt>=4.0.0               # Password hashing
-PyJWT>=2.8.0                # JWT tokens
-sqlalchemy>=2.0.0           # ORM
-psycopg2-binary>=2.9.0      # PostgreSQL adapter
-asyncpg>=0.28.0             # Async PostgreSQL (worker)
-boto3>=1.34.0               # Garage S3 client
+# Web framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+starlette>=0.35.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+asyncpg>=0.28.0
+
+# Object storage
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Auth
+bcrypt>=4.0.0
+PyJWT>=2.8.0
+
+# HTTP client
+httpx>=0.25.0
+
+# Schema validation
+pydantic[email]>=2.0.0
+
+# LLM client
+openai>=1.0.0
+
+# Audio/scientific
+numpy>=1.23.5
+scipy>=1.12.0
+
+# GPU worker (separate install)
+torch>=2.0.0
+stable-audio-tools==0.0.19
+huggingface_hub>=0.20.0
+safetensors>=0.4.0
+
+# Development
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+ruff>=0.4.0
 ```
 
 ### Local Dev
 ```bash
 # Fast setup with uv
 uv venv
-uv pip install -r requirements.txt
+uv pip install -e .         # Core dependencies
+uv pip install --group worker  # GPU worker dependencies (if using worker)
+uv pip install --group dev     # Dev dependencies
 python -m app.app_ui
 ```
 

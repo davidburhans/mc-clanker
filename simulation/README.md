@@ -114,7 +114,7 @@ cli.py
 | History | None | Up to 8 previous stem sets |
 | Use case | Fast, bulk dataset | Realistic multi-turn sessions |
 
-For the **best training dataset**, run both and combine — harness provides breadth, simulation provides depth.
+For the **best training dataset**, run both and combine — slop_harness provides breadth, simulation provides depth.
 
 ---
 
