@@ -40,7 +40,7 @@ services:
     env_file:
       - ../.env
     ports:
-      - "7860:7860"
+      - "4400:4400"
     environment:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
       - LLM_API_KEY=${LLM_API_KEY:-not-needed}
@@ -76,6 +76,7 @@ services:
     env_file:
       - ../.env
     environment:
+      - HF_TOKEN=${HF_TOKEN}
       - WORKER_ID=worker-${HOSTNAME:-1}
       - DATABASE_URL=${DATABASE_URL:-postgresql://mcclanker:${POSTGRES_PASSWORD}@postgres:5432/mcclanker}
       - GARAGE_ENDPOINT=${GARAGE_ENDPOINT}

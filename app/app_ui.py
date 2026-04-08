@@ -567,6 +567,6 @@ if __name__ == "__main__":
             state.trigger_shutdown()
             super().handle_exit(sig, frame)
 
-    config = uvicorn.Config(app, host="0.0.0.0", port=7860)
+    config = uvicorn.Config(app, host="0.0.0.0", port=4400)
     server = CustomServer(config)
     server.run()

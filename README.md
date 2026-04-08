@@ -4,44 +4,14 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 
 **mc-clanker** transforms text-to-sample models into a continuous DJ experience. Instead of generating individual samples, it creates seamless, infinitely-running music tracks controlled by an AI "Conductor" that makes DJ-style arrangement decisions.
 
-## Overview
+### The DJ Interface
+A professional, real-time control center where you can steer the AI Conductor, adjust stems, and manage the live mix:
+![DJ Interface](docs/dj_interface.png)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         MC-CLANKER                          │
-│                   AI DJ Interface                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
-│  │  Visualizer  │  │  DJ Controls │  │   Conductor  │     │
-│  │  + Transport │  │  BPM / Key   │  │   Reasoning   │     │
-│  └──────────────┘  └──────────────┘  └──────────────┘     │
-│         │                 │                  │             │
-│         ▼                 ▼                  ▼             │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │              Async Framework Loop                    │  │
-│  │         (Job Queue + Audio Mixer)                   │  │
-│  └─────────────────────────────────────────────────────┘  │
-│         │                                    │             │
-│         ▼                                    ▼             │
-│  ┌──────────────┐              ┌─────────────────────┐   │
-│  │  Job Queue   │              │   MinIO S3 Store    │   │
-│  │  (PostgreSQL)│              │   (Audio Storage)   │   │
-│  └──────────────┘              └─────────────────────┘   │
-│         │                                                      │
-│         ▼                                                      │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │              GPU Worker (Separate Container)          │  │
-│  │         Foundation-1 Generator                       │  │
-│  └─────────────────────────────────────────────────────┘  │
-│                          │                                 │
-│                          ▼                                 │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │              Audio Output (Stream)                  │  │
-│  │         /stream.mp3  •  Icecast (optional)          │  │
-│  └─────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
+### The Audience Interface
+A sleek, immersive visualizer that your listeners see while tuning into the live stream:
+![Audience Interface](docs/audience_interface.png)
+
 
 ## Features
 
@@ -57,82 +27,30 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 - **Web Streaming**: Built-in HTTP streaming server
 - **Icecast Support**: Optional streaming to Shoutcast/Icecast for web radio
 
-## Architecture
-
-| Component | Description |
-|-----------|-------------|
-| `app/app_ui.py` | FastAPI server with DJ web interface |
-| `app/routes/__init__.py` | API router aggregating all route modules |
-| `app/routes/shows.py` | Show management, recording, playback |
-| `app/routes/jobs.py` | Job submission and status |
-| `app/routes/stems.py` | Stem volume/mute/solo control |
-| `app/routes/config.py` | LLM config, generation params, instruments |
-| `app/routes/models.py` | Model loading/unloading |
-| `app/routes/auth.py` | JWT authentication endpoints |
-| `app/routes/schemas.py` | Pydantic request/response schemas |
-| `app/routes/utils.py` | Route utilities (require_show_owner, etc.) |
-| `app/framework/framework_main_async.py` | Async generation loop and audio mixing |
-| `app/framework/framework_conductor_async.py` | LLM-powered track arrangement logic |
-| `app/framework/framework_generator.py` | Foundation-1 audio generation |
-| `app/framework/framework_mixer.py` | Multi-track audio mixing engine with Stem support |
-| `app/framework/framework_state.py` | Shared global state and process management |
-| `app/worker.py` | Async job worker for distributed GPU generation |
-| `app/worker_routes.py` | Worker health check/stats endpoints |
-| `app/job_waiter.py` | LISTEN/NOTIFY job completion waiter |
-| `app/garage_client.py` | Garage/MinIO S3-compatible object storage |
-| `app/cleanup.py` | Expired job cleanup service |
-| `app/onboarding.py` | Pre-flight configuration health checks |
-| `app/playback.py` | Pre-recorded show playback |
-| `app/aac_encoder.py` | FFmpeg-based AAC encoding/decoding |
-
 ## Requirements
 
-- **GPU**: NVIDIA GPU with CUDA support (~8GB VRAM minimum, 32GB recommended)
+- **GPU**: NVIDIA GPU with CUDA support (16GB VRAM minimum, 24GB+ recommended)
 - **Python**: 3.10+
-- **LLM Backend**: Local LLM server (e.g., Ollama, LM Studio) with OpenAI-compatible API
+- **LLM Backend**: Local LLM server (e.g., Ollama, vLLM) with OpenAI-compatible API. (Must support `json_schema` format in requests. A 4096 context length is recommended).
 - **Dependencies**: See `requirements.txt`
 
 ## Setup
 
-### Option 1: Docker (Recommended)
+### Docker
 
 ```bash
 # Build and run from repo root
 docker compose -f docker/compose.yaml up -d
 
 # Access interfaces
-Audience UI: http://localhost:7860
-DJ UI:      http://localhost:7860/dj
-Audio Stream: http://localhost:7860/stream.mp3
-```
-
-### Option 2: Local Development
-
-```bash
-# Create virtual environment
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-source .venv/bin/activate  # Linux/Mac
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the application
-python -m app.app_ui
+Audience UI: http://localhost:4400/listen
+DJ UI:      http://localhost:4400/dj
+Audio Stream: http://localhost:4400/stream.mp3
 ```
 
 ### LLM Setup
 
-mc-clanker requires a local LLM backend with an OpenAI-compatible API:
-
-```bash
-# Example with Ollama
-ollama serve
-ollama pull llama3.2
-
-# Or with LM Studio
-# Start LM Studio and enable "OpenAI API" server
-```
+mc-clanker requires a local LLM backend with an OpenAI-compatible API that supports strict structured outputs via `json_schema` in requests. We highly recommend using **Qwen3.5 9b** combined with a **4096 context length**. Additionally, using a `q6` quant of this model will get the entire application (LLM + Audio Generator) gracefully running in less than 23GB of VRAM!
 
 Configure the LLM endpoint in the DJ UI Settings modal or via environment variables:
 
@@ -146,7 +64,7 @@ export LLM_MODEL=local-model
 
 ### DJ Interface (`/dj`)
 
-1. Open `http://localhost:7860/dj` in your browser
+1. Open `http://localhost:4400/dj` in your browser
 2. Click **Play** or press `Space` to start the engine
 3. Use **Instrument Rack** to select which sounds should be generated
 4. Adjust **BPM** and **Key** overrides to control the music
@@ -154,9 +72,9 @@ export LLM_MODEL=local-model
 6. Watch the **Conductor Reasoning** panel to see AI decisions
 7. Click **Record to File** to capture your session
 
-### Audience Interface (`/`)
+### Audience Interface (`/listen`)
 
-The audience-facing web UI at `http://localhost:7860` provides real-time audio streaming and visualization.
+The audience-facing web UI at `http://localhost:4400/listen` provides real-time audio streaming and visualization.
 
 ### API Endpoints
 
@@ -182,17 +100,17 @@ The audience-facing web UI at `http://localhost:7860` provides real-time audio s
 
 ```bash
 # Start generation
-curl -X POST http://localhost:7860/api/state \
+curl -X POST http://localhost:4400/api/state \
   -H "Content-Type: application/json" \
   -d '{"is_generating": true}'
 
 # Set BPM override
-curl -X POST http://localhost:7860/api/state \
+curl -X POST http://localhost:4400/api/state \
   -H "Content-Type: application/json" \
   -d '{"target_bpm_override": 128}'
 
 # Start recording
-curl -X POST http://localhost:7860/api/export/start \
+curl -X POST http://localhost:4400/api/export/start \
   -H "Content-Type: application/json" \
   -d '{"format": "mp3"}'
 ```
@@ -242,6 +160,72 @@ podman exec <container> nvidia-smi
 - Verify LLM server is running
 - Check network connectivity to LLM_BASE_URL
 - Confirm API compatibility (OpenAI-compatible)
+
+
+## Architecture
+
+| Component | Description |
+|-----------|-------------|
+| `app/app_ui.py` | FastAPI server with DJ web interface |
+| `app/routes/__init__.py` | API router aggregating all route modules |
+| `app/routes/shows.py` | Show management, recording, playback |
+| `app/routes/jobs.py` | Job submission and status |
+| `app/routes/stems.py` | Stem volume/mute/solo control |
+| `app/routes/config.py` | LLM config, generation params, instruments |
+| `app/routes/models.py` | Model loading/unloading |
+| `app/routes/auth.py` | JWT authentication endpoints |
+| `app/routes/schemas.py` | Pydantic request/response schemas |
+| `app/routes/utils.py` | Route utilities (require_show_owner, etc.) |
+| `app/framework/framework_main_async.py` | Async generation loop and audio mixing |
+| `app/framework/framework_conductor_async.py` | LLM-powered track arrangement logic |
+| `app/framework/framework_generator.py` | Foundation-1 audio generation |
+| `app/framework/framework_mixer.py` | Multi-track audio mixing engine with Stem support |
+| `app/framework/framework_state.py` | Shared global state and process management |
+| `app/worker.py` | Async job worker for distributed GPU generation |
+| `app/worker_routes.py` | Worker health check/stats endpoints |
+| `app/job_waiter.py` | LISTEN/NOTIFY job completion waiter |
+| `app/garage_client.py` | Garage/MinIO S3-compatible object storage |
+| `app/cleanup.py` | Expired job cleanup service |
+| `app/onboarding.py` | Pre-flight configuration health checks |
+| `app/playback.py` | Pre-recorded show playback |
+| `app/aac_encoder.py` | FFmpeg-based AAC encoding/decoding |
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         MC-CLANKER                          │
+│                   AI DJ Interface                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │  Visualizer  │  │  DJ Controls │  │   Conductor  │     │
+│  │  + Transport │  │  BPM / Key   │  │   Reasoning   │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+│         │                 │                  │             │
+│         ▼                 ▼                  ▼             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │              Async Framework Loop                    │  │
+│  │         (Job Queue + Audio Mixer)                   │  │
+│  └─────────────────────────────────────────────────────┘  │
+│         │                                    │             │
+│         ▼                                    ▼             │
+│  ┌──────────────┐              ┌─────────────────────┐   │
+│  │  Job Queue   │              │   MinIO S3 Store    │   │
+│  │  (PostgreSQL)│              │   (Audio Storage)   │   │
+│  └──────────────┘              └─────────────────────┘   │
+│         │                                                      │
+│         ▼                                                      │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │              GPU Worker (Separate Container)          │  │
+│  │         Foundation-1 Generator                       │  │
+│  └─────────────────────────────────────────────────────┘  │
+│                          │                                 │
+│                          ▼                                 │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │              Audio Output (Stream)                  │  │
+│  │         /stream.mp3  •  Icecast (optional)          │  │
+│  └─────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## File Structure
 
