@@ -1,6 +1,6 @@
 # mc-clanker
 
-AI-Powered Continuous Music Generator — A professional DJ-style interface for real-time music generation using Foundation-1.
+AI-Powered Continuous Music Generator — A professional DJ-style interface for real-time music generation using [Foundation-1](https://huggingface.co/RoyalCities/Foundation-1).
 
 **mc-clanker** transforms text-to-sample models into a continuous DJ experience. Instead of generating individual samples, it creates seamless, infinitely-running music tracks controlled by an AI "Conductor" that makes DJ-style arrangement decisions.
 
@@ -19,13 +19,20 @@ A sleek, immersive visualizer that your listeners see while tuning into the live
 - **AI Conductor**: LLM-driven track selection and arrangement
 - **Stem Mixer**: Real-time control over individual stem volumes, muting, soloing, and individual stem downloads
 - **Loop Counter**: Persistent tracking of generation cycles
-- **Generation Config**: Adjustable `CFG Scale` and `Steps` to fine-tune the Foundation-1 model performance
+- **Generation Config**: Adjustable `CFG Scale` and `Steps` to fine-tune the audio model performance
 - **Instrument Rack**: Categorized instrument selection with custom additions
 - **BPM/Key Control**: Override AI decisions with manual BPM and musical key settings
 - **Vibe Context**: Natural language prompts to guide the music mood
 - **File Export**: Record live sessions to WAV or MP3
 - **Web Streaming**: Built-in HTTP streaming server
 - **Icecast Support**: Optional streaming to Shoutcast/Icecast for web radio
+
+## Supported Models
+
+mc-clanker supports generation using the following text-to-audio models:
+- **[Foundation-1](https://huggingface.co/RoyalCities/Foundation-1)** (Default)
+- **[RC_Infinite_Pianos](https://huggingface.co/RoyalCities/RC_Infinite_Pianos)**
+- **[Vocal_Textures_Main](https://huggingface.co/RoyalCities/Vocal_Textures_Main)**
 
 ## Requirements
 
@@ -178,7 +185,7 @@ podman exec <container> nvidia-smi
 | `app/routes/utils.py` | Route utilities (require_show_owner, etc.) |
 | `app/framework/framework_main_async.py` | Async generation loop and audio mixing |
 | `app/framework/framework_conductor_async.py` | LLM-powered track arrangement logic |
-| `app/framework/framework_generator.py` | Foundation-1 audio generation |
+| `app/framework/framework_generator.py` | Audio model generation and management |
 | `app/framework/framework_mixer.py` | Multi-track audio mixing engine with Stem support |
 | `app/framework/framework_state.py` | Shared global state and process management |
 | `app/worker.py` | Async job worker for distributed GPU generation |
@@ -216,7 +223,7 @@ podman exec <container> nvidia-smi
 │         ▼                                                      │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │              GPU Worker (Separate Container)          │  │
-│  │         Foundation-1 Generator                       │  │
+│  │         Audio Model Generator                        │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                          │                                 │
 │                          ▼                                 │
