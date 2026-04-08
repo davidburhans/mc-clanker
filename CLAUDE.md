@@ -551,8 +551,15 @@ logger.error(f"Failed to generate stem: {e}")
 
 ```json
 {
-  "Electronic & Dance": ["Electronic Drums", "808 Bass", "Acid Bass", "Synth Lead"],
-  "Custom": ["My Instrument"]
+  "instruments": {
+    "Electronic & Dance": ["Electronic Drums", "808 Bass", "Acid Bass", "Synth Lead"],
+    "Custom": ["My Synth"]
+  },
+  "_metadata": {
+    "custom_instruments": {
+      "My Synth": "Synth"
+    }
+  }
 }
 ```
 

@@ -12,6 +12,8 @@ Reusable pipeline: SFT -> DPO -> RL with schema validation rewards.
 
 import json
 import random
+import os
+import sys
 from typing import List, Tuple, Dict, Any, Optional
 
 
@@ -19,13 +21,21 @@ from typing import List, Tuple, Dict, Any, Optional
 # Schema Constants
 # ============================================================
 
+# Add app/ to path so we can import constants when running from training/
+_srcdir = os.path.join(os.path.dirname(__file__), '..')
+if _srcdir not in sys.path:
+    sys.path.insert(0, _srcdir)
+
+try:
+    from app.lib.constants import VALID_BPMS, VALID_KEYS, VALID_MAJOR_FAMILIES
+    VALID_BPM_ENUM = VALID_BPMS  # [100, 110, 120, 128, 130, 140, 150]
+except ImportError:
+    # Fallback for standalone use
+    VALID_BPM_ENUM = [100, 110, 120, 128, 130, 140, 150]
+    VALID_KEYS = None
+    VALID_MAJOR_FAMILIES = None
+
 VALID_ACTION_TYPES = {"retain", "add", "remove"}
-VALID_MAJOR_FAMILIES = {
-    "Drums", "Bass", "Synth", "Keys",
-    "Bowed Strings", "Mallet", "Wind", "Guitar",
-    "Brass", "Vocal", "Plucked Strings"
-}
-VALID_BPM_RANGE = (60, 200)
 VALID_BARS_RANGE = (1, 16)
 
 REQUIRED_RESPONSE_FIELDS = {"master_bpm", "master_key", "actions", "reasoning", "name"}
@@ -62,12 +72,14 @@ def validate_conductor_schema(response) -> bool:
 
     # Validate master_bpm
     bpm = response.get("master_bpm")
-    if not isinstance(bpm, int) or not VALID_BPM_RANGE[0] <= bpm <= VALID_BPM_RANGE[1]:
+    if not isinstance(bpm, int) or bpm not in VALID_BPM_ENUM:
         return False
 
     # Validate master_key
     key = response.get("master_key")
     if not isinstance(key, str) or not key.strip():
+        return False
+    if VALID_KEYS is not None and key not in VALID_KEYS:
         return False
 
     # Validate actions array
@@ -111,8 +123,12 @@ def _validate_action(action: dict) -> bool:
     if action_type == "add":
         if not isinstance(action.get("model_id"), str):
             return False
-        if not isinstance(action.get("major_family"), str):
+        major_family = action.get("major_family")
+        if not isinstance(major_family, str):
             return False
+        if VALID_MAJOR_FAMILIES is not None and major_family not in VALID_MAJOR_FAMILIES:
+            return False
+            
         if not isinstance(action.get("sub_family"), str):
             return False
         if not isinstance(action.get("timbre_tags"), list):
@@ -162,8 +178,8 @@ def _corrupt_invalid_enum(response: dict) -> dict:
 
 
 def _corrupt_invalid_bpm(response: dict) -> dict:
-    """Set BPM out of valid range."""
-    invalid_bpms = [250, 30, 0, -10, 500]
+    """Set BPM to a value outside the schema enum but still musical."""
+    invalid_bpms = [80, 90, 160, 200]
     response["master_bpm"] = random.choice(invalid_bpms)
     return response
 

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Request, status
-from .schemas import StateUpdate, LLMConfig, GenerationConfig, AudienceMessage
-from app.framework.framework_state import state
+import asyncio
 import time
+from fastapi import APIRouter, Request, status
+from .schemas import StateUpdate, LLMConfig, GenerationConfig, AudienceMessage, CustomInstrumentCreate
+from app.framework.framework_state import state
 
 router = APIRouter()
 
@@ -69,16 +70,22 @@ async def update_state(update: StateUpdate):
             state.should_reset = update.should_reset
         if update.user_override is not None:
             state.user_override = update.user_override
-        if update.target_bpm_override is not None:
+        
+        # Check if fields were explicitly set (allows setting to None/null)
+        fields = update.model_fields_set
+        
+        if "target_bpm_override" in fields:
             state.target_bpm_override = update.target_bpm_override
             # Apply immediately if not generating to show instant feedback
-            if not state.is_generating:
+            if not state.is_generating and update.target_bpm_override is not None:
                 state.current_bpm = update.target_bpm_override
-        if update.target_key_override is not None:
+        
+        if "target_key_override" in fields:
             state.target_key_override = update.target_key_override
             # Apply immediately if not generating
-            if not state.is_generating:
+            if not state.is_generating and update.target_key_override is not None:
                 state.current_key = update.target_key_override
+                
         if update.available_instruments is not None:
             state.available_instruments = update.available_instruments
     
@@ -114,6 +121,29 @@ async def get_instruments():
         "FX": ["Riser", "Downshell", "Impact", "Noise", "Foley"]
     }
 
+@router.get("/constants")
+async def get_constants():
+    """Return schema-relevant constants for frontend use."""
+    from app.lib.constants import VALID_BPMS, VALID_KEYS, get_all_major_families
+    return {
+        "valid_bpms": VALID_BPMS,
+        "valid_keys": VALID_KEYS,
+        "valid_major_families": get_all_major_families(),
+    }
+
+@router.post("/instruments/custom")
+async def add_custom_instrument(data: CustomInstrumentCreate):
+    """Add a user-defined instrument with its major_family."""
+    async with state.lock:
+        await asyncio.to_thread(state.add_custom_instrument, data.name, data.major_family)
+    return {"status": "ok", "name": data.name, "family": data.major_family}
+
+@router.get("/instruments/custom")
+async def get_custom_instruments():
+    """Get all user-defined instruments with their families."""
+    async with state.lock:
+        return state.get_custom_instruments()
+
 @router.get("/message/audience")
 async def get_audience_message():
     """Get the latest message for the audience."""
@@ -129,6 +159,14 @@ async def send_audience_message(msg: AudienceMessage):
     async with state.lock:
         state.audience_message = msg.message
         state.audience_message_ts = int(time.time())
+    return {"status": "ok"}
+
+@router.delete("/message/audience")
+async def clear_audience_message():
+    """Clear the audience message (when audience member dismisses it)."""
+    async with state.lock:
+        state.audience_message = ""
+        state.audience_message_ts = None
     return {"status": "ok"}
 
 @router.get("/llm-config")

@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
         default=float(os.environ.get("VIBE_CLEAR_PROB", "0.05")),
         help="Probability per loop of clearing the current vibe override",
     )
+    parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        default=False,
+        help="Pass enable_thinking=True to the model (Qwen3.5-27B only)",
+    )
     return parser.parse_args()
 
 
@@ -114,6 +120,7 @@ async def run_jockey(
     vibe_clear_prob: float,
     llm_base_url: str,
     llm_model: str,
+    enable_thinking: bool,
 ) -> list[dict]:
     jockey = SlopJockey(
         jockey_id=jockey_id,
@@ -125,6 +132,7 @@ async def run_jockey(
         vibe_clear_prob=vibe_clear_prob,
         llm_base_url=llm_base_url,
         llm_model=llm_model,
+        enable_thinking=enable_thinking,
     )
     return await jockey.run(semaphore)
 
@@ -210,6 +218,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 vibe_clear_prob=args.vibe_clear_prob,
                 llm_base_url=args.base_url,
                 llm_model=args.model,
+                enable_thinking=args.enable_thinking,
             )
         )
         pending_tasks[task] = (jockey_id, perf_id)
@@ -261,6 +270,7 @@ async def main_async(args: argparse.Namespace) -> None:
                         vibe_clear_prob=args.vibe_clear_prob,
                         llm_base_url=args.base_url,
                         llm_model=args.model,
+                        enable_thinking=args.enable_thinking,
                     )
                 )
                 pending_tasks[new_task] = (jockey_id_new, perf_id_new)

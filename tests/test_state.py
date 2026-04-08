@@ -35,15 +35,46 @@ def test_add_custom_instrument(tmp_path):
     state = GlobalState()
     test_file = tmp_path / "test_instruments.json"
     state.instruments_file = str(test_file)
-    
+
     state.add_custom_instrument("Theremin")
     assert "Theremin" in state.categorized_instruments["Custom"]
-    
+
     # Verify persistence
     new_state = GlobalState()
     new_state.instruments_file = str(test_file)
     new_state.categorized_instruments = new_state._load_instruments()
     assert "Theremin" in new_state.categorized_instruments["Custom"]
+
+
+def test_add_custom_instrument_with_family(tmp_path):
+    """Test adding a custom instrument with an explicit family (new behavior)."""
+    with patch("app.framework.framework_state.GlobalState._load_instruments", return_value={"Custom": []}):
+        state = GlobalState()
+    state.instruments_file = str(tmp_path / "test_instruments.json")
+
+    state.add_custom_instrument("My Synth", "Synth")
+    instruments = state.get_custom_instruments()
+    assert instruments == {"My Synth": "Synth"}
+
+
+def test_add_custom_instrument_extends_schema_families(tmp_path):
+    """Test that adding an instrument registers its family with the schema."""
+    from app.lib.constants import get_all_major_families
+
+    with patch("app.framework.framework_state.GlobalState._load_instruments", return_value={"Custom": []}):
+        state = GlobalState()
+    state.instruments_file = str(tmp_path / "test_instruments.json")
+
+    state.add_custom_instrument("My Custom", "Brass")
+    assert "Brass" in get_all_major_families()
+
+
+def test_get_custom_instruments_returns_empty_when_none(tmp_path):
+    """Test get_custom_instruments returns {} when no custom instruments exist."""
+    with patch("app.framework.framework_state.GlobalState._load_instruments", return_value={"Custom": []}):
+        state = GlobalState()
+    state.instruments_file = str(tmp_path / "test_instruments.json")
+    assert state.get_custom_instruments() == {}
 
 def test_audio_clients():
     state = GlobalState()

@@ -171,6 +171,8 @@ The audience-facing web UI at `http://localhost:7860` provides real-time audio s
 | `/api/stems/{idx}/download` | GET | Download a single stem as WAV |
 | `/api/generation-config` | GET/POST | Get/set CFG Scale and Steps |
 | `/api/instruments` | GET | Get instrument categories |
+| `/api/instruments/custom` | GET/POST | Get/add custom instruments with major families |
+| `/api/constants` | GET | Get schema-relevant UI constants (BPMs, Keys, Families) |
 | `/api/llm-config` | GET/POST | Get/set LLM configuration |
 | `/api/export/start` | POST | Start recording session |
 | `/api/export/stop` | POST | Stop recording and save file |

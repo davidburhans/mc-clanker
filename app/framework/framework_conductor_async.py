@@ -13,6 +13,8 @@ import re
 from typing import Optional, Dict, Any, List
 from openai import AsyncOpenAI
 
+from app.lib.constants import get_response_format_schema
+
 
 def parse_llm_json_response(content: str) -> Dict[str, Any]:
     """Parse JSON from LLM response, handling markdown wrapping.
@@ -148,6 +150,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         prompt: str,
         llm_config: Dict[str, str] = None,
         max_retries: int = 3,
+        extra_body: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
         Make an async call to the LLM with JSON parse retry.
@@ -156,6 +159,8 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             prompt: The user prompt to send
             llm_config: Optional config dict with base_url, api_key, model
             max_retries: Max LLM call retries on JSON parse failure (default 3)
+            extra_body: Optional dict passed as extra_body to the API
+                (e.g., {"chat_template_kwargs": {"enable_thinking": False}})
 
         Returns:
             Parsed JSON response from LLM
@@ -178,67 +183,8 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                     ],
                     temperature=0.7,
                     timeout=60.0,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "dj_action_state",
-                            "strict": True,
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "reasoning": {"type": "string"},
-                                    "master_bpm": {"type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150]},
-                                    "master_key": {"type": "string", "enum": ["C major", "C minor", "C# major", "C# minor", "D major", "D minor", "D# major", "D# minor", "E major", "E minor", "F major", "F minor", "F# major", "F# minor", "G major", "G minor", "G# major", "G# minor", "A major", "A minor", "A# major", "A# minor", "B major", "B minor"]},
-                                    "actions": {
-                                        "type": "array",
-                                        "items": {
-                                            "anyOf": [
-                                                {
-                                                    "type": "object",
-                                                    "description": "Retain an existing stem to keep the groove flowing.",
-                                                    "properties": {
-                                                        "action_type": {"type": "string", "const": "retain"},
-                                                        "stem_index": {"type": "integer", "description": "Index of the active stem to keep."}
-                                                    },
-                                                    "required": ["action_type", "stem_index"],
-                                                    "additionalProperties": False
-                                                },
-                                                {
-                                                    "type": "object",
-                                                    "description": "Add a new musical element to the mix.",
-                                                    "properties": {
-                                                        "action_type": {"type": "string", "const": "add"},
-                                                        "model_id": {"type": "string"},
-                                                        "major_family": {"type": "string"},
-                                                        "sub_family": {"type": "string"},
-                                                        "timbre_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
-                                                        "notation_tag": {"type": "string"},
-                                                        "fx_tag": {"type": "string"},
-                                                        "bars": {"type": "integer", "enum": [4, 8]}
-                                                    },
-                                                    "required": ["action_type", "model_id", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
-                                                    "additionalProperties": False
-                                                },
-                                                {
-                                                    "type": "object",
-                                                    "description": "Remove a stem to refresh the mix or change the arrangement.",
-                                                    "properties": {
-                                                        "action_type": {"type": "string", "const": "remove"},
-                                                        "stem_index": {"type": "integer"}
-                                                    },
-                                                    "required": ["action_type", "stem_index"],
-                                                    "additionalProperties": False
-                                                }
-                                            ]
-                                        }
-                                    },
-                                    "name": {"type": "string"}
-                                },
-                                "required": ["reasoning", "master_bpm", "master_key", "actions", "name"],
-                                "additionalProperties": False
-                            }
-                        }
-                    }
+                    response_format=get_response_format_schema(),
+                    extra_body=extra_body,
                 )
 
                 content = response.choices[0].message.content
@@ -265,7 +211,8 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         available_instruments: List[str] = None,
         stem_history: List[List[Dict]] = None,
         llm_config: Dict[str, str] = None,
-        available_models: List[Dict] = None
+        available_models: List[Dict] = None,
+        extra_body: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
         Async version of get_next_state.
@@ -318,10 +265,9 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
 
         if user_override:
             user_prompt += f"\nOVERRIDE: {user_override}"
-            print(f"DEBUG: Vibe appended to prompt: '{user_override}'")
 
         # Call LLM async
-        return await self.call_async(user_prompt, llm_config)
+        return await self.call_async(user_prompt, llm_config, extra_body=extra_body)
 
 
 class ConductorPromptBuilder:

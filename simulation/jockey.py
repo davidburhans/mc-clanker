@@ -36,6 +36,7 @@ class SlopJockey:
         vibe_clear_prob: float = 0.05,
         llm_base_url: str = "http://localhost:1234/v1",
         llm_model: str = "local-model",
+        enable_thinking: bool = False,
     ):
         self.jockey_id = jockey_id
         self.perf_id = perf_id
@@ -45,6 +46,10 @@ class SlopJockey:
         self.max_loops = max_loops
         self.vibe_prob = vibe_prob
         self.vibe_clear_prob = vibe_clear_prob
+        self._extra_body: dict | None = (
+            {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
+            if enable_thinking else None
+        )
         self._current_vibe: str | None = None  # persisted across loops in this session
 
         # Loop count varies per session but is deterministic per session+run
@@ -80,7 +85,7 @@ class SlopJockey:
 
         user_override = self._current_vibe or ""
 
-        # Build the user prompt (same as ConductorLLMAsync uses internally)
+        # Build the user prompt once — store this exact text in the record
         user_prompt = ConductorPromptBuilder.build_prompt(
             current_bpm=self.state.bpm,
             current_key=self.state.key,
@@ -105,17 +110,14 @@ class SlopJockey:
         parsed: dict[str, Any] | None = None
         llm_failed = False
 
+        # Call call_async directly with the built prompt so stored messages
+        # match exactly what was transmitted
         async with semaphore:
             try:
-                parsed = await self._conductor.get_next_state_async(
-                    current_bpm=self.state.bpm,
-                    current_key=self.state.key,
-                    active_stems=self.state.active_stems,
-                    user_override=user_override,
-                    available_instruments=self.state.available_instruments,
-                    stem_history=self.state.stem_history,
+                parsed = await self._conductor.call_async(
+                    prompt=user_prompt,
                     llm_config=llm_config,
-                    available_models=self.state.available_models,
+                    extra_body=self._extra_body,
                 )
             except Exception as e:
                 logger.warning(
@@ -147,8 +149,20 @@ class SlopJockey:
                 f"Session jockey={self.jockey_id} perf={self.perf_id} "
                 f"loop {self._loops_completed} failed to serialize response"
             )
-            self._loops_completed += 1
-            return {"messages": messages, "response": "{}"}
+            # Return a valid fallback DJ response — don't advance state incorrectly
+            fallback_actions = [
+                {"action_type": "retain", "stem_index": i}
+                for i in range(len(self.state.active_stems))
+            ]
+            fallback = {
+                "master_bpm": self.state.bpm,
+                "master_key": self.state.key,
+                "actions": fallback_actions,
+                "reasoning": "Serialization failed. Retaining current groove.",
+                "name": self.state.current_set_name,
+            }
+            response_text = json.dumps(fallback)
+            parsed = fallback
 
         # Apply actions to evolve state
         try:
@@ -169,12 +183,15 @@ class SlopJockey:
                 f"Session jockey={self.jockey_id} perf={self.perf_id} "
                 f"loop {self._loops_completed} action application error: {e}"
             )
+            # On action application failure, still count the loop but return
+            # a record with was_applied=False so the training pipeline knows
+            # this LLM response was NOT applied to state
             self._loops_completed += 1
-            return {"messages": messages, "response": response_text}
+            return {"messages": messages, "response": response_text, "was_applied": False}
 
         self._loops_completed += 1
 
-        return {"messages": messages, "response": response_text}
+        return {"messages": messages, "response": response_text, "was_applied": True}
 
     async def run(
         self,

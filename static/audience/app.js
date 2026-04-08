@@ -213,9 +213,11 @@ class AudienceApp {
                 this.updateShowState(data.is_show_started || false);
 
                 // Check for new DJ message
-                if (data.audience_message && data.audience_message !== this.currentDjMessage) {
-                    this.currentDjMessage = data.audience_message;
-                    this.showDjMessage(data.audience_message);
+                if (data.audience_message && data.audience_message_ts) {
+                    this.showDjMessage(data.audience_message, data.audience_message_ts);
+                } else if (!data.audience_message) {
+                    // Message cleared on server
+                    this.hideDjMessage();
                 }
             }
         } catch (e) {
@@ -223,8 +225,14 @@ class AudienceApp {
         }
     }
 
-    showDjMessage(message) {
+    showDjMessage(message, timestamp) {
         if (!this.djMessageBanner || !this.djMessageText) return;
+
+        // Check if this specific message was already dismissed locally
+        const lastDismissed = sessionStorage.getItem('last_dismissed_msg_ts');
+        if (lastDismissed && parseInt(lastDismissed) >= timestamp) {
+            return;
+        }
 
         // Clear any existing timeout
         if (this.djMessageTimeout) {
@@ -232,6 +240,8 @@ class AudienceApp {
         }
 
         // Set message and show banner
+        this.currentDjMessage = message;
+        this.djMessageBanner.dataset.timestamp = timestamp;
         this.djMessageText.textContent = message;
         this.djMessageBanner.classList.add('active');
 
@@ -250,6 +260,12 @@ class AudienceApp {
         if (this.djMessageTimeout) {
             clearTimeout(this.djMessageTimeout);
             this.djMessageTimeout = null;
+        }
+
+        // Locally mark this message as seen so it doesn't reappear until a NEW message is sent
+        const ts = this.djMessageBanner.dataset.timestamp;
+        if (ts) {
+            sessionStorage.setItem('last_dismissed_msg_ts', ts);
         }
     }
 

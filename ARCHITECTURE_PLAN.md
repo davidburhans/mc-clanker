@@ -1,5 +1,7 @@
 # MC-Clanker Scalable Architecture Plan
 
+> **⚠️ This document describes the TARGET/FUTURE architecture**, not the current implementation. Some sections may be partially implemented or not yet built. For current architecture, see [CLAUDE.md](./CLAUDE.md) and [README.md](./README.md).
+
 ## Overview
 
 Refactor mc-clanker from a single-instance application to a horizontally-scalable, distributed system capable of handling hundreds/thousands of concurrent DJ sessions.

@@ -88,6 +88,7 @@ class GlobalState:
         self.current_set_name = "Initial Vibe"
 
         self.instruments_file = "instruments.json"
+        self.custom_instruments = {}  # Set before loading
         self.categorized_instruments = self._load_instruments()
         self.available_instruments = self._flatten_instruments()
 
@@ -257,22 +258,53 @@ class GlobalState:
         if os.path.exists(self.instruments_file):
             try:
                 with open(self.instruments_file, "r") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # If it's the new format with metadata
+                    if isinstance(data, dict) and "_metadata" in data:
+                        self.custom_instruments = data.get("_metadata", {}).get("custom_instruments", {})
+                        # Register existing custom families with the schema
+                        from app.lib.constants import add_custom_major_family
+                        for family in self.custom_instruments.values():
+                            add_custom_major_family(family)
+                        return data.get("instruments", DEFAULT_INSTRUMENTS.copy())
+                    return data
             except Exception:
                 pass
         return DEFAULT_INSTRUMENTS.copy()
 
     def save_instruments(self):
         with open(self.instruments_file, "w") as f:
-            json.dump(self.categorized_instruments, f, indent=2)
+            payload = {
+                "instruments": self.categorized_instruments,
+                "_metadata": {
+                    "custom_instruments": self.custom_instruments
+                }
+            }
+            json.dump(payload, f, indent=2)
 
-    def add_custom_instrument(self, name):
-        if "Custom" not in self.categorized_instruments:
-            self.categorized_instruments["Custom"] = []
-        if name and name not in self.categorized_instruments["Custom"]:
-            self.categorized_instruments["Custom"].append(name)
-            self.save_instruments()
+    def add_custom_instrument(self, name, family=None):
+        """Add a user-defined instrument, optionally with its major_family.
+
+        When family is provided, registers it with the LLM schema so the LLM
+        can use that family in its response.
+        """
+        with self.sync_lock:
+            if "Custom" not in self.categorized_instruments:
+                self.categorized_instruments["Custom"] = []
+            if name and name not in self.categorized_instruments["Custom"]:
+                self.categorized_instruments["Custom"].append(name)
+                self.save_instruments()
+            if family:
+                self.custom_instruments[name] = family
+                # Register with schema constants so LLM can use this family
+                from app.lib.constants import add_custom_major_family
+                add_custom_major_family(family)
         return self.categorized_instruments
+
+    def get_custom_instruments(self) -> dict:
+        """Return dict of custom instruments: name -> major_family."""
+        with self.sync_lock:
+            return dict(self.custom_instruments)
 
     def update_available_instruments(self, active_list):
         self.available_instruments = active_list

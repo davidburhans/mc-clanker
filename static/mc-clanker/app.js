@@ -64,6 +64,7 @@ class DJSlopApp {
         this.resizeVisualizer();
         this.bindVibePresets();
         this.bindTempoPresets();
+        this.bindCustomInstrumentModal();
         this.populateCustomStemInstruments();
         this.populateCustomStemModels();
         this.bindBroadcastEvents();
@@ -115,6 +116,15 @@ class DJSlopApp {
         this.endShowModal = document.getElementById('end-show-modal');
         this.endShowConfirmBtn = document.getElementById('end-show-confirm-btn');
         this.endShowCancelBtn = document.getElementById('end-show-cancel-btn');
+
+        // Custom Instrument Modal
+        this.customInstrumentModal = document.getElementById('custom-instrument-modal');
+        this.addCustomInstrumentBtn = document.getElementById('add-custom-instrument-btn');
+        this.closeCustomInstrumentModalBtn = document.getElementById('close-custom-instrument-modal');
+        this.cancelCustomInstrumentBtn = document.getElementById('cancel-custom-instrument');
+        this.saveCustomInstrumentBtn = document.getElementById('save-custom-instrument');
+        this.customInstrumentNameInput = document.getElementById('custom-instrument-name');
+        this.customInstrumentFamilySelect = document.getElementById('custom-instrument-family');
 
         // Active Vibe Display
         this.activeVibeDisplay = document.getElementById('active-vibe-display');
@@ -222,6 +232,12 @@ class DJSlopApp {
         this.endShowModal.addEventListener('click', (e) => {
             if (e.target === this.endShowModal) this.closeEndShowModal();
         });
+
+        // Custom Instrument Modal
+        this.addCustomInstrumentBtn.addEventListener('click', () => this.showCustomInstrumentModal());
+        this.closeCustomInstrumentModalBtn.addEventListener('click', () => this.closeCustomInstrumentModal());
+        this.cancelCustomInstrumentBtn.addEventListener('click', () => this.closeCustomInstrumentModal());
+        this.saveCustomInstrumentBtn.addEventListener('click', () => this.saveCustomInstrument());
 
         // Active Vibe Clear
         this.clearVibeBtn.addEventListener('click', () => this.clearVibe());
@@ -1104,6 +1120,8 @@ class DJSlopApp {
 
                 toggleEl.addEventListener('click', () => {
                     const isActive = toggleEl.classList.toggle('active');
+                    // Immediately persist instrument selection without requiring Apply
+                    this.persistInstruments();
                     this.showToast(`${item} ${isActive ? 'enabled' : 'disabled'}`, 'info', 2000);
                     // Auto-collapse category if all instruments disabled
                     if (!isActive) {
@@ -1328,6 +1346,103 @@ class DJSlopApp {
         }
     }
 
+    // ==============================================================
+    // Custom Instrument Modal
+    // ==============================================================
+
+    bindCustomInstrumentModal() {
+        // Populate family dropdown when modal opens
+        this.addCustomInstrumentBtn.addEventListener('click', async () => {
+            await this.populateFamilyDropdown();
+            this.showCustomInstrumentModal();
+        });
+    }
+
+    async populateFamilyDropdown() {
+        try {
+            const res = await fetch('/api/constants');
+            if (res.ok) {
+                const data = await res.json();
+                this.customInstrumentFamilySelect.innerHTML = '';
+                data.valid_major_families.forEach(family => {
+                    const opt = document.createElement('option');
+                    opt.value = family;
+                    opt.textContent = family;
+                    this.customInstrumentFamilySelect.appendChild(opt);
+                });
+            }
+        } catch (e) {
+            console.error('Failed to load constants:', e);
+        }
+    }
+
+    showCustomInstrumentModal() {
+        if (this.customInstrumentModal) {
+            this.customInstrumentModal.classList.remove('hidden');
+        }
+    }
+
+    closeCustomInstrumentModal() {
+        if (this.customInstrumentModal) {
+            this.customInstrumentModal.classList.add('hidden');
+        }
+        this.customInstrumentNameInput.value = '';
+    }
+
+    async saveCustomInstrument() {
+        const name = this.customInstrumentNameInput.value.trim();
+        const family = this.customInstrumentFamilySelect.value;
+        if (!name) {
+            this.showToast('Please enter an instrument name', 'error');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/instruments/custom', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, major_family: family })
+            });
+            if (res.ok) {
+                this.closeCustomInstrumentModal();
+                this.showToast(`Custom instrument "${name}" added`);
+                await this.loadInstruments();
+            } else {
+                const err = await res.json();
+                this.showToast(err.detail || 'Failed to add custom instrument', 'error');
+            }
+        } catch (e) {
+            this.showToast('Failed to add custom instrument', 'error');
+        }
+    }
+
+    async loadInstruments() {
+        try {
+            let instruments = {};
+            const res = await fetch('/api/instruments');
+            if (res.ok) {
+                instruments = await res.json();
+            }
+            // Also load custom instruments
+            const customRes = await fetch('/api/instruments/custom');
+            if (customRes.ok) {
+                const customInstruments = await customRes.json();
+                if (Object.keys(customInstruments).length > 0) {
+                    // Merge custom instruments into the Custom category
+                    if (!instruments['Custom']) instruments['Custom'] = [];
+                    for (const name of Object.keys(customInstruments)) {
+                        if (!instruments['Custom'].includes(name)) {
+                            instruments['Custom'].push(name);
+                        }
+                    }
+                }
+            }
+            this.renderInstruments(instruments);
+        } catch (e) {
+            console.error('Failed to load instruments:', e);
+        }
+    }
+
     startShowTimer() {
         this.showStartTime = Date.now();
 
@@ -1427,6 +1542,20 @@ class DJSlopApp {
         this.audioPlayer.volume = 1.0; // Fixed - volume controlled via gainNode
         if (this.gainNode) this.gainNode.gain.value = this.state.volume;
         this.volumeValue.textContent = `${value}%`;
+    }
+
+    // Persist instrument selection immediately without requiring Apply button
+    persistInstruments() {
+        const selectedInstruments = [];
+        this.instrumentCategories.querySelectorAll('.instrument-toggle.active .toggle-label').forEach(label => {
+            selectedInstruments.push(label.textContent.trim());
+        });
+
+        this.applyState({
+            available_instruments: selectedInstruments
+        }).catch(e => {
+            console.error('Failed to persist instruments:', e);
+        });
     }
 
     // DJ Controls - Unified Apply

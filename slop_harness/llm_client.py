@@ -5,73 +5,84 @@ Uses openai.AsyncOpenAI for identical plumbing to the mc-clanker app.
 """
 import asyncio
 import os
+import sys
 from typing import Any
 
 from openai import AsyncOpenAI
 
 
-# Shared response_format schema — identical to framework_conductor_async.py
-RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "dj_action_state",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "master_bpm": {"type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150]},
-                "master_key": {"type": "string", "enum": ["C major", "C minor", "C# major", "C# minor", "D major", "D minor", "D# major", "D# minor", "E major", "E minor", "F major", "F minor", "F# major", "F# minor", "G major", "G minor", "G# major", "G# minor", "A major", "A minor", "A# major", "A# minor", "B major", "B minor"]},
-                "actions": {
-                    "type": "array",
-                    "items": {
-                        "anyOf": [
-                            {
-                                "type": "object",
-                                "description": "Retain an existing stem to keep the groove flowing.",
-                                "properties": {
-                                    "action_type": {"type": "string", "const": "retain"},
-                                    "stem_index": {"type": "integer", "description": "Index of the active stem to keep."}
+# Build RESPONSE_FORMAT using the shared schema builder.
+# Import from app.lib.constants when available (app is on the path).
+# For slop_harness standalone use, add app to the path.
+_srcdir = os.path.join(os.path.dirname(__file__), '..')
+if os.path.exists(os.path.join(_srcdir, 'app', 'lib', 'constants.py')):
+    sys.path.insert(0, _srcdir)
+
+try:
+    from app.lib.constants import get_response_format_schema
+    _get_schema = get_response_format_schema  # Per-call, not at import time
+except ImportError:
+    _get_schema = None
+
+# Fallback: inline the static schema (used when app.lib.constants is unavailable)
+_STATIC_RESPONSE_FORMAT = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "dj_action_state",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "master_bpm": {"type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150]},
+                    "master_key": {"type": "string", "enum": ["C major", "C minor", "C# major", "C# minor", "D major", "D minor", "D# major", "D# minor", "E major", "E minor", "F major", "F minor", "F# major", "F# minor", "G major", "G minor", "G# major", "G# minor", "A major", "A minor", "A# major", "A# minor", "B major", "B minor"]},
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "action_type": {"type": "string", "const": "retain"},
+                                        "stem_index": {"type": "integer"}
+                                    },
+                                    "required": ["action_type", "stem_index"],
+                                    "additionalProperties": False
                                 },
-                                "required": ["action_type", "stem_index"],
-                                "additionalProperties": False
-                            },
-                            {
-                                "type": "object",
-                                "description": "Add a new musical element to the mix.",
-                                "properties": {
-                                    "action_type": {"type": "string", "const": "add"},
-                                    "model_id": {"type": "string"},
-                                    "major_family": {"type": "string"},
-                                    "sub_family": {"type": "string"},
-                                    "timbre_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
-                                    "notation_tag": {"type": "string"},
-                                    "fx_tag": {"type": "string"},
-                                    "bars": {"type": "integer", "enum": [4, 8]}
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "action_type": {"type": "string", "const": "add"},
+                                        "model_id": {"type": "string"},
+                                        "major_family": {"type": "string"},
+                                        "sub_family": {"type": "string"},
+                                        "timbre_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+                                        "notation_tag": {"type": "string"},
+                                        "fx_tag": {"type": "string"},
+                                        "bars": {"type": "integer", "enum": [4, 8]}
+                                    },
+                                    "required": ["action_type", "model_id", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
+                                    "additionalProperties": False
                                 },
-                                "required": ["action_type", "model_id", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
-                                "additionalProperties": False
-                            },
-                            {
-                                "type": "object",
-                                "description": "Remove a stem to refresh the mix or change the arrangement.",
-                                "properties": {
-                                    "action_type": {"type": "string", "const": "remove"},
-                                    "stem_index": {"type": "integer"}
-                                },
-                                "required": ["action_type", "stem_index"],
-                                "additionalProperties": False
-                            }
-                        ]
-                    }
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "action_type": {"type": "string", "const": "remove"},
+                                        "stem_index": {"type": "integer"}
+                                    },
+                                    "required": ["action_type", "stem_index"],
+                                    "additionalProperties": False
+                                }
+                            ]
+                        }
+                    },
+                    "reasoning": {"type": "string"},
+                    "name": {"type": "string"}
                 },
-                "reasoning": {"type": "string"},
-                "name": {"type": "string"}
-            },
-            "required": ["master_bpm", "master_key", "actions", "reasoning", "name"],
-            "additionalProperties": False
+                "required": ["master_bpm", "master_key", "actions", "reasoning", "name"],
+                "additionalProperties": False
+            }
         }
     }
-}
 
 
 class LLMClient:
@@ -131,7 +142,7 @@ class LLMClient:
                     model=self.model,
                     messages=messages,  # type: ignore[arg-type]
                     temperature=0.7,
-                    response_format=RESPONSE_FORMAT,  # type: ignore[arg-type]
+                    response_format=_get_schema() if _get_schema else _STATIC_RESPONSE_FORMAT,  # type: ignore[arg-type]
                     extra_body=extra_body,
                 )
                 content = response.choices[0].message.content  # type: ignore[assignment]

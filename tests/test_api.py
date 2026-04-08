@@ -30,10 +30,52 @@ def test_get_state(client):
     assert data["is_generating"] is False
 
 def test_update_state(client):
-    response = client.post("/api/state", json={"target_bpm_override": 135, "is_generating": True})
+    response = client.post("/api/state", json={"target_bpm_override": 128, "is_generating": True})
     assert response.status_code == 200
-    assert state.target_bpm_override == 135
+    assert state.target_bpm_override == 128
     assert state.is_generating is True
+
+
+class TestStateSchemaValidation:
+    """Test that API rejects BPM/key values not in the LLM schema enum."""
+
+    def test_state_update_rejects_invalid_bpm(self, client):
+        """POST /api/state with BPM not in schema enum → 422."""
+        response = client.post("/api/state", json={"target_bpm_override": 135})
+        assert response.status_code == 422, f"Expected 422 for BPM 135, got {response.status_code}"
+
+        response = client.post("/api/state", json={"target_bpm_override": 80})
+        assert response.status_code == 422
+
+        response = client.post("/api/state", json={"target_bpm_override": 160})
+        assert response.status_code == 422
+
+    def test_state_update_accepts_valid_bpm(self, client):
+        """POST /api/state with BPM in schema enum → 200."""
+        for bpm in [100, 110, 120, 128, 130, 140, 150]:
+            response = client.post("/api/state", json={"target_bpm_override": bpm})
+            assert response.status_code == 200, f"BPM {bpm} should be accepted"
+
+    def test_state_update_rejects_invalid_key(self, client):
+        """POST /api/state with key not in schema enum → 422."""
+        response = client.post("/api/state", json={"target_key_override": "X major"})
+        assert response.status_code == 422
+
+    def test_state_update_accepts_valid_key(self, client):
+        """POST /api/state with valid key → 200."""
+        for key in ["C major", "C minor", "C# major", "G# minor", "B major", "B minor"]:
+            response = client.post("/api/state", json={"target_key_override": key})
+            assert response.status_code == 200, f"Key {key} should be accepted"
+
+    def test_state_update_rejects_bpm_zero(self, client):
+        """Zero BPM should be rejected."""
+        response = client.post("/api/state", json={"target_bpm_override": 0})
+        assert response.status_code == 422
+
+    def test_state_update_rejects_bpm_negative(self, client):
+        """Negative BPM should be rejected."""
+        response = client.post("/api/state", json={"target_bpm_override": -10})
+        assert response.status_code == 422
 
 def test_generation_config(client):
     # Get initial
