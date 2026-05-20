@@ -903,8 +903,8 @@ class AudienceApp {
         if (!this.rightPeaks || this.rightPeaks.length !== numBars) {
             this.rightPeaks = new Array(numBars).fill(0);
         }
-        if (!this.peakDecay || this.peakDecay.length !== numBars) {
-            this.peakDecay = new Array(numBars).fill(0);
+        if (!this.peakDecay || this.peakDecay.length !== numBars * 2) {
+            this.peakDecay = new Array(numBars * 2).fill(0);
         }
 
         // Left channel (lower half of spectrum)

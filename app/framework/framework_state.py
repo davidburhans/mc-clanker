@@ -114,7 +114,6 @@ class GlobalState:
         self.muted_stems = set()
         self.soloed_stems = set()
         self.loop_count = 0
-        self.stem_ages = {}      # index → int (loops active)
         self.last_actions = []   # List of descriptive action strings
 
         # Loop synchronization — what is ACTUALLY playing vs what was decided
@@ -221,7 +220,6 @@ class GlobalState:
         self.stem_volumes = {}
         self.muted_stems = set()
         self.soloed_stems = set()
-        self.stem_ages = {}
         self.next_loop_ready.clear()
         self.next_loop_tracks = []
         self.current_loop_end_sample = 0

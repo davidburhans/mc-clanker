@@ -4,7 +4,6 @@ import json
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from datetime import datetime, timezone
-import threading
 
 from app.framework.framework_state import state
 from app.db import DatabaseManager
@@ -310,7 +309,6 @@ async def start_export(req: ExportStartRequest):
         state.recording_format = req.format
         state.recording_file_path = file_path
         state.recording_start_time = time.time()
-        state.recording_chunks = [] # Keep for legacy but we will stream
 
     return {"status": "started", "file_path": file_path}
 
@@ -330,7 +328,6 @@ async def stop_export():
             state.recording_file_handle = None
 
         state.is_recording = False
-        state.recording_chunks = []
 
     return {"file_path": file_path, "duration": duration}
 

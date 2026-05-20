@@ -315,12 +315,11 @@ def test_download_stem_next_set(client):
 
 
 def test_update_model_not_found(client):
-    """Test updating non-existent model returns error."""
+    """Test updating non-existent model returns 404 error."""
     with patch("os.path.exists", return_value=False):
         response = client.post("/api/models", json={"model_id": "nonexistent", "enabled": True})
-    # File doesn't exist, returns error
-    assert response.status_code == 200
-    assert response.json()["status"] == "error"
+    # File doesn't exist, returns 404
+    assert response.status_code == 404
 
 
 def test_update_state_with_bpm_override(client):

@@ -11,9 +11,11 @@ router = APIRouter()
 @router.get("/health")
 async def health_check():
     """Simple health check endpoint."""
+    async with state.lock:
+        is_running = state.is_running
     return {
         "status": "healthy",
-        "is_running": state.is_running,
+        "is_running": is_running,
         "timestamp": int(time.time())
     }
 
@@ -116,8 +118,13 @@ async def update_generation_config(config: GenerationConfig):
 async def get_instruments():
     """Get instrument options derived from enabled models' supported_families."""
     config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
-    with open(config_path, "r") as f:
-        config = json.load(f)
+    try:
+        if not os.path.exists(config_path):
+            return {}
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    except Exception:
+        return {}
 
     # Collect supported_families from all enabled models
     enabled_families = set()
@@ -209,7 +216,7 @@ async def get_llm_config():
             "api_key": state.llm_api_key,
             "model": state.llm_model,
             "icecast_enabled": state.icecast_enabled,
-            "audience_password": getattr(state, "audience_password", ""),
+            "audience_password": state.audience_password,
         }
 
 @router.post("/llm-config")

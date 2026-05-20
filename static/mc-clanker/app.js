@@ -234,7 +234,8 @@ class DJSlopApp {
         });
 
         // Custom Instrument Modal
-        this.addCustomInstrumentBtn.addEventListener('click', () => this.showCustomInstrumentModal());
+        // Note: addCustomInstrumentBtn click is handled by bindCustomInstrumentModal()
+        // which populates the family dropdown first before opening the modal.
         this.closeCustomInstrumentModalBtn.addEventListener('click', () => this.closeCustomInstrumentModal());
         this.cancelCustomInstrumentBtn.addEventListener('click', () => this.closeCustomInstrumentModal());
         this.saveCustomInstrumentBtn.addEventListener('click', () => this.saveCustomInstrument());
@@ -759,8 +760,9 @@ class DJSlopApp {
 
         // Reasoning
         this.state.reasoning = data.llm_reasoning || '';
-        this.reasoningBox.innerHTML = this.state.reasoning
-            ? `<p>${this.state.reasoning}</p>`
+        const reasoningText = this.state.reasoning || '';
+        this.reasoningBox.innerHTML = reasoningText
+            ? `<p>${reasoningText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`
             : '<p class="placeholder">Waiting for track...</p>';
 
         // Stems
@@ -841,9 +843,10 @@ class DJSlopApp {
             const newActions = JSON.stringify(data.last_actions);
             if (newActions !== this.state.lastActions) {
                 this.state.lastActions = newActions;
-                this.actionLog.innerHTML = data.last_actions.map(action =>
-                    `<div class="action-entry">${action}</div>`
-                ).join('');
+                this.actionLog.innerHTML = data.last_actions.map(action => {
+                    const safe = String(action).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    return `<div class="action-entry">${safe}</div>`;
+                }).join('');
             }
         }
     }
@@ -1165,6 +1168,13 @@ class DJSlopApp {
         // Visual feedback
         const vizContainer = document.querySelector('.visualizer-container');
         if (vizContainer) vizContainer.classList.add('playing');
+
+        // If analyser setup was previously deferred (autoplay policy), try again now
+        // that we have a user interaction event
+        if (!this.analyser) {
+            this._analyserSetupAttempted = false; // Allow one more attempt
+            this.setupAnalyser();
+        }
 
         // Ensure AudioContext is running before playback (required for Chrome)
         if (this.audioContext) {
@@ -1590,7 +1600,8 @@ class DJSlopApp {
         this.applyState(updates)
             .then(() => {
                 if (bpmVal) {
-                    this.bpmDisplay.textContent = bpmVal;
+                    const tempoValueEl = this.bpmDisplay?.querySelector('.tempo-value');
+                    if (tempoValueEl) tempoValueEl.textContent = bpmVal;
                     this.bpmOverride.classList.add('override-active');
                     this.bpmOverride.value = '';
                 }
@@ -1659,8 +1670,7 @@ class DJSlopApp {
     async toggleStemMute(index) {
         try {
             const resp = await fetch(`/api/stems/${index}/mute`, { method: 'POST' });
-            if (resp.ok) await this.loadModelsConfig();
-        this.updateStemMixer();
+            if (resp.ok) this.updateStemMixer();
         } catch (e) {
             console.error('Failed to toggle mute:', e);
         }
@@ -1669,8 +1679,7 @@ class DJSlopApp {
     async toggleStemSolo(index) {
         try {
             const resp = await fetch(`/api/stems/${index}/solo`, { method: 'POST' });
-            if (resp.ok) await this.loadModelsConfig();
-        this.updateStemMixer();
+            if (resp.ok) this.updateStemMixer();
         } catch (e) {
             console.error('Failed to toggle solo:', e);
         }
@@ -2053,7 +2062,7 @@ class DJSlopApp {
                     data.user_override !== this.state.userOverride ||
                     JSON.stringify(data.available_instruments || []) !== JSON.stringify(this.state.availableInstruments || []) ||
                     data.llm_reasoning !== this.state.reasoning ||
-                    data.loop_count !== this.state.loop_count ||
+                    data.loop_count !== this.state.loopCount ||
                     JSON.stringify(data.active_stems) !== JSON.stringify(this.state.currentStems) ||
                     JSON.stringify(data.previous_stems) !== JSON.stringify(this.state.prevStems) ||
                     JSON.stringify(data.next_stems) !== JSON.stringify(this.state.nextStems) ||
@@ -2145,7 +2154,8 @@ class DJSlopApp {
 
     // Visualizer
     animateVisualizer() {
-        if (!this.analyser && this.audioPlayer) {
+        if (!this.analyser && this.audioPlayer && !this._analyserSetupAttempted) {
+            this._analyserSetupAttempted = true;
             this.setupAnalyser();
         }
 
@@ -2166,8 +2176,12 @@ class DJSlopApp {
             this.source.connect(this.analyser);
             this.analyser.connect(this.gainNode);
             this.gainNode.connect(this.audioContext.destination);
+            // Success — clear debounce so future calls see analyser is valid
+            this._analyserSetupAttempted = false;
         } catch (e) {
             console.log('Audio analyser setup failed (likely due to autoplay policy):', e);
+            // Leave _analyserSetupAttempted = true so animation loop stops retrying.
+            // play() will call setupAnalyser() directly on user interaction.
         }
     }
 

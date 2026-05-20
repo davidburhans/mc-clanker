@@ -265,9 +265,13 @@ class AsyncFrameworkLoop:
                     print(f"[AsyncLoop-{loop_idx}] DEBUG: mixer.current_sample = {self.mixer.current_sample if self.mixer else None}")
                     # Use the pre-generated results directly
                     # Extract conductor_response-like data from pre_gen_results
+                    async with state.lock:
+                        _pregen_bpm = state.current_bpm
+                        _pregen_key = state.current_key
+                        active_stems = list(state.active_stems)  # Pre-gen used the previous active_stems
                     conductor_response = {
-                        'master_bpm': self._pregen_results.get('master_bpm', state.current_bpm),
-                        'master_key': self._pregen_results.get('master_key', state.current_key),
+                        'master_bpm': self._pregen_results.get('master_bpm', _pregen_bpm),
+                        'master_key': self._pregen_results.get('master_key', _pregen_key),
                         'name': self._pregen_results.get('set_name', 'Unknown Set'),
                         'reasoning': self._pregen_results.get('reasoning', 'No reasoning provided.'),
                         'actions': self._pregen_results.get('actions', []),
@@ -275,9 +279,6 @@ class AsyncFrameworkLoop:
                     prepared_tracks = self._pregen_results['prepared_tracks']
                     loop_duration_samples = self._pregen_results['loop_duration_samples']
                     next_stems = self._pregen_results['next_stems']
-                    active_stems = list(state.active_stems)  # Pre-gen used the previous active_stems
-                    # Skip to the section after job submission
-                    goto_step_9 = True
                 else:
                     async with state.lock:
                         will_call_llm = state.is_generating
@@ -287,7 +288,6 @@ class AsyncFrameworkLoop:
                         print(f"[AsyncLoop-{loop_idx}] Skipping LLM call: is_generating={state.is_generating}")
                         # Instead of proceeding, go back to waiting
                         continue
-                    goto_step_9 = False
 
                 # Step 1: Build Conductor prompt (only if not using pre-gen)
                 async with state.lock:
@@ -379,12 +379,16 @@ class AsyncFrameworkLoop:
                             idx = action.get("stem_index")
                             if a_type == "retain" and idx is not None and 0 <= idx < len(active_stems):
                                 s = active_stems[idx]
-                                current_actions_log.append(f"Retained {s.get('prompt', '').split(',')[1].strip()}")
+                                prompt = s.get('prompt', '')
+                                prompt_part = prompt.split(',')[1].strip() if len(prompt.split(',')) > 1 else prompt
+                                current_actions_log.append(f"Retained {prompt_part}")
                             elif a_type == "add":
                                 current_actions_log.append(f"Added {action.get('sub_family', '')}")
                             elif a_type == "remove" and idx is not None and 0 <= idx < len(active_stems):
                                 s = active_stems[idx]
-                                current_actions_log.append(f"Removed {s.get('prompt', '').split(',')[1].strip()}")
+                                prompt = s.get('prompt', '')
+                                prompt_part = prompt.split(',')[1].strip() if len(prompt.split(',')) > 1 else prompt
+                                current_actions_log.append(f"Removed {prompt_part}")
                         state.last_actions = current_actions_log
 
                     # Step 5: Update state with next stems info (before generation)
@@ -417,14 +421,20 @@ class AsyncFrameworkLoop:
                                 "_age": t.get("_age", 0)
                             })
 
+                        # Capture as locals while we still hold the lock
+                        local_next_stems = list(state.next_stems)
+                        local_current_bpm = state.current_bpm
+                        local_current_key = state.current_key
+
                     # Step 6: Submit jobs for new stems
                     pending_jobs = []  # List of (job_id, original_index)
 
-                    for i, t in enumerate(state.next_stems):
+                    for i, t in enumerate(local_next_stems):
                         prompt = t["prompt"]
                         track_bars = t["bars"]
                         m_id = t.get("model_id")
-                        cache_key = f"{m_id}_{prompt}_{state.current_bpm}_{state.current_key}_{track_bars}"
+                        orig = t.get("_original_details", {})
+                        cache_key = f"{m_id}_{prompt}_{local_current_bpm}_{local_current_key}_{track_bars}"
 
                         # Check cache
                         if cache_key in self.stem_cache:
@@ -434,13 +444,13 @@ class AsyncFrameworkLoop:
                         # Submit job
                         job_id = await self._submit_job(
                             session_id=self.session_id,
-                            instrument=t.get("sub_family", "Unknown"),
+                            instrument=orig.get("sub_family", "Unknown"),
                             prompt=prompt,
-                            major_family=t.get("major_family"),
+                            major_family=orig.get("major_family"),
                             model_id=m_id,
-                            key=state.current_key,
-                            bpm=state.current_bpm,
-                            timbre_tags=t.get("timbre_tags", []),
+                            key=local_current_key,
+                            bpm=local_current_bpm,
+                            timbre_tags=orig.get("timbre_tags", []),
                             bars=track_bars
                         )
                         pending_jobs.append((job_id, i, cache_key))
@@ -468,22 +478,22 @@ class AsyncFrameworkLoop:
                                     }
                                     # Store in last_generated_stems for download
                                     async with state.lock:
-                                        state.last_generated_stems[state.next_stems[orig_idx]["prompt"]] = audio_data
+                                        state.last_generated_stems[local_next_stems[orig_idx]["prompt"]] = audio_data
                             else:
                                 print(f"Job {job_id} failed or timed out")
 
                     # Step 8: Prepare audio tracks (tile to length)
                     loop_bars = max([t.get("bars", 8) for t in deduped_tracks] + [8])
-                    duration_seconds = calc_duration(state.current_bpm, loop_bars)
-                    loop_duration_samples = int(duration_seconds * (self.mixer.sample_rate or 44100))
+                    duration_seconds = calc_duration(local_current_bpm, loop_bars)
+                    loop_duration_samples = int(duration_seconds * ((self.mixer.sample_rate if self.mixer else None) or 44100))
 
-                    tracks_data = [None] * len(state.next_stems)
+                    tracks_data = [None] * len(local_next_stems)
 
-                    for i, t in enumerate(state.next_stems):
+                    for i, t in enumerate(local_next_stems):
                         prompt = t["prompt"]
                         track_bars = t["bars"]
                         m_id = t.get("model_id")
-                        cache_key = f"{m_id}_{prompt}_{state.current_bpm}_{state.current_key}_{track_bars}"
+                        cache_key = f"{m_id}_{prompt}_{local_current_bpm}_{local_current_key}_{track_bars}"
 
                         if cache_key in self.stem_cache:
                             audio_data = self.stem_cache[cache_key]["audio_data"]
@@ -573,6 +583,25 @@ class AsyncFrameworkLoop:
                         state.current_set_name = self._pregen_results.get('set_name', 'Unknown Set')
                         state.llm_reasoning = self._pregen_results.get('reasoning', 'No reasoning provided.')
 
+                        # Build action log for pre-generated loop
+                        current_actions_log = []
+                        for action in self._pregen_results.get("actions", []):
+                            a_type = action.get("action_type")
+                            idx = action.get("stem_index")
+                            if a_type == "retain" and idx is not None and 0 <= idx < len(state.previous_stems):
+                                s = state.previous_stems[idx]
+                                prompt = s.get('prompt', '')
+                                prompt_part = prompt.split(',')[1].strip() if len(prompt.split(',')) > 1 else prompt
+                                current_actions_log.append(f"Retained {prompt_part}")
+                            elif a_type == "add":
+                                current_actions_log.append(f"Added {action.get('sub_family', '')}")
+                            elif a_type == "remove" and idx is not None and 0 <= idx < len(state.previous_stems):
+                                s = state.previous_stems[idx]
+                                prompt = s.get('prompt', '')
+                                prompt_part = prompt.split(',')[1].strip() if len(prompt.split(',')) > 1 else prompt
+                                current_actions_log.append(f"Removed {prompt_part}")
+                        state.last_actions = current_actions_log
+
                     # Capture for initial recording (loop_idx == 1 has no mixer transition event)
                     if loop_idx == 1:
                         needs_initial_record = True
@@ -627,13 +656,13 @@ class AsyncFrameworkLoop:
                     print(f"[AsyncLoop-{loop_idx}] Loop {loop_idx + 1} already queued, skipping pre-gen")
                     # Signal that pre-gen is "done" - the loop is queued in the mixer
                     self._pregen_done.set()
-                    # Update _pregen_results to reflect the queued loop
-                    # Use state.next_stems which has the stems for the queued loop
+                    # Update _pregen_results to reflect the queued loop.
+                    # Use active_stems (state.next_stems was already cleared to [] above).
                     self._pregen_results = {
                         'loop_idx': loop_idx + 1,
                         'prepared_tracks': tracks_to_use,
                         'loop_duration_samples': duration_samples,
-                        'next_stems': list(state.next_stems),
+                        'next_stems': list(state.active_stems),
                     }
 
                 # Step 11: Wait until we need to generate next loop
@@ -886,15 +915,16 @@ class AsyncFrameworkLoop:
                 if cache_key in self.stem_cache:
                     continue
 
+                orig = t.get("_original_details", {})
                 job_id = await self._submit_job(
                     session_id=self.session_id,
-                    instrument=t.get("sub_family", "Unknown"),
+                    instrument=orig.get("sub_family", "Unknown"),
                     prompt=prompt,
-                    major_family=t.get("major_family"),
+                    major_family=orig.get("major_family"),
                     model_id=m_id,
                     key=current_key,
                     bpm=current_bpm,
-                    timbre_tags=t.get("timbre_tags", []),
+                    timbre_tags=orig.get("timbre_tags", []),
                     bars=track_bars
                 )
                 pending_jobs.append((job_id, i, cache_key))
@@ -918,7 +948,7 @@ class AsyncFrameworkLoop:
             # Prepare tracks
             loop_bars = max([t.get("bars", 8) for t in deduped_tracks] + [8])
             duration_seconds = calc_duration(current_bpm, loop_bars)
-            loop_duration_samples = int(duration_seconds * 44100)
+            loop_duration_samples = int(duration_seconds * ((self.mixer.sample_rate if self.mixer else None) or 44100))
 
             tracks_data = [None] * len(next_stems)
             for i, t in enumerate(next_stems):

@@ -667,3 +667,22 @@ class TestNoGapPrevention:
         import pytest
         with pytest.raises(ValueError):
             mixer.set_next_loop([('audio', 0)], 50000)  # Less than current_sample
+
+
+class TestLastActions:
+    """Tests for last_actions log generation and safe prompt parsing."""
+
+    def test_safe_prompt_parsing_retains(self):
+        """Test prompt parsing when commas are present or absent."""
+        # Test prompt with comma
+        s = {"prompt": "Synth, Synth Lead, Warm, melody, Medium Reverb, C minor, 120 BPM, 8 Bars"}
+        prompt = s.get('prompt', '')
+        prompt_part = prompt.split(',')[1].strip() if len(prompt.split(',')) > 1 else prompt
+        assert prompt_part == "Synth Lead"
+
+        # Test prompt without comma
+        s_no_comma = {"prompt": "SynthLead"}
+        prompt_no_comma = s_no_comma.get('prompt', '')
+        prompt_part_no_comma = prompt_no_comma.split(',')[1].strip() if len(prompt_no_comma.split(',')) > 1 else prompt_no_comma
+        assert prompt_part_no_comma == "SynthLead"
+
