@@ -12,12 +12,39 @@ def client():
 @pytest.fixture(autouse=True)
 def reset_state():
     from app.framework.framework_state import state
+    import os
+    
+    orig_file = state.instruments_file
+    state.instruments_file = "instruments_test.json"
+    
+    if os.path.exists(state.instruments_file):
+        try:
+            os.remove(state.instruments_file)
+        except Exception:
+            pass
+            
     state.reset()
     state.active_stems = []
     state.stem_volumes = {}
     state.muted_stems = set()
     state.soloed_stems = set()
+    
+    state.custom_instruments = {}
+    state.categorized_instruments = state._load_instruments()
+    state.available_instruments = state._flatten_instruments()
+    
     yield
+    
+    if os.path.exists(state.instruments_file):
+        try:
+            os.remove(state.instruments_file)
+        except Exception:
+            pass
+            
+    state.instruments_file = orig_file
+    state.custom_instruments = {}
+    state.categorized_instruments = state._load_instruments()
+    state.available_instruments = state._flatten_instruments()
 
 
 class TestCustomInstrumentEndpoints:

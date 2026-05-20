@@ -74,11 +74,21 @@ class StableAudioEngine:
                     time.sleep(2)
                 else:
                     raise
-        state_dict = load_file(model_path, device=self.device)
-        self.model.load_state_dict(state_dict)
-        self.model = self.model.to(self.device)
-        self.sample_rate = self.model.sample_rate
-        print(f"[{self.repo_id}] Loaded successfully.")
+        try:
+            if model_path.endswith('.safetensors'):
+                state_dict = load_file(model_path, device=self.device)
+            else:
+                state_dict = torch.load(model_path, map_location=self.device)
+                if isinstance(state_dict, dict) and 'state_dict' in state_dict:
+                    state_dict = state_dict['state_dict']
+
+            self.model.load_state_dict(state_dict)
+            self.model = self.model.to(self.device)
+            self.sample_rate = self.model.sample_rate
+            print(f"[{self.repo_id}] Loaded successfully.")
+        except Exception as e:
+            self.model = None
+            raise e
 
     def generate_batch(self, requests, bpm, cfg_scale=7.0, steps=50):
         if self.model is None:

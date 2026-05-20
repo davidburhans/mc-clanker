@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 import time
 from fastapi import APIRouter, Request, status
 from .schemas import StateUpdate, LLMConfig, GenerationConfig, AudienceMessage, CustomInstrumentCreate
@@ -112,14 +114,43 @@ async def update_generation_config(config: GenerationConfig):
 
 @router.get("/instruments")
 async def get_instruments():
-    """Get categorized instrument options for custom stems."""
-    return {
+    """Get instrument options derived from enabled models' supported_families."""
+    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
+    with open(config_path, "r") as f:
+        config = json.load(f)
+
+    # Collect supported_families from all enabled models
+    enabled_families = set()
+    for _, model_info in config.get("models", {}).items():
+        if model_info.get("enabled", False):
+            enabled_families.update(model_info.get("supported_families", []))
+
+    # Sub-family suggestions per major family (derived from VALID_SUB_FAMILIES)
+    SUB_FAMILIES_BY_MAJOR = {
         "Drums": ["Kick", "Snare", "Hi-Hat", "Percussion", "Clap", "Full Kit"],
-        "Bass": ["Sub", "Acid", "Reese", "Pluck", "Slap", "Synth Bass"],
-        "Synth": ["Lead", "Pad", "Arp", "Stab", "Warp", "Bell"],
-        "Vocal": ["Chop", "Phrase", "Ad-lib", "Atmospheric"],
-        "FX": ["Riser", "Downshell", "Impact", "Noise", "Foley"]
+        "Bass": ["Sub Bass", "Reese Bass", "Analog Bass", "Wavetable Bass", "FM Bass"],
+        "Synth": ["Synth Lead", "FM Synth", "Wavetable Synth", "Analog Synth", "Supersaw"],
+        "Keys": ["Grand Piano", "Digital Piano", "Rhodes Piano", "Wurlitzer Piano", "Clavinet"],
+        "Percussion": ["Conga", "Bongo", "Timbale", "Cabasa", "Shaker"],
+        "Bowed Strings": ["Violin", "Viola", "Cello", "Digital Strings", "Harp"],
+        "Mallet": ["Marimba", "Vibraphone", "Glockenspiel", "Xylophone", "Steel Drums"],
+        "Wind": ["Flute", "Clarinet", "Oboe", "Bassoon", "Saxophone"],
+        "Guitar": ["Acoustic Guitar", "Nylon Guitar", "Electric Guitar"],
+        "Brass": ["Trumpet", "French Horn", "Flugelhorn", "Trombone", "Tuba"],
+        "Plucked Strings": ["Koto", "Sitar", "Fiddle", "Mandolin"],
+        "Piano": ["Soft E. Piano", "Medium E. Piano"],
+        "Vocal": ["Male Vocal Texture", "Female Vocal Texture", "Ensemble Vocal Texture"],
+        "Choir": ["Choir", "Synthetic Choir", "Synthetic Vox"],
+        "Pad": ["Pad", "Atmosphere", "Texture", "Bell"],
+        "Atmosphere": ["Atmosphere", "Texture", "Ambient"],
     }
+
+    result = {}
+    for family in sorted(enabled_families):
+        if family in SUB_FAMILIES_BY_MAJOR:
+            result[family] = SUB_FAMILIES_BY_MAJOR[family]
+
+    return result
 
 @router.get("/constants")
 async def get_constants():
