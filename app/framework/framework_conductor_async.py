@@ -98,7 +98,7 @@ Output a valid JSON object matching the requested schema EXACTLY. Do not output 
 
         self.user_message_template = """Current State:
 Master BPM: {bpm}
-Master Key: {key}
+Master Key: {key} (Harmonically compatible transition keys: {harmonic_neighbors})
 Active Stems (Currently Playing):
 {stems}
 
@@ -252,9 +252,14 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             else "The mix density is good. Maintain 4-6 stems for a full sound."
         )
 
+        from app.lib.harmonic import HarmonicHelper
+        neighbors = HarmonicHelper.get_harmonic_neighbors(current_key)
+        neighbors_str = f"{neighbors[0]}, {neighbors[1]}, or {neighbors[2]}"
+
         user_prompt = self.user_message_template.format(
             bpm=current_bpm,
             key=current_key,
+            harmonic_neighbors=neighbors_str,
             stems="\n".join(simple_stems) if simple_stems else "None",
             history=history_str if history_str else "None",
             instruments=", ".join(available_instruments),
@@ -324,7 +329,7 @@ class ConductorPromptBuilder:
 
         template = """Current State:
 Master BPM: {bpm}
-Master Key: {key}
+Master Key: {key} (Harmonically compatible transition keys: {harmonic_neighbors})
 Active Stems (Currently Playing):
 {stems}
 
@@ -343,17 +348,22 @@ Instead of generating a full tracklist, you must define an array of `actions`:
 - `retain`: Keep an active stem playing exactly as it is (REQUIRED for flow). You must provide its exact `stem_index`.
 - `add`: Introduce a NEW stem. Provide the full instrument parameters (major_family, sub_family, etc.) AND a `model_id`.
 - `remove`: Stop an active stem from playing. Provide its `stem_index`.
-
+ 
 To keep the groove flowing, you SHOULD `retain` most of the 'Active Stems'. You should never have complete turn over of stems.
 CRITICAL: If the music needs rhythm, ensure you explicitly `add` a 'Drums' stem if one is not already playing!
 DENSITY RULE: There are currently {stem_count} active stems. {density_directive}
 STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Prefer removing older stems to keep the mix fresh.
-
+ 
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now."""
 
+        from app.lib.harmonic import HarmonicHelper
+        neighbors = HarmonicHelper.get_harmonic_neighbors(current_key)
+        neighbors_str = f"{neighbors[0]}, {neighbors[1]}, or {neighbors[2]}"
+ 
         prompt = template.format(
             bpm=current_bpm,
             key=current_key,
+            harmonic_neighbors=neighbors_str,
             stems="\n".join(simple_stems) if simple_stems else "None",
             history=history_str if history_str else "None",
             instruments=", ".join(available_instruments),

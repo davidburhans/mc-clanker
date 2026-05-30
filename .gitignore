@@ -69,3 +69,13 @@ sim_data/
 
 # Environment file (contains secrets)
 .env
+
+# Models / GGUF
+*.gguf
+
+# Claude IDE
+.claude/
+
+# Dynamic App State
+instruments.json
+

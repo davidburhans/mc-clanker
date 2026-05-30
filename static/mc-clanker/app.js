@@ -442,6 +442,8 @@ class DJSlopApp {
                         }
                         // Update rotary display
                         this.updateKeyDisplay(key);
+                        // Update highlights immediately for instant feedback
+                        this.updateHarmonicHighlights(key);
                         // Trigger apply
                         this.applyAll();
                         // Close picker
@@ -563,6 +565,26 @@ class DJSlopApp {
     }
 
     async loadState() {
+        // Fetch constants
+        try {
+            const res = await fetch('/api/constants');
+            if (res.ok) {
+                const data = await res.json();
+                this.state.harmonicMap = data.harmonic_map;
+                // Add Camelot tooltips to the picker buttons initially
+                const keyPickBtns = document.querySelectorAll('.key-pick-btn');
+                keyPickBtns.forEach(btn => {
+                    const btnKey = btn.dataset.key;
+                    const code = this.state.harmonicMap[btnKey]?.camelot;
+                    if (code) {
+                        btn.setAttribute('title', `${btnKey} (${code})`);
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('Failed to load constants:', e);
+        }
+
         try {
             const response = await fetch('/api/state');
             if (response.ok) {
@@ -757,6 +779,8 @@ class DJSlopApp {
         if (this.rotaryKeyDisplay) {
             this.updateKeyDisplay(this.state.key);
         }
+        // Update harmonic highlights in manual key picker
+        this.updateHarmonicHighlights(this.state.key);
 
         // Reasoning
         this.state.reasoning = data.llm_reasoning || '';
@@ -860,6 +884,35 @@ class DJSlopApp {
             return note + 'm';
         }
         return note;
+    }
+
+    updateHarmonicHighlights(currentKey) {
+        if (!currentKey || !this.state.harmonicMap) return;
+
+        const keyPickBtns = document.querySelectorAll('.key-pick-btn');
+        const keyInfo = this.state.harmonicMap[currentKey];
+        if (!keyInfo) return;
+
+        const neighbors = keyInfo.neighbors || [];
+
+        keyPickBtns.forEach(btn => {
+            const btnKey = btn.dataset.key;
+            if (btnKey === currentKey) {
+                btn.classList.add('current-key');
+                btn.classList.remove('harmonic-neighbor');
+                btn.setAttribute('title', `${btnKey} (${keyInfo.camelot}) - Active Master Key`);
+            } else if (neighbors.includes(btnKey)) {
+                btn.classList.add('harmonic-neighbor');
+                btn.classList.remove('current-key');
+                const neighborCode = this.state.harmonicMap[btnKey]?.camelot;
+                btn.setAttribute('title', `${btnKey} (${neighborCode}) - Harmonically Compatible`);
+            } else {
+                btn.classList.remove('current-key');
+                btn.classList.remove('harmonic-neighbor');
+                const btnCode = this.state.harmonicMap[btnKey]?.camelot;
+                btn.setAttribute('title', btnCode ? `${btnKey} (${btnCode})` : btnKey);
+            }
+        });
     }
 
     // ========== LOOP NAVIGATION ==========

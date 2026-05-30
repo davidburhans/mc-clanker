@@ -1633,6 +1633,45 @@ body::after {
     box-shadow: 0 0 12px rgba(255, 170, 0, 0.3);
 }
 
+/* Harmonic Guidance Glowing Rules */
+@keyframes pulse-harmonic-glow {
+    0% {
+        box-shadow: 0 0 4px rgba(0, 229, 255, 0.2);
+        border-color: rgba(0, 229, 255, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 14px rgba(0, 229, 255, 0.6);
+        border-color: var(--cyan-glow);
+    }
+    100% {
+        box-shadow: 0 0 4px rgba(0, 229, 255, 0.2);
+        border-color: rgba(0, 229, 255, 0.3);
+    }
+}
+
+.key-pick-btn.current-key {
+    border-color: var(--cyan-glow) !important;
+    color: var(--cyan-bright) !important;
+    background: linear-gradient(135deg, rgba(0, 229, 255, 0.15) 0%, rgba(0, 85, 102, 0.05) 100%) !important;
+    box-shadow: 0 0 14px rgba(0, 229, 255, 0.4) !important;
+    font-weight: 700 !important;
+}
+
+.key-pick-btn.harmonic-neighbor {
+    animation: pulse-harmonic-glow 2s infinite ease-in-out;
+    color: var(--cyan-bright);
+    background: rgba(0, 229, 255, 0.05);
+    border: 1px solid rgba(0, 229, 255, 0.3);
+}
+
+.key-pick-btn.harmonic-neighbor:hover {
+    animation: none;
+    border-color: var(--cyan-glow) !important;
+    box-shadow: 0 0 18px rgba(0, 229, 255, 0.7) !important;
+    color: var(--bg-void) !important;
+    background: var(--cyan-glow) !important;
+}
+
 /* ========== VIBE PRESET PADS ========== */
 .vibe-presets {
     display: grid;

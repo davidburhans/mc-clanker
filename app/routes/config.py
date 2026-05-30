@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import time
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter
 from .schemas import StateUpdate, LLMConfig, GenerationConfig, AudienceMessage, CustomInstrumentCreate
 from app.framework.framework_state import state
 
@@ -163,10 +163,12 @@ async def get_instruments():
 async def get_constants():
     """Return schema-relevant constants for frontend use."""
     from app.lib.constants import VALID_BPMS, VALID_KEYS, get_all_major_families
+    from app.lib.harmonic import HarmonicHelper
     return {
         "valid_bpms": VALID_BPMS,
         "valid_keys": VALID_KEYS,
         "valid_major_families": get_all_major_families(),
+        "harmonic_map": HarmonicHelper.get_harmonic_map(),
     }
 
 @router.post("/instruments/custom")

@@ -117,3 +117,13 @@ class TestCustomInstrumentEndpoints:
                 "major_family": family
             })
             assert response.status_code == 200, f"Family {family} should be valid"
+
+    def test_constants_endpoint_includes_harmonic_map(self, client):
+        """GET /api/constants includes harmonic_map."""
+        response = client.get("/api/constants")
+        assert response.status_code == 200
+        data = response.json()
+        assert "harmonic_map" in data
+        assert "C minor" in data["harmonic_map"]
+        assert data["harmonic_map"]["C minor"]["camelot"] == "5A"
+        assert "G minor" in data["harmonic_map"]["C minor"]["neighbors"]
