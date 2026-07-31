@@ -225,7 +225,7 @@ def _wire_loop_no_io(loop, monkeypatch, *, response, pregen_sets_done=True):
     Job results are empty ({}), so no audio is fetched and stems fall back to
     silence — enough to exercise the mixer handoff paths.
     """
-    import app.framework.framework_main_async as mfa
+    import app.framework.loop_orchestrator as orch
 
     loop.conductor.get_next_state_async = AsyncMock(return_value=response)
     loop._submit_job = AsyncMock(return_value=uuid.uuid4())
@@ -240,7 +240,7 @@ def _wire_loop_no_io(loop, monkeypatch, *, response, pregen_sets_done=True):
         return None
 
     loop._pre_generate_next_loop = _fake_pregen
-    monkeypatch.setattr(mfa, "wait_for_multiple_jobs", AsyncMock(return_value={}))
+    monkeypatch.setattr(orch, "wait_for_multiple_jobs", AsyncMock(return_value={}))
     _patch_sleep_instant(monkeypatch)
 
 
