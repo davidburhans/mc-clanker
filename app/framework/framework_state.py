@@ -15,6 +15,19 @@ import threading
 import time
 from collections import OrderedDict
 
+from app.framework.state_slices import (
+    GenerationControl,
+    InstrumentCatalog,
+    LLMConfig,
+    LoopCoordination,
+    MusicalParams,
+    PlaybackState,
+    RecordingState,
+    SessionConfig,
+    StemCacheView,
+    StemLevels,
+)
+
 log = logging.getLogger(__name__)
 
 DEFAULT_INSTRUMENTS = {
@@ -175,10 +188,9 @@ class GlobalState:
         self.dj_password = os.environ.get("DJ_PASSWORD", "")
         self.audience_password = os.environ.get("AUDIENCE_PASSWORD", "")
 
-        # Model management state
-        self.model_states = {}
-        self.model_errors = {}
-        self.download_progress = {}
+        # Model management — registry state lives on GeneratorRegistry
+        # (framework_generator.py); the vestigial model_states / model_errors /
+        # download_progress dicts here were never read (dead — brief-03 ssA).
         self.generator = None
 
         # Icecast
@@ -190,6 +202,52 @@ class GlobalState:
 
         # Framework task reference (set by lifespan)
         self.framework_task = None
+
+    # ------------------------------------------------------------------
+    # E3 pass-1 additive slice views (read-only, over the same __dict__).
+    # Legacy ``state.X`` access is unchanged; ``state.<slice>.X`` is a typed
+    # view. Storage is NOT moved and no attr is renamed (brief-03 ssB).
+    # ------------------------------------------------------------------
+    @property
+    def musical(self) -> MusicalParams:
+        return MusicalParams(self)
+
+    @property
+    def generation(self) -> GenerationControl:
+        return GenerationControl(self)
+
+    @property
+    def llm(self) -> LLMConfig:
+        return LLMConfig(self)
+
+    @property
+    def levels(self) -> StemLevels:
+        # Named ``levels`` (not ``mixer``) to avoid clashing with framework_mixer.Mixer.
+        return StemLevels(self)
+
+    @property
+    def loop_coord(self) -> LoopCoordination:
+        return LoopCoordination(self)
+
+    @property
+    def recording(self) -> RecordingState:
+        return RecordingState(self)
+
+    @property
+    def playback(self) -> PlaybackState:
+        return PlaybackState(self)
+
+    @property
+    def stem_cache_view(self) -> StemCacheView:
+        return StemCacheView(self)
+
+    @property
+    def catalog(self) -> InstrumentCatalog:
+        return InstrumentCatalog(self)
+
+    @property
+    def session(self) -> SessionConfig:
+        return SessionConfig(self)
 
     # ------------------------------------------------------------------
     # last_generated_stems — LRU cache with hard cap
