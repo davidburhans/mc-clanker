@@ -33,6 +33,11 @@ from app.framework.framework_mixer import Mixer
 from app.framework.framework_conductor_async import ConductorLLMAsync
 from app.framework.domain_audio import calc_duration, to_two_channel as _to_two_channel, tile_to_loop
 from app.framework.audio_fetch import GarageAudioAdapter
+from app.framework.audit_recording import append_loop_audit
+from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (routes/shows.py, tests import these from here)
+    _flush_lock,
+    flush_recording_buffers,
+)
 from app.job_waiter import wait_for_multiple_jobs
 # Kept at module top for import-compatibility: frozen bindings (and tests) still
 # import these names from this shim module even though the real fetch call sites
@@ -52,53 +57,9 @@ LOOP_RETRY_BACKOFF_SECONDS = 2.0
 # pre-generation path (which still calls them directly) keep working.
 
 
-# Serializes overlapping flushes so a second stop/flush cannot double-insert
-# rows or interleave with a failure re-queue (review B13).
-_flush_lock = asyncio.Lock()
+# flush_recording_buffers + _flush_lock now live in app.framework.audit_recording
+# (Phase 3); re-exported above for frozen-binding compatibility.
 
-
-async def flush_recording_buffers():
-    """Batch write buffered interactions/actions to DB.
-
-    Called from api_routes.py when a show is stopped to persist
-    buffered LLM interactions and actions to the database.
-    """
-    async with _flush_lock:
-        async with state.lock:
-            if not state.llm_interaction_buffer and not state.action_buffer:
-                return
-            if state.current_show_id is None:
-                state.llm_interaction_buffer.clear()
-                state.action_buffer.clear()
-                return
-
-            # Copy buffers under lock, then release lock before DB I/O
-            llm_buffer = state.llm_interaction_buffer[:]
-            action_buffer = state.action_buffer[:]
-            state.llm_interaction_buffer.clear()
-            state.action_buffer.clear()
-
-        if not llm_buffer and not action_buffer:
-            return
-
-        # Import here to avoid circular imports
-        from app.db import DatabaseManager
-        from app.models import LLMInteraction, ShowAction
-
-        db_manager = DatabaseManager.get_instance()
-        try:
-            with db_manager.session() as session:
-                if llm_buffer:
-                    session.bulk_insert_mappings(LLMInteraction, llm_buffer)
-                if action_buffer:
-                    session.bulk_insert_mappings(ShowAction, action_buffer)
-            print("Flushed recording buffers to DB")
-        except Exception as e:
-            print(f"Error flushing recording buffers: {e}")
-            # Put buffers back on failure
-            async with state.lock:
-                state.llm_interaction_buffer = llm_buffer + state.llm_interaction_buffer
-                state.action_buffer = action_buffer + state.action_buffer
 
 
 def process_actions(actions: List[Dict[str, Any]], active_stems: List[Dict]) -> List[Dict]:
@@ -844,102 +805,12 @@ class AsyncFrameworkLoop:
         return await self._audio.fetch(audio_path)
 
     async def _append_loop_audit(self, conductor_response, active_stems, loop_idx):
-        """Buffer one LLMInteraction + N ShowAction rows for later DB flush (C1).
+        """Buffer one loop's audit rows; delegates to audit_recording (Phase 3).
 
-        No-op when no show is recording. Runs under state.lock so it cannot
-        interleave with flush_recording_buffers.
+        Kept as a method so ``patch.object(loop, '_append_loop_audit')`` and
+        direct test calls keep working (brief-02 ssD).
         """
-        actions = conductor_response.get("actions", []) or []
-        reasoning = conductor_response.get("reasoning", "")
-        is_fallback = conductor_response.get("name") == "Fallback State"
-        now = datetime.now(timezone.utc)
-        async with state.lock:
-            show_id = state.current_show_id
-            if show_id is None:
-                return
-            relative_ms = self._relative_show_ms()
-            state.llm_interaction_buffer.append(
-                {
-                    "show_id": show_id,
-                    "loop_index": loop_idx,
-                    "timestamp": now,
-                    "relative_time_ms": relative_ms,
-                    "prompt_messages": self._audit_prompt_context(conductor_response, active_stems, loop_idx),
-                    "parsed_response": conductor_response,
-                    "reasoning": reasoning,
-                    "error": None,
-                    "was_fallback": is_fallback,
-                }
-            )
-            for action in actions:
-                state.action_buffer.append(
-                    self._audit_action_row(show_id, loop_idx, now, relative_ms, action, active_stems)
-                )
-
-    def _relative_show_ms(self) -> int:
-        """Milliseconds since the current show started (0 if not started)."""
-        start = state.current_show_start_time
-        return int((time.time() - start) * 1000) if start else 0
-
-    def _audit_prompt_context(self, conductor_response, active_stems, loop_idx):
-        """Summarize the request context (actual chat msgs live in the conductor)."""
-        return {
-            "loop_index": loop_idx,
-            "bpm": conductor_response.get("master_bpm"),
-            "key": conductor_response.get("master_key"),
-            "set_name": conductor_response.get("name"),
-            "active_stem_count": len(active_stems),
-            "note": "request context; full prompt built in ConductorLLMAsync",
-        }
-
-    def _audit_action_row(self, show_id, loop_idx, ts, relative_ms, action, active_stems):
-        """Shape one action dict for bulk-insert into show_actions."""
-        a_type = action.get("action_type")
-        idx = action.get("stem_index")
-        return {
-            "show_id": show_id,
-            "loop_index": loop_idx,
-            "timestamp": ts,
-            "relative_time_ms": relative_ms,
-            "action_type": a_type,
-            "stem_index": idx,
-            "stem_details": self._audit_stem_details(a_type, idx, action, active_stems),
-            "action_description": self._audit_action_description(a_type, idx, action, active_stems),
-        }
-
-    def _audit_stem_details(self, a_type, idx, action, active_stems):
-        """Build a JSON-safe stem descriptor for stem_details."""
-        if a_type == "add":
-            return {
-                "index": idx,
-                "instrument": action.get("sub_family"),
-                "major_family": action.get("major_family"),
-                "sub_family": action.get("sub_family"),
-                "model_id": action.get("model_id"),
-                "bars": action.get("bars"),
-            }
-        stem = active_stems[idx] if idx is not None and 0 <= idx < len(active_stems) else {}
-        return {
-            "index": idx,
-            "instrument": stem.get("instrument") or stem.get("prompt", ""),
-            "prompt": stem.get("prompt", ""),
-            "model_id": stem.get("model_id"),
-            "bpm": stem.get("bpm"),
-            "key": stem.get("key"),
-            "bars": stem.get("bars"),
-        }
-
-    def _audit_action_description(self, a_type, idx, action, active_stems):
-        """Human-readable one-liner for action_description."""
-        if a_type == "add":
-            return f"Added {action.get('sub_family', action.get('major_family', 'stem'))}"
-        stem = active_stems[idx] if idx is not None and 0 <= idx < len(active_stems) else {}
-        label = stem.get("instrument") or stem.get("prompt", f"stem {idx}")
-        if a_type == "retain":
-            return f"Retained {label}"
-        if a_type == "remove":
-            return f"Removed {label}"
-        return f"{a_type or 'Unknown'} {label}"
+        await append_loop_audit(conductor_response, active_stems, loop_idx)
 
     async def _pre_generate_next_loop(self, for_loop_idx: int, snapshot: Dict[str, Any]):
         """
