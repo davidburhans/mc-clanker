@@ -64,11 +64,13 @@ async def test_pregeneration_does_not_route_through_cache_stem() -> None:
     loop = _new_loop()
     audio = np.ones((1000, 2), dtype=np.float32)
 
-    with patch.object(loop, "conductor") as mc, \
-            patch.object(loop, "_submit_job", new_callable=AsyncMock), \
-            patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio), \
-            patch("app.framework.pregeneration.wait_for_multiple_jobs", new_callable=AsyncMock, return_value={}), \
-            patch.object(state, "cache_stem") as cache_stem_mock:
+    with (
+        patch.object(loop, "conductor") as mc,
+        patch.object(loop, "_submit_job", new_callable=AsyncMock),
+        patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio),
+        patch("app.framework.pregeneration.wait_for_multiple_jobs", new_callable=AsyncMock, return_value={}),
+        patch.object(state, "cache_stem") as cache_stem_mock,
+    ):
         mc.get_next_state_async = AsyncMock(return_value=_add_response())
         await loop._pre_generate_next_loop(2, _snapshot())
 
@@ -81,11 +83,17 @@ async def test_pregen_result_tracks_are_non_silent_when_audio_fetched() -> None:
     audio = np.ones((1000, 2), dtype=np.float32) * 0.5
     job_id = uuid4()
 
-    with patch.object(loop, "conductor") as mc, \
-            patch.object(loop, "_submit_job", new_callable=AsyncMock, return_value=job_id), \
-            patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio), \
-            patch("app.framework.pregeneration.wait_for_multiple_jobs", new_callable=AsyncMock, return_value={job_id: "audio/x.aac"}), \
-            patch.object(state, "cache_stem"):
+    with (
+        patch.object(loop, "conductor") as mc,
+        patch.object(loop, "_submit_job", new_callable=AsyncMock, return_value=job_id),
+        patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio),
+        patch(
+            "app.framework.pregeneration.wait_for_multiple_jobs",
+            new_callable=AsyncMock,
+            return_value={job_id: "audio/x.aac"},
+        ),
+        patch.object(state, "cache_stem"),
+    ):
         mc.get_next_state_async = AsyncMock(return_value=_add_response())
         await loop._pre_generate_next_loop(2, _snapshot())
 
@@ -101,11 +109,17 @@ async def test_pregen_skips_job_when_stem_already_cached() -> None:
     loop = _new_loop()
     job_id = uuid4()
 
-    with patch.object(loop, "conductor") as mc, \
-            patch.object(loop, "_submit_job", new_callable=AsyncMock, return_value=job_id) as submit_a, \
-            patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=np.ones((10, 2), dtype=np.float32)), \
-            patch("app.framework.pregeneration.wait_for_multiple_jobs", new_callable=AsyncMock, return_value={job_id: "audio/x.aac"}), \
-            patch.object(state, "cache_stem"):
+    with (
+        patch.object(loop, "conductor") as mc,
+        patch.object(loop, "_submit_job", new_callable=AsyncMock, return_value=job_id) as submit_a,
+        patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=np.ones((10, 2), dtype=np.float32)),
+        patch(
+            "app.framework.pregeneration.wait_for_multiple_jobs",
+            new_callable=AsyncMock,
+            return_value={job_id: "audio/x.aac"},
+        ),
+        patch.object(state, "cache_stem"),
+    ):
         mc.get_next_state_async = AsyncMock(return_value=_add_response())
         # First pre-gen: submits the job + caches the fetched audio in loop.stem_cache.
         await loop._pre_generate_next_loop(2, _snapshot())

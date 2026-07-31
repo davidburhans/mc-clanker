@@ -123,18 +123,18 @@ class GlobalState:
         self.is_running = True
 
         # Per-stem mixer state
-        self.stem_volumes = {}   # index → float gain (0.0–2.0)
+        self.stem_volumes = {}  # index → float gain (0.0–2.0)
         self.muted_stems = set()
         self.soloed_stems = set()
         self.loop_count = 0
-        self.last_actions = []   # List of descriptive action strings
+        self.last_actions = []  # List of descriptive action strings
 
         # Loop synchronization — what is ACTUALLY playing vs what was decided
-        self.currently_playing_loop_index = 0    # Authoritative "now audible" index
-        self.currently_playing_stems = []         # Stems currently audible
-        self.currently_playing_set_name = ""       # Set name currently audible
-        self.currently_playing_reasoning = ""      # Reasoning currently audible
-        self.loop_history = []                   # Rolling buffer of past loops
+        self.currently_playing_loop_index = 0  # Authoritative "now audible" index
+        self.currently_playing_stems = []  # Stems currently audible
+        self.currently_playing_set_name = ""  # Set name currently audible
+        self.currently_playing_reasoning = ""  # Reasoning currently audible
+        self.loop_history = []  # Rolling buffer of past loops
 
         # Loop transition coordination.
         # NOTE: a vestigial `next_loop_ready` threading.Event + `next_loop_tracks`
@@ -310,13 +310,15 @@ class GlobalState:
             self.currently_playing_stems = copy.deepcopy(stems)
             self.currently_playing_set_name = set_name
             self.currently_playing_reasoning = reasoning
-            self.loop_history.append({
-                'loop_index': loop_index,
-                'set_name': set_name,
-                'reasoning': reasoning,
-                'stems': copy.deepcopy(stems),
-                'timestamp': time.time()
-            })
+            self.loop_history.append(
+                {
+                    "loop_index": loop_index,
+                    "set_name": set_name,
+                    "reasoning": reasoning,
+                    "stems": copy.deepcopy(stems),
+                    "timestamp": time.time(),
+                }
+            )
             if len(self.loop_history) > 10:
                 self.loop_history.pop(0)
 
@@ -330,6 +332,7 @@ class GlobalState:
                         self.custom_instruments = data.get("_metadata", {}).get("custom_instruments", {})
                         # Register existing custom families with the schema
                         from app.lib.constants import add_custom_major_family
+
                         for family in self.custom_instruments.values():
                             add_custom_major_family(family)
                         return data.get("instruments", DEFAULT_INSTRUMENTS.copy())
@@ -342,9 +345,7 @@ class GlobalState:
         with open(self.instruments_file, "w") as f:
             payload = {
                 "instruments": self.categorized_instruments,
-                "_metadata": {
-                    "custom_instruments": self.custom_instruments
-                }
+                "_metadata": {"custom_instruments": self.custom_instruments},
             }
             json.dump(payload, f, indent=2)
 
@@ -364,6 +365,7 @@ class GlobalState:
                 self.custom_instruments[name] = family
                 # Register with schema constants so LLM can use this family
                 from app.lib.constants import add_custom_major_family
+
                 add_custom_major_family(family)
         return self.categorized_instruments
 

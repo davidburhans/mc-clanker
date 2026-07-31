@@ -53,16 +53,10 @@ def test_no_io_inside_state_lock_in_orchestrator() -> None:
                     continue
                 if isinstance(child, ast.Await):
                     violations.append((node.lineno, child.lineno, "await"))
-                elif (
-                    isinstance(child, ast.Call)
-                    and isinstance(child.func, ast.Name)
-                    and child.func.id == "open"
-                ):
+                elif isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "open":
                     violations.append((node.lineno, child.lineno, "open()"))
 
-    assert not violations, (
-        f"I/O inside state.lock forbidden (CLAUDE.md / brief-01 risk #2): {violations}"
-    )
+    assert not violations, f"I/O inside state.lock forbidden (CLAUDE.md / brief-01 risk #2): {violations}"
 
 
 async def test_record_loop_transition_runs_outside_state_lock(monkeypatch) -> None:
@@ -87,6 +81,5 @@ async def test_record_loop_transition_runs_outside_state_lock(monkeypatch) -> No
 
     assert lock_states, "expected record_loop_transition to fire for loop 1"
     assert not any(lock_states), (
-        f"record_loop_transition must run OUTSIDE state.lock (brief-01 risk #3); "
-        f"locked-at-call={lock_states}"
+        f"record_loop_transition must run OUTSIDE state.lock (brief-01 risk #3); locked-at-call={lock_states}"
     )

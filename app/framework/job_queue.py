@@ -69,9 +69,7 @@ async def submit_generator_job(
     return job_id  # type: ignore[return-value]
 
 
-async def await_jobs(
-    job_ids: Sequence[uuid.UUID], timeout: float = 120.0
-) -> dict[uuid.UUID, str | None]:
+async def await_jobs(job_ids: Sequence[uuid.UUID], timeout: float = 120.0) -> dict[uuid.UUID, str | None]:
     """Block until the jobs complete; return ``{job_id: audio_path_or_None}``.
 
     Thin wrapper over the LISTEN/NOTIFY waiter. Not yet wired into the loop

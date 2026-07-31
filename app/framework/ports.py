@@ -64,9 +64,7 @@ class JobQueuePort(Protocol):
         """Insert one pending ``GeneratorJob`` row and return its id."""
         ...
 
-    async def await_jobs(
-        self, job_ids: list[UUID], timeout: float = 120.0
-    ) -> dict[UUID, str | None]:
+    async def await_jobs(self, job_ids: list[UUID], timeout: float = 120.0) -> dict[UUID, str | None]:
         """Block until the jobs complete; return ``{job_id: audio_path_or_None}``."""
         ...
 

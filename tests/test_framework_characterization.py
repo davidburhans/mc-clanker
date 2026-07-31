@@ -508,10 +508,17 @@ async def test_fetch_audio_empty_bytes_and_exception_return_none():
     assert await loop._fetch_audio("audio/x.aac") is None
 
     # Case B: get_object raises → swallowed → None (no propagation).
+    # Reset the cached adapter so it rebuilds from the NEW garage client
+    # (GarageAudioAdapter caches _garage_client after first use — without this
+    # reset Case B would silently reuse garage_empty and the exception branch
+    # would never run, leaving the test vacuous).
+    loop._audio_adapter = None
     garage_err = MagicMock()
     garage_err.get_object = AsyncMock(side_effect=RuntimeError("s3 down"))
     loop._garage = garage_err
     assert await loop._fetch_audio("audio/y.aac") is None
+    # Prove Case B actually exercised the exception client (not Case A's).
+    garage_err.get_object.assert_awaited()
 
 
 # --------------------------------------------------------------------------- #

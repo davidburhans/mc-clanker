@@ -49,7 +49,9 @@ def load_available_models() -> list[dict[str, Any]]:
     return models
 
 
-def build_fallback_response(current_bpm: int, current_key: str, active_stems: list[dict], error: object) -> dict[str, Any]:
+def build_fallback_response(
+    current_bpm: int, current_key: str, active_stems: list[dict], error: object
+) -> dict[str, Any]:
     """Retain-all fallback used when the LLM call raises (name == 'Fallback State')."""
     return {
         "master_bpm": current_bpm,

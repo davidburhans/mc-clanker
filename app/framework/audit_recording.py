@@ -167,6 +167,4 @@ async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
             }
         )
         for action in actions:
-            state.action_buffer.append(
-                _audit_action_row(show_id, loop_idx, now, relative_ms, action, active_stems)
-            )
+            state.action_buffer.append(_audit_action_row(show_id, loop_idx, now, relative_ms, action, active_stems))

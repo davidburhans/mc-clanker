@@ -48,9 +48,7 @@ class GarageAudioAdapter:
 
             # Decode AAC to numpy array (runs in thread pool since it's blocking)
             loop = asyncio.get_running_loop()
-            audio_data = await loop.run_in_executor(
-                None, lambda: decode_aac(aac_bytes, sample_rate=44100)
-            )
+            audio_data = await loop.run_in_executor(None, lambda: decode_aac(aac_bytes, sample_rate=44100))
 
             print(f"[AsyncFrameworkLoop] Fetched and decoded audio from: {audio_path}")
             return audio_data

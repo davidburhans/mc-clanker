@@ -116,10 +116,7 @@ def build_loop_history_from_db(
                 loops[li]["stems"] = [stem_details]
             else:
                 # Merge by index
-                existing_indices = {
-                    s.get("index", i) for i, s in enumerate(loops[li]["stems"])
-                    if isinstance(s, dict)
-                }
+                existing_indices = {s.get("index", i) for i, s in enumerate(loops[li]["stems"]) if isinstance(s, dict)}
                 idx = stem_details.get("index", len(loops[li]["stems"]))
                 if idx not in existing_indices:
                     loops[li]["stems"].append(stem_details)
@@ -269,7 +266,17 @@ def export_show_format(
     """
     try:
         from mutagen.id3 import (  # noqa: F401  availability probe (optional mutagen)
-            ID3, TIT2, TPE1, TALB, TCON, TXXX, COMM, CTOC, CHAP, WXXX, TYER
+            ID3,
+            TIT2,
+            TPE1,
+            TALB,
+            TCON,
+            TXXX,
+            COMM,
+            CTOC,
+            CHAP,
+            WXXX,
+            TYER,
         )
         from mutagen.mp3 import MP3  # noqa: F401  availability probe
         from mutagen.flac import FLAC  # noqa: F401  availability probe
@@ -309,6 +316,7 @@ def export_show_format(
             # Actually, mutagen supports WAV via the generic AudioFile or ID3 directly
             # Let's use the WAV-compatible approach: write ID3 to .wav via mutagen
             from mutagen import File as MutagenFile
+
             try:
                 audio = MutagenFile(temp_wav, easy=True)
             except Exception:
@@ -337,8 +345,7 @@ def export_show_format(
 
         proc = subprocess.run(cmd, capture_output=True, timeout=120)
         if proc.returncode != 0:
-            log.warning("ffmpeg failed (%s), falling back to WAV: %s",
-                       proc.returncode, proc.stderr.decode()[:200])
+            log.warning("ffmpeg failed (%s), falling back to WAV: %s", proc.returncode, proc.stderr.decode()[:200])
             # Fall back to WAV
             output_path_wav = output_path.rsplit(".", 1)[0] + ".wav"
             shutil.move(temp_wav, output_path_wav)
@@ -379,9 +386,7 @@ def _tag_mp3(
 ):
     """Add ID3v2 tags with chapters to an MP3 file."""
     from mutagen.mp3 import MP3
-    from mutagen.id3 import (
-        TIT2, TPE1, TALB, COMM, TCON, TXXX, CTOC, CHAP
-    )
+    from mutagen.id3 import TIT2, TPE1, TALB, COMM, TCON, TXXX, CTOC, CHAP
 
     try:
         audio = MP3(mp3_path)
@@ -403,34 +408,36 @@ def _tag_mp3(
     if config_snapshot:
         bpm = config_snapshot.get("bpm", 0)
         if bpm:
-            audio.tags.add(TXXX(
-                encoding=3, desc="BPM", text=[str(bpm)]
-            ))
+            audio.tags.add(TXXX(encoding=3, desc="BPM", text=[str(bpm)]))
 
     # Add chapter markers (ID3v2 chapters)
     if chapters:
         # Create CTOC (table of contents)
         chapter_ids = [f"ch{i}" for i in range(len(chapters))]
         try:
-            audio.tags.add(CTOC(
-                element_id=b"chapters",
-                ordered=True,
-                top_level=True,
-                chapter_ids=chapter_ids,
-            ))
+            audio.tags.add(
+                CTOC(
+                    element_id=b"chapters",
+                    ordered=True,
+                    top_level=True,
+                    chapter_ids=chapter_ids,
+                )
+            )
         except Exception:
             pass
 
         for i, chapter in enumerate(chapters):
             try:
-                title = chapter.get("title", f"Chapter {i+1}")
+                title = chapter.get("title", f"Chapter {i + 1}")
                 start_ms = int(chapter.get("timestamp", 0) * 1000)
-                audio.tags.add(CHAP(
-                    chapter_id=f"ch{i}",
-                    start=start_ms,
-                    end=start_ms + 1000,
-                    title=title,
-                ))
+                audio.tags.add(
+                    CHAP(
+                        chapter_id=f"ch{i}",
+                        start=start_ms,
+                        end=start_ms + 1000,
+                        title=title,
+                    )
+                )
             except Exception:
                 pass
 
