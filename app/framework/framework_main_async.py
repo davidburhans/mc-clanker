@@ -44,6 +44,7 @@ from app.framework.conductor_interaction import (
     load_available_models,
     process_actions,  # noqa: F401  frozen public API (simulation/session_state imports it from here)
 )
+from app.framework.job_queue import submit_generator_job
 from app.job_waiter import wait_for_multiple_jobs
 # Kept at module top for import-compatibility: frozen bindings (and tests) still
 # import these names from this shim module even though the real fetch call sites
@@ -650,38 +651,21 @@ class AsyncFrameworkLoop:
         timbre_tags: List[str],
         bars: int,
     ) -> uuid.UUID:
+        """Submit a generation job; delegates to job_queue (Phase 5).
+
+        Kept as a method so ``patch.object(loop, '_submit_job')`` keeps working.
         """
-        Submit a generation job to the queue.
-
-        Returns the job UUID.
-        """
-        from app.models.generator_job import GeneratorJob
-        from app.db import DatabaseManager
-
-        db_manager = DatabaseManager.get_instance()
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
-
-        with db_manager.session() as session:
-            job = GeneratorJob(
-                session_id=session_id,
-                instrument=instrument,
-                prompt=prompt,
-                major_family=major_family,
-                model_id=model_id,
-                key=key,
-                bpm=bpm,
-                timbre_tags=timbre_tags,
-                bars=bars,
-                status="pending",
-                expires_at=expires_at,
-            )
-            session.add(job)
-            session.flush()
-            session.refresh(job)
-            job_id = job.id
-
-        print(f"[AsyncFrameworkLoop] Submitted job {job_id}: {instrument}")
-        return job_id
+        return await submit_generator_job(
+            session_id=session_id,
+            instrument=instrument,
+            prompt=prompt,
+            major_family=major_family,
+            model_id=model_id,
+            key=key,
+            bpm=bpm,
+            timbre_tags=timbre_tags,
+            bars=bars,
+        )
 
     async def _fetch_audio(self, audio_path: str) -> Optional[np.ndarray]:
         """
