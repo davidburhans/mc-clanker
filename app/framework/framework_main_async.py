@@ -31,39 +31,25 @@ from typing import Optional, List, Dict, Any
 from app.framework.framework_state import state
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_conductor_async import ConductorLLMAsync
+from app.framework.domain_audio import calc_duration, to_two_channel as _to_two_channel, tile_to_loop
+from app.framework.audio_fetch import GarageAudioAdapter
 from app.job_waiter import wait_for_multiple_jobs
+# Kept at module top for import-compatibility: frozen bindings (and tests) still
+# import these names from this shim module even though the real fetch call sites
+# now live in app.framework.audio_fetch (brief-02 §D). decode_aac is no longer
+# referenced directly here; create_garage_client_from_env backs the legacy
+# self.garage property below.
 from app.garage_client import create_garage_client_from_env
-from app.aac_encoder import decode_aac
+from app.aac_encoder import decode_aac  # noqa: F401  (frozen-binding re-export)
 
-
-# Fallback tempo when BPM is missing/non-positive (avoids ZeroDivisionError — review B10).
-DEFAULT_FALLBACK_BPM = 120
 
 # Backoff between loop retries after a transient body error (review B1 watchdog).
 # Kept short so the set recovers quickly; overridable by tests / config.
 LOOP_RETRY_BACKOFF_SECONDS = 2.0
 
-
-def calc_duration(bpm: int, bars: int, time_signature: int = 4) -> float:
-    """Calculate loop duration in seconds; guard non-positive BPM (B10).
-
-    >>> calc_duration(120, 4)
-    8.0
-    """
-    beats = bars * time_signature
-    safe_bpm = bpm if isinstance(bpm, (int, float)) and bpm > 0 else DEFAULT_FALLBACK_BPM
-    return beats / (safe_bpm / 60.0)
-
-
-def _to_two_channel(audio) -> np.ndarray:
-    """Coerce mono/1-D audio to a 2-D (samples, 2) array (review B11).
-
-    np.atleast_2d would transpose a 1-D array to (1, N); audio needs (N, channels).
-    """
-    arr = np.asarray(audio)
-    if arr.ndim == 1:
-        arr = np.column_stack([arr, arr])
-    return arr
+# calc_duration / to_two_channel / tile_to_loop (and DEFAULT_FALLBACK_BPM) live in
+# domain_audio (Phase 2); re-imported above so frozen bindings and the
+# pre-generation path (which still calls them directly) keep working.
 
 
 # Serializes overlapping flushes so a second stop/flush cannot double-insert
@@ -198,6 +184,7 @@ class AsyncFrameworkLoop:
         self.mixer: Optional[Mixer] = None
         self.conductor = ConductorLLMAsync()
         self._garage = None  # Lazy initialization on first use
+        self._audio_adapter: Optional[GarageAudioAdapter] = None  # Lazy GarageAudioAdapter
         self.running = False
         self.loop_task: Optional[asyncio.Task] = None
         self.stem_cache: Dict[str, Dict] = {}  # cache_key -> {audio_data, last_used}
@@ -212,6 +199,22 @@ class AsyncFrameworkLoop:
         if self._garage is None:
             self._garage = create_garage_client_from_env()
         return self._garage
+
+    @property
+    def _audio(self) -> GarageAudioAdapter:
+        """Lazily create the Garage audio-fetch adapter (Phase 2).
+
+        Reads ``self._garage`` (not the ``garage`` property) on purpose: a test
+        may inject a preset client (Gap 3 sets ``loop._garage``), AND client
+        creation must happen inside the adapter's fetch try/except via
+        ``audio_fetch.create_garage_client_from_env``. The ``garage`` property
+        eagerly calls this module's factory name (outside any try/except), which
+        raises KeyError when Garage env is unset — so using it here would break
+        the migrated string-patches and the empty-bytes / exception None paths.
+        """
+        if self._audio_adapter is None:
+            self._audio_adapter = GarageAudioAdapter(self._garage)
+        return self._audio_adapter
 
     async def start(self):
         """Start the async framework loop."""
@@ -528,43 +531,18 @@ class AsyncFrameworkLoop:
                             else:
                                 print(f"Job {job_id} failed or timed out")
 
-                    # Step 8: Prepare audio tracks (tile to length)
-                    loop_bars = max([t.get("bars", 8) for t in deduped_tracks] + [8])
-                    duration_seconds = calc_duration(local_current_bpm, loop_bars)
-                    loop_duration_samples = int(
-                        duration_seconds * ((self.mixer.sample_rate if self.mixer else None) or 44100)
+                    # Step 8 + 9: tile cached/decoded stem audio out to the loop
+                    # duration and assemble (audio, stem_idx) pairs (P9). Pure logic
+                    # lives in domain_audio.tile_to_loop (Phase 2); the background
+                    # pre-generation path still inlines this until Phase 6 extracts it.
+                    prepared_tracks, loop_duration_samples = tile_to_loop(
+                        next_stems=local_next_stems,
+                        stem_cache=self.stem_cache,
+                        bpm=local_current_bpm,
+                        key=local_current_key,
+                        sample_rate=self.mixer.sample_rate if self.mixer else None,
+                        deduped_tracks=deduped_tracks,
                     )
-
-                    tracks_data = [None] * len(local_next_stems)
-
-                    for i, t in enumerate(local_next_stems):
-                        prompt = t["prompt"]
-                        track_bars = t["bars"]
-                        m_id = t.get("model_id")
-                        cache_key = f"{m_id}_{prompt}_{local_current_bpm}_{local_current_key}_{track_bars}"
-
-                        if cache_key in self.stem_cache:
-                            audio_data = self.stem_cache[cache_key]["audio_data"]
-                        else:
-                            audio_data = None
-
-                        if audio_data is not None:
-                            # B11: ensure 2-D before tiling (mono 1-D would raise).
-                            audio_data = _to_two_channel(audio_data)
-                            # Tile to loop duration
-                            if len(audio_data) < loop_duration_samples:
-                                repeats = (loop_duration_samples // len(audio_data)) + 1
-                                audio_data = np.tile(audio_data, (repeats, 1))[:loop_duration_samples, :]
-                            tracks_data[i] = audio_data
-
-                    # Step 9: Add tracks to mixer
-                    prepared_tracks = []
-                    for audio_data, stem_idx in zip(tracks_data, range(len(tracks_data))):
-                        if audio_data is None:
-                            # B11: a silent stem usually means fetch/decode failed.
-                            print(f"[AsyncFrameworkLoop] Stem {stem_idx} fell back to silence")
-                            audio_data = np.zeros((loop_duration_samples, 2), dtype=np.float32)
-                        prepared_tracks.append((audio_data, stem_idx))
 
                 # C1: persist this loop's Conductor decision + actions so the
                 # show audit trail (show_actions / llm_interactions) is populated.
@@ -859,24 +837,11 @@ class AsyncFrameworkLoop:
             numpy array of audio samples (float32, shape [samples, channels])
             or None if fetch/decode fails
         """
-        try:
-            # Reuse Garage client from self.garage (created once in __init__)
-            aac_bytes = await self.garage.get_object(audio_path)
-
-            if not aac_bytes:
-                print(f"[AsyncFrameworkLoop] No audio data received from Garage: {audio_path}")
-                return None
-
-            # Decode AAC to numpy array (runs in thread pool since it's blocking)
-            loop = asyncio.get_running_loop()
-            audio_data = await loop.run_in_executor(None, lambda: decode_aac(aac_bytes, sample_rate=44100))
-
-            print(f"[AsyncFrameworkLoop] Fetched and decoded audio from: {audio_path}")
-            return audio_data
-
-        except Exception as e:
-            print(f"[AsyncFrameworkLoop] Failed to fetch audio from Garage: {e}")
-            return None
+        # Phase 2: delegate to GarageAudioAdapter (app.framework.audio_fetch).
+        # Preserves exact behavior: empty bytes -> None, AAC decode in executor,
+        # any fetch/decode error swallowed -> None. Test string-patches now target
+        # app.framework.audio_fetch (where decode_aac is actually resolved).
+        return await self._audio.fetch(audio_path)
 
     async def _append_loop_audit(self, conductor_response, active_stems, loop_idx):
         """Buffer one LLMInteraction + N ShowAction rows for later DB flush (C1).
