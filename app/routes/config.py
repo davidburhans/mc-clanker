@@ -1,23 +1,126 @@
 import asyncio
 import json
+import logging
 import os
 import time
+
 from fastapi import APIRouter
-from .schemas import StateUpdate, LLMConfig, GenerationConfig, AudienceMessage, CustomInstrumentCreate
+from fastapi.responses import JSONResponse
+
 from app.framework.framework_state import state
+
+from .schemas import AudienceMessage, CustomInstrumentCreate, GenerationConfig, LLMConfig, StateUpdate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+# -----------------------------------------------------------------------------
+# Health / readiness (review finding F4)
+#
+# `/api/health`      — liveness: process is up and the framework loop flag is
+#                      readable. Status stays "healthy" while the process can
+#                      respond, so it is backward compatible; real dependency
+#                      state is now exposed in `checks` / `ready` (no more
+#                      "healthy during a DB/S3 outage" false positive).
+# `/api/health/ready` — readiness: HTTP 503 when the DB or object store is
+#                      unreachable, 200 when ready. Point orchestration
+#                      healthchecks (e.g. Dockerfile.web) here.
+#
+# Probes run off the event loop (asyncio.to_thread + short timeouts) and never
+# raise: a health endpoint must degrade, not crash.
+# -----------------------------------------------------------------------------
+
+
+def _ping_database() -> str:
+    """Quick DB reachability probe. 'ok' on success, 'error: <reason>' otherwise."""
+    try:
+        from sqlalchemy import text
+
+        from app.db import DatabaseManager
+
+        db_manager = DatabaseManager.get_instance()
+        with db_manager.session() as session:
+            session.execute(text("SELECT 1")).scalar()
+        return "ok"
+    except Exception as exc:  # noqa: BLE001 — health probe must not raise
+        logger.warning("health database ping failed: %s", exc)
+        return f"error: {exc}"
+
+
+def _ping_object_store() -> str:
+    """Light, decoupled S3 reachability probe.
+
+    'not_configured' when no GARAGE_ENDPOINT is set (local/dev), 'ok' when the
+    bucket is reachable, 'error: <reason>' otherwise. Builds its own
+    short-timeout boto3 client instead of importing garage_client so the health
+    path never couples to the storage adapter.
+    """
+    endpoint = os.environ.get("GARAGE_ENDPOINT")
+    if not endpoint:
+        return "not_configured"
+    try:
+        import boto3
+        from botocore.config import Config
+
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=os.environ.get("GARAGE_ACCESS_KEY"),
+            aws_secret_access_key=os.environ.get("GARAGE_SECRET_KEY"),
+            config=Config(connect_timeout=2, read_timeout=3, retries={"max_attempts": 1}),
+        )
+        client.head_bucket(Bucket=os.environ.get("GARAGE_BUCKET", "mcclanker"))
+        return "ok"
+    except Exception as exc:  # noqa: BLE001 — health probe must not raise
+        logger.warning("health object-store ping failed: %s", exc)
+        return f"error: {exc}"
+
+
+async def _readiness_checks() -> dict:
+    """Aggregate DB + object-store probes into a readiness verdict."""
+    database, object_store = await asyncio.gather(
+        asyncio.to_thread(_ping_database),
+        asyncio.to_thread(_ping_object_store),
+    )
+    ready = database == "ok" and object_store in ("ok", "not_configured")
+    return {
+        "ready": ready,
+        "database": database,
+        "object_store": object_store,
+    }
+
+
 @router.get("/health")
 async def health_check():
-    """Simple health check endpoint."""
+    """Liveness probe with embedded dependency readiness (review F4)."""
     async with state.lock:
         is_running = state.is_running
+    checks = await _readiness_checks()
     return {
         "status": "healthy",
         "is_running": is_running,
-        "timestamp": int(time.time())
+        "ready": checks["ready"],
+        "checks": checks,
+        "timestamp": int(time.time()),
     }
+
+
+@router.get("/health/ready")
+async def readiness_check():
+    """Readiness probe — HTTP 503 when the DB or object store is unreachable."""
+    checks = await _readiness_checks()
+    ready = checks["ready"]
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ready" if ready else "degraded",
+            "checks": checks,
+            "timestamp": int(time.time()),
+        },
+    )
+
 
 @router.get("/state")
 async def get_state():
@@ -50,17 +153,18 @@ async def get_state():
             # Loop history for DJ navigation
             "loop_history": [
                 {
-                    "loop_index": h['loop_index'],
-                    "set_name": h['set_name'],
-                    "reasoning": h['reasoning'],
-                    "stems": h['stems'],
-                    "timestamp": h['timestamp']
+                    "loop_index": h["loop_index"],
+                    "set_name": h["set_name"],
+                    "reasoning": h["reasoning"],
+                    "stems": h["stems"],
+                    "timestamp": h["timestamp"],
                 }
                 for h in state.loop_history
             ],
             # Next queued (what's coming next — planned but not yet playing)
             "next_queued_stems": state.next_stems,
         }
+
 
 @router.post("/state")
 async def update_state(update: StateUpdate):
@@ -74,26 +178,27 @@ async def update_state(update: StateUpdate):
             state.should_reset = update.should_reset
         if update.user_override is not None:
             state.user_override = update.user_override
-        
+
         # Check if fields were explicitly set (allows setting to None/null)
         fields = update.model_fields_set
-        
+
         if "target_bpm_override" in fields:
             state.target_bpm_override = update.target_bpm_override
             # Apply immediately if not generating to show instant feedback
             if not state.is_generating and update.target_bpm_override is not None:
                 state.current_bpm = update.target_bpm_override
-        
+
         if "target_key_override" in fields:
             state.target_key_override = update.target_key_override
             # Apply immediately if not generating
             if not state.is_generating and update.target_key_override is not None:
                 state.current_key = update.target_key_override
-                
+
         if update.available_instruments is not None:
             state.available_instruments = update.available_instruments
-    
+
     return {"status": "ok"}
+
 
 @router.get("/generation-config")
 async def get_generation_config():
@@ -104,6 +209,7 @@ async def get_generation_config():
             "steps": state.generation_steps,
         }
 
+
 @router.post("/generation-config")
 async def update_generation_config(config: GenerationConfig):
     """Update audio generation parameters."""
@@ -113,6 +219,7 @@ async def update_generation_config(config: GenerationConfig):
         if config.steps is not None:
             state.generation_steps = config.steps
     return {"status": "ok"}
+
 
 @router.get("/instruments")
 async def get_instruments():
@@ -159,17 +266,20 @@ async def get_instruments():
 
     return result
 
+
 @router.get("/constants")
 async def get_constants():
     """Return schema-relevant constants for frontend use."""
     from app.lib.constants import VALID_BPMS, VALID_KEYS, get_all_major_families
     from app.lib.harmonic import HarmonicHelper
+
     return {
         "valid_bpms": VALID_BPMS,
         "valid_keys": VALID_KEYS,
         "valid_major_families": get_all_major_families(),
         "harmonic_map": HarmonicHelper.get_harmonic_map(),
     }
+
 
 @router.post("/instruments/custom")
 async def add_custom_instrument(data: CustomInstrumentCreate):
@@ -178,20 +288,20 @@ async def add_custom_instrument(data: CustomInstrumentCreate):
         await asyncio.to_thread(state.add_custom_instrument, data.name, data.major_family)
     return {"status": "ok", "name": data.name, "family": data.major_family}
 
+
 @router.get("/instruments/custom")
 async def get_custom_instruments():
     """Get all user-defined instruments with their families."""
     async with state.lock:
         return state.get_custom_instruments()
 
+
 @router.get("/message/audience")
 async def get_audience_message():
     """Get the latest message for the audience."""
     async with state.lock:
-        return {
-            "message": state.audience_message,
-            "timestamp": state.audience_message_ts
-        }
+        return {"message": state.audience_message, "timestamp": state.audience_message_ts}
+
 
 @router.post("/message/audience")
 async def send_audience_message(msg: AudienceMessage):
@@ -201,6 +311,7 @@ async def send_audience_message(msg: AudienceMessage):
         state.audience_message_ts = int(time.time())
     return {"status": "ok"}
 
+
 @router.delete("/message/audience")
 async def clear_audience_message():
     """Clear the audience message (when audience member dismisses it)."""
@@ -208,6 +319,7 @@ async def clear_audience_message():
         state.audience_message = ""
         state.audience_message_ts = None
     return {"status": "ok"}
+
 
 @router.get("/llm-config")
 async def get_llm_config():
@@ -220,6 +332,7 @@ async def get_llm_config():
             "icecast_enabled": state.icecast_enabled,
             "audience_password": state.audience_password,
         }
+
 
 @router.post("/llm-config")
 async def update_llm_config(config: LLMConfig):

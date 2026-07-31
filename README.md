@@ -5,13 +5,14 @@ AI-Powered Continuous Music Generator — A professional DJ-style interface for 
 **mc-clanker** transforms text-to-sample models into a continuous DJ experience. Instead of generating individual samples, it creates seamless, infinitely-running music tracks controlled by an AI "Conductor" that makes DJ-style arrangement decisions.
 
 ### The DJ Interface
+
 A professional, real-time control center where you can steer the AI Conductor, adjust stems, and manage the live mix:
 ![DJ Interface](docs/dj_interface.png)
 
 ### The Audience Interface
+
 A sleek, immersive visualizer that your listeners see while tuning into the live stream:
 ![Audience Interface](docs/audience_interface.png)
-
 
 ## Features
 
@@ -30,6 +31,7 @@ A sleek, immersive visualizer that your listeners see while tuning into the live
 ## Supported Models
 
 mc-clanker supports generation using the following text-to-audio models:
+
 - **[Foundation-1](https://huggingface.co/RoyalCities/Foundation-1)** (Default)
 - **[RC_Infinite_Pianos](https://huggingface.co/RoyalCities/RC_Infinite_Pianos)**
 - **[Vocal_Textures_Main](https://huggingface.co/RoyalCities/Vocal_Textures_Main)**
@@ -39,7 +41,7 @@ mc-clanker supports generation using the following text-to-audio models:
 - **GPU**: NVIDIA GPU with CUDA support (16GB VRAM minimum, 24GB+ recommended)
 - **Python**: 3.10+
 - **LLM Backend**: Local LLM server (e.g., Ollama, vLLM) with OpenAI-compatible API. (Must support `json_schema` format in requests. A 4096 context length is recommended).
-- **Dependencies**: See `requirements.txt`
+- **Dependencies**: See `pyproject.toml` — install the web app with `uv sync` (or `uv sync --group dev` for tests); GPU worker with `uv sync --group worker`
 
 ## Setup
 
@@ -86,7 +88,7 @@ The audience-facing web UI at `http://localhost:4400/listen` provides real-time 
 ### API Endpoints
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
+| ---------- | -------- | ------------- |
 | `/api/state` | GET | Get current state (BPM, key, stems, loops, etc.) |
 | `/api/state` | POST | Update state (start/stop, overrides) |
 | `/api/stems` | GET | Get list of active stems and their mixer states |
@@ -127,7 +129,7 @@ curl -X POST http://localhost:4400/api/export/start \
 ### Environment Variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| ---------- | --------- | ------------- |
 | `LLM_BASE_URL` | `http://localhost:1234/v1` | LLM API base URL |
 | `LLM_API_KEY` | `not-needed` | LLM API key |
 | `LLM_MODEL` | `local-model` | LLM model name |
@@ -168,11 +170,10 @@ podman exec <container> nvidia-smi
 - Check network connectivity to LLM_BASE_URL
 - Confirm API compatibility (OpenAI-compatible)
 
-
 ## Architecture
 
 | Component | Description |
-|-----------|-------------|
+| ----------- | ------------- |
 | `app/app_ui.py` | FastAPI server with DJ web interface |
 | `app/routes/__init__.py` | API router aggregating all route modules |
 | `app/routes/shows.py` | Show management, recording, playback |
@@ -286,7 +287,7 @@ mc-clanker/
 │   ├── styles.css
 │   └── app.js
 ├── tests/                   # Test suite
-├── requirements.txt         # Python dependencies
+├── pyproject.toml           # Single source of truth for dependencies (uv)
 └── README.md
 ```
 

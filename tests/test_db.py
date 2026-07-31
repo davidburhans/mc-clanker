@@ -60,21 +60,36 @@ class TestDatabaseManager:
 
         DatabaseManager._instance = None
 
-    def test_create_tables(self):
-        """Test create_tables method."""
-        from app.db import DatabaseManager
-        DatabaseManager._instance = None
+    def test_create_tables(self, monkeypatch, tmp_path):
+        """create_tables() issues DDL for every ORM model.
 
-        with patch.dict(os.environ, {}, clear=True):
-            with patch("app.db.create_engine") as mock_engine:
-                with patch("app.db.sessionmaker"):
-                    with patch("os.makedirs"):
-                        with patch("os.path.dirname", return_value="/tmp"):
-                            mock_base = MagicMock()
-                            with patch.dict("sys.modules", {"sqlalchemy": MagicMock(), "sqlalchemy.orm": MagicMock()}):
-                                # We can't easily test this without full imports
-                                # Just verify it doesn't crash
-                                pass
+        D9: the previous body was `pass` inside a mocked-sys.modules block — it
+        never called create_tables and had no assertion. This drives the REAL
+        Base.metadata.create_all against a throwaway sqlite file and asserts the
+        expected tables are materialized.
+        """
+        from sqlalchemy import inspect
+
+        import app.models  # noqa: F401  — register ORM models with Base.metadata
+        from app.db import DatabaseManager
+
+        DatabaseManager._instance = None
+        db_file = tmp_path / "create_tables_test.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
+        try:
+            db = DatabaseManager.get_instance()
+            db.create_tables()
+
+            table_names = set(inspect(db.engine).get_table_names())
+        finally:
+            DatabaseManager._instance = None
+
+        expected = {
+            "users", "shows", "show_actions", "llm_interactions",
+            "generator_jobs", "session_routing",
+        }
+        missing = expected - table_names
+        assert not missing, f"create_tables() did not create tables: {missing}"
 
     def test_session_context_manager(self):
         """Test session context manager."""

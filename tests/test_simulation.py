@@ -252,30 +252,58 @@ class TestSerializationFailure:
         )
 
     def test_serialization_failure_does_not_corrupt_state(self):
-        """
-        RED: Serialization failure must not advance loop count without applying actions.
+        """D2: on json.dumps failure, run_loop must apply a valid fallback and
+        still advance — state must not be left inconsistent.
 
-        This test FAILS because the current code increments _loops_completed
-        AND writes a record even when json.dumps() fails, but apply_actions()
-        is skipped. This means the state is inconsistent between what was stored
-        and what actually happened.
+        The previous body had NO assert (it only inspected source text). This
+        drives the real SlopJockey.run_loop with the conductor mocked to return
+        a response containing a non-JSON-serializable value, forcing the
+        serialization-failure branch, and asserts the fallback is applied.
         """
+        import asyncio
+        import json as _json
+
+        import simulation.jockey as jockey_mod
         from simulation.jockey import SlopJockey
 
-        source = inspect.getsource(SlopJockey.run_loop)
+        jockey = SlopJockey(
+            jockey_id=1,
+            perf_id=1,
+            run_seed=42,
+            vibe_prob=0.0,       # avoid VibePromptBank file access
+            vibe_clear_prob=0.0,
+            llm_base_url="http://test-llm:1234/v1",
+            llm_model="test-model",
+        )
+        # Seed one active stem so the fallback has something to retain.
+        jockey.state.active_stems = [{"prompt": "drums"}]
 
-        # Count how many times apply_actions could be skipped after a failure point
-        # In the current code, on serialization failure, apply_actions is skipped
-        # but _loops_completed is still incremented
-        lines = source.split('\n')
-        for i, line in enumerate(lines):
-            if 'json.dumps' in line:
-                # Check subsequent lines for error handling
-                for j in range(i, min(i + 10, len(lines))):
-                    if 'apply_actions' in lines[j]:
-                        # apply_actions is called after error handling
-                        # Check that it's inside the try block or fallback exists
-                        pass
+        # Non-serializable value forces json.dumps(parsed) to raise.
+        non_serializable = {"master_bpm": 128, "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": object(), "name": "x"}
+
+        async def fake_call_async(prompt, llm_config=None, extra_body=None):
+            return non_serializable
+
+        async def drive():
+            with patch.object(jockey._conductor, "call_async", fake_call_async):
+                return await jockey.run_loop(asyncio.Semaphore(1))
+
+        record = asyncio.new_event_loop().run_until_complete(drive())
+
+        # Loop advanced AND a valid fallback response was produced & applied.
+        assert record is not None, "run_loop should return a record, not None"
+        assert record["was_applied"] is True, (
+            "serialization failure must apply the fallback actions (state must "
+            "not be left inconsistent)"
+        )
+        parsed_response = _json.loads(record["response"])
+        action_types = {a.get("action_type") for a in parsed_response.get("actions", [])}
+        assert "retain" in action_types, (
+            "fallback must retain current stems so the groove continues"
+        )
+        assert jockey._loops_completed == 1
 
 
 # ---------------------------------------------------------------------------
@@ -330,48 +358,37 @@ class TestResponseFormatSchema:
     """Tests that response_format schemas match between old harness and production."""
 
     def test_response_format_schemas_are_identical(self):
-        """
-        RED: The RESPONSE_FORMAT schema in slop_harness/llm_client.py and the
-        response_format used in framework_conductor_async.py must be bit-for-bit
-        identical to ensure fine-tuned models see consistent schema constraints.
+        """D3: the response_format schema used by the harness and by production
+        must agree on action types.
 
-        This test FAILS because the two schemas differ in field ordering and
-        some description text.
+        The previous body called ``get_response_format_schema()`` twice (a
+        tautology). This imports the schema from two DISTINCT modules — the
+        harness's in-use schema (``slop_harness.llm_client``) and the production
+        schema (``app.lib.constants``) — so real drift is guarded.
         """
         from app.lib.constants import get_response_format_schema
+        import slop_harness.llm_client as llm_module
 
-        harness_schema = get_response_format_schema()
         production_schema = get_response_format_schema()
+        # The harness's actually-used schema: the shared builder when importable,
+        # otherwise its static fallback.
+        if getattr(llm_module, "_get_schema", None):
+            harness_schema = llm_module._get_schema()
+        else:
+            harness_schema = llm_module._STATIC_RESPONSE_FORMAT
 
-        # Both should produce the same schema
-        harness_actions = (
-            harness_schema["json_schema"]["schema"]["properties"]["actions"]["items"]
-        )
-        production_actions = (
-            production_schema["json_schema"]["schema"]["properties"]["actions"]["items"]
-        )
+        def action_types(schema):
+            items = schema["json_schema"]["schema"]["properties"]["actions"]["items"]
+            return {
+                a["properties"]["action_type"]["const"]
+                for a in items.get("anyOf", [])
+                if "properties" in a
+            }
 
-        # Both should have the same structure: anyOf with retain/add/remove
-        assert "anyOf" in harness_actions, "Harness schema must use anyOf for actions"
-        assert "anyOf" in production_actions, "Production schema must use anyOf for actions"
-
-        # Verify action types are identical in both schemas
-        harness_action_types = set()
-        for action in harness_actions.get("anyOf", []):
-            if "properties" in action:
-                atype = action["properties"].get("action_type", {}).get("const")
-                if atype:
-                    harness_action_types.add(atype)
-
-        production_action_types = set()
-        for action in production_actions.get("anyOf", []):
-            if "properties" in action:
-                atype = action["properties"].get("action_type", {}).get("const")
-                if atype:
-                    production_action_types.add(atype)
-
-        assert harness_action_types == production_action_types == {"retain", "add", "remove"}, (
-            "Both harness and production schemas must have identical action types"
+        prod_types = action_types(production_schema)
+        harness_types = action_types(harness_schema)
+        assert prod_types == harness_types == {"retain", "add", "remove"}, (
+            f"schema drift: production={prod_types} harness={harness_types}"
         )
 
 
@@ -401,7 +418,7 @@ def test_harness_fallback_schema_matches_production():
         harness_schema = llm_module._get_schema()
     elif hasattr(llm_module, 'RESPONSE_FORMAT'):
         # Fallback path — verify it matches production
-        harness_schema = llm_module.RESPONSE_FORMAT
+        harness_schema = getattr(llm_module, "RESPONSE_FORMAT")
     else:
         # Neither available — skip
         return

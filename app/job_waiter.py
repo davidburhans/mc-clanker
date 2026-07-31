@@ -14,8 +14,14 @@ Usage:
 """
 
 import asyncio
+import logging
+import os
 import uuid
 from typing import Optional
+
+import asyncpg
+
+logger = logging.getLogger(__name__)
 
 # Module-level asyncpg pool singleton (created lazily on first use)
 _asyncpg_pool: Optional["asyncpg.Pool"] = None
@@ -36,6 +42,49 @@ async def _get_asyncpg_pool(dsn: str) -> "asyncpg.Pool":
     return _asyncpg_pool
 
 
+async def close_asyncpg_pool() -> None:
+    """Close the module-level asyncpg pool.
+
+    Call this on application shutdown (e.g. from the FastAPI lifespan) to avoid
+    leaking LISTEN/NOTIFY connections. Previously the pool was never closed
+    (review B14).
+    """
+    global _asyncpg_pool
+    if _asyncpg_pool is None:
+        return
+    async with _asyncpg_pool_lock:
+        if _asyncpg_pool is not None:
+            await _asyncpg_pool.close()
+            _asyncpg_pool = None
+
+
+def _normalize_dsn(dsn: str) -> str:
+    """Strip a SQLAlchemy '+driver' suffix so asyncpg accepts the DSN.
+
+    asyncpg requires a bare 'postgres://' / 'postgresql://' DSN and rejects
+    SQLAlchemy driver-suffixed URLs like 'postgresql+psycopg2://...'.
+    """
+    if "://" in dsn:
+        scheme, rest = dsn.split("://", 1)
+        if "+" in scheme:
+            return f"{scheme.split('+', 1)[0]}://{rest}"
+    return dsn
+
+
+def _resolve_asyncpg_dsn(db_manager) -> Optional[str]:
+    """Resolve an asyncpg-compatible DSN.
+
+    Prefer the raw DATABASE_URL env var (the authoritative connection string);
+    only fall back to the SQLAlchemy engine URL when the env var is unset.
+    """
+    env_dsn = os.environ.get("DATABASE_URL")
+    if env_dsn:
+        return _normalize_dsn(env_dsn)
+    if db_manager is not None:
+        return _normalize_dsn(db_manager.engine.url.render_as_string(hide_password=False))
+    return None
+
+
 class JobWaiter:
     """
     Async job waiter with LISTEN/NOTIFY support.
@@ -54,11 +103,7 @@ class JobWaiter:
         self.db_pool = db_pool
         self._listeners = {}  # job_id -> asyncio.Event
 
-    async def wait_for_job_completion(
-        self,
-        job_id: uuid.UUID,
-        timeout: float = 60.0
-    ) -> Optional[str]:
+    async def wait_for_job_completion(self, job_id: uuid.UUID, timeout: float = 60.0) -> Optional[str]:
         """
         Wait for a job to complete using LISTEN/NOTIFY.
 
@@ -95,6 +140,13 @@ class JobWaiter:
             await conn.add_listener("job_completed", on_notify)
 
             try:
+                # Re-check after subscribing: a NOTIFY fired between the
+                # pre-listen status check above and add_listener would otherwise
+                # be missed until the full timeout elapses (review A7/C6).
+                job = await self._get_job(job_id)
+                if job is not None and job["status"] in ("completed", "failed"):
+                    return job["audio_path"] if job["status"] == "completed" else None
+
                 # Wait with timeout
                 try:
                     await asyncio.wait_for(event.wait(), timeout)
@@ -120,10 +172,7 @@ class JobWaiter:
     async def _get_job(self, job_id: uuid.UUID) -> Optional[dict]:
         """Fetch job from database."""
         async with self.db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM generator_jobs WHERE id = $1",
-                job_id
-            )
+            row = await conn.fetchrow("SELECT * FROM generator_jobs WHERE id = $1", job_id)
             if row:
                 return dict(row)
             return None
@@ -131,10 +180,7 @@ class JobWaiter:
 
 # Polling-based fallback when asyncpg is not available
 async def wait_for_job_completion_poll(
-    db_session,
-    job_id: uuid.UUID,
-    timeout: float = 60.0,
-    poll_interval: float = 0.5
+    db_session, job_id: uuid.UUID, timeout: float = 60.0, poll_interval: float = 0.5
 ) -> Optional[str]:
     """
     Polling-based wait_for_job_completion fallback.
@@ -159,9 +205,7 @@ async def wait_for_job_completion_poll(
             return None
 
         # Check job status
-        job = db_session.query(GeneratorJob).filter(
-            GeneratorJob.id == job_id
-        ).first()
+        job = db_session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
 
         if job is None:
             return None
@@ -178,11 +222,7 @@ async def wait_for_job_completion_poll(
 
 
 # Main function - uses LISTEN/NOTIFY when available, falls back to polling
-async def wait_for_job_completion(
-    job_id: uuid.UUID,
-    timeout: float = 60.0,
-    db_manager=None
-) -> Optional[str]:
+async def wait_for_job_completion(job_id: uuid.UUID, timeout: float = 60.0, db_manager=None) -> Optional[str]:
     """
     Wait for a job to complete.
 
@@ -201,25 +241,27 @@ async def wait_for_job_completion(
     # Check if asyncpg is available for LISTEN/NOTIFY
     try:
         import asyncpg
+
         has_asyncpg = True
     except ImportError:
         has_asyncpg = False
 
     if has_asyncpg and db_manager is not None:
-        # Use the module-level asyncpg pool singleton for LISTEN/NOTIFY
-        try:
-            dsn = db_manager.engine.url.render_as_string(hide_password=False)
-            pool = await _get_asyncpg_pool(dsn)
-            waiter = JobWaiter(pool)
-            result = await waiter.wait_for_job_completion(job_id, timeout)
-            return result
-        except Exception:
-            # Fall back to polling on error
-            pass
+        dsn = _resolve_asyncpg_dsn(db_manager)
+        if dsn is not None:
+            try:
+                pool = await _get_asyncpg_pool(dsn)
+                waiter = JobWaiter(pool)
+                return await waiter.wait_for_job_completion(job_id, timeout)
+            except Exception as e:  # noqa: BLE001 - degrade to polling, don't crash
+                logger.warning("LISTEN/NOTIFY wait failed (%s); falling back to polling", e)
+        else:
+            logger.info("No asyncpg DSN resolvable; using polling fallback")
 
     # Fall back to polling with SQLAlchemy
     if db_manager is None:
         from app.db import DatabaseManager
+
         db_manager = DatabaseManager.get_instance()
 
     loop = asyncio.get_running_loop()
@@ -227,9 +269,8 @@ async def wait_for_job_completion(
     def _poll_job():
         with db_manager.session() as session:
             from app.models.generator_job import GeneratorJob
-            job = session.query(GeneratorJob).filter(
-                GeneratorJob.id == job_id
-            ).first()
+
+            job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
 
             if job is None:
                 return None
@@ -261,9 +302,7 @@ async def wait_for_job_completion(
 
 
 async def wait_for_multiple_jobs(
-    job_ids: list[uuid.UUID],
-    timeout: float = 60.0,
-    db_manager=None
+    job_ids: list[uuid.UUID], timeout: float = 60.0, db_manager=None
 ) -> dict[uuid.UUID, Optional[str]]:
     """
     Wait for multiple jobs to complete concurrently.
@@ -275,14 +314,11 @@ async def wait_for_multiple_jobs(
     Returns:
         Dict mapping job_id to audio_path (or None if failed/timeout)
     """
-    tasks = [
-        wait_for_job_completion(job_id, timeout, db_manager)
-        for job_id in job_ids
-    ]
+    tasks = [wait_for_job_completion(job_id, timeout, db_manager) for job_id in job_ids]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    return {
-        job_id: result if not isinstance(result, Exception) else None
-        for job_id, result in zip(job_ids, results)
-    }
+    # gather(..., return_exceptions=True) can yield BaseException subclasses
+    # (e.g. CancelledError) that are not caught by `isinstance(x, Exception)`;
+    # only a real audio_path (str) is a success.
+    return {job_id: result if isinstance(result, str) else None for job_id, result in zip(job_ids, results)}

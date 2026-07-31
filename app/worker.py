@@ -29,12 +29,17 @@ import os
 import signal
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import asyncpg
 
 from app.aac_encoder import encode_aac, get_audio_duration
-from app.cleanup import JobExpirationCleanup, create_cleanup_config_from_env
+from app.cleanup import (
+    CleanupConfig,
+    JobExpirationCleanup,
+    create_cleanup_config_from_env,
+)
 from app.garage_client import GarageClient, GarageConfig, create_garage_client_from_env
 
 # Import generator - same as used by main app
@@ -43,10 +48,27 @@ from app.framework.framework_generator import GeneratorRegistry
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# A claimed job must finish (or heartbeat) before its lease lapses, else the
+# cleanup reaper or another worker's claim reclaims it (review B2/C2).
+JOB_LEASE_SECONDS = 600  # 10-minute lease window
+JOB_LEASE = timedelta(seconds=JOB_LEASE_SECONDS)  # passed to asyncpg as a PG interval
+JOB_LEASE_HEARTBEAT_SECONDS = 60.0  # refresh the lease while generation runs
+# Hard cap so a hung model generation cannot wedge a worker slot forever (B6).
+GENERATION_TIMEOUT_SECONDS = 600.0  # 10 minutes (normal generation is 5-30s)
+
+
+async def _silently_cancel(task: "asyncio.Task") -> None:
+    """Await a cancelled task, swallowing CancelledError and other errors."""
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 - intentional teardown swallow
+        pass
+
 
 @dataclass
 class WorkerConfig:
     """Configuration for a worker instance."""
+
     worker_id: str
     pg_dsn: str
     garage: GarageConfig
@@ -84,7 +106,7 @@ class GeneratorWorker:
             self.config.pg_dsn,
             min_size=2,
             max_size=5,
-            command_timeout=300  # 5 minute timeout for queries
+            command_timeout=300,  # 5 minute timeout for queries
         )
         logger.info("Connected to PostgreSQL")
 
@@ -115,97 +137,141 @@ class GeneratorWorker:
         logger.info(f"Worker {self.config.worker_id} stopped")
 
     async def _process_next_job(self):
-        """
-        Atomically claim and process the next pending job.
-
-        Uses FOR UPDATE SKIP LOCKED to:
-        - Prevent two workers from taking the same job
-        - Skip jobs that are being processed by other workers
-        """
+        """Claim the next job and run it to completion, sleeping if the queue is idle."""
         job = await self._claim_next_job()
-
         if job is None:
-            # No pending jobs, wait before polling again
             await asyncio.sleep(self.config.job_poll_interval)
             return
+        logger.info("Processing job %s: %s", job["id"], job["instrument"])
+        await self._process_claimed_job(job)
 
-        logger.info(f"Processing job {job['id']}: {job['instrument']}")
-
+    async def _process_claimed_job(self, job: dict):
+        """Generate, upload, and complete a claimed job; clean up orphans on failure."""
         try:
-            # Generate and upload (outside transaction for I/O)
-            audio_path, duration = await self._generate_and_upload(job)
-
-            # Mark complete
-            await self._mark_job_complete(job['id'], audio_path, duration)
+            audio_path, duration = await self._generate_with_lease(job)
+        except Exception as e:  # noqa: BLE001 - generation/upload failed
+            logger.error("Job %s failed during generation: %s", job["id"], e)
+            await self._mark_job_failed(job["id"], str(e))
+            self.jobs_failed += 1
+            return
+        try:
+            await self._mark_job_complete(job["id"], audio_path, duration)
             self.jobs_processed += 1
-
-            logger.info(f"Job {job['id']} completed: {audio_path}")
-
-        except Exception as e:
-            logger.error(f"Job {job['id']} failed: {e}")
-            await self._mark_job_failed(job['id'], str(e))
+            logger.info("Job %s completed: %s", job["id"], audio_path)
+        except Exception as e:  # noqa: BLE001 - upload ok, DB commit failed -> orphan
+            logger.error("Job %s DB-complete failed: %s; reclaiming audio", job["id"], e)
+            await self._delete_orphan_audio(audio_path)
+            await self._mark_job_failed(job["id"], str(e))
             self.jobs_failed += 1
 
     async def _claim_next_job(self) -> Optional[dict]:
         """
-        Atomically claim the highest-priority pending job.
+        Atomically claim the next pending job, or reclaim one whose lease expired.
+
+        FOR UPDATE SKIP LOCKED keeps two workers from taking the same row. We also
+        pick up 'processing' rows whose lease_expires_at has lapsed, so a worker
+        that died mid-generation no longer orphans its job forever (review B2/C2).
 
         Returns:
-            Job dict if one was claimed, None if queue was empty.
+            Job dict if one was claimed, None if the queue is empty.
         """
+        assert self.db is not None  # set in start() before the job loop runs
         async with self.db.acquire() as conn:
             async with conn.transaction():
                 job = await conn.fetchrow("""
                     SELECT *
                     FROM generator_jobs
                     WHERE status = 'pending'
+                       OR (status = 'processing' AND lease_expires_at < NOW())
                     ORDER BY priority DESC, created_at ASC
                     LIMIT 1
                     FOR UPDATE SKIP LOCKED
                 """)
-
                 if job is None:
                     return None
-
-                # Mark as processing (within same transaction)
-                await conn.execute("""
+                # Mark claimed within the same transaction that locked the row,
+                # and start the lease (B2). started_at is preserved on a reclaim.
+                lease_expiry = datetime.now(timezone.utc) + JOB_LEASE
+                await conn.execute(
+                    """
                     UPDATE generator_jobs
                     SET status = 'processing',
-                        started_at = NOW(),
-                        worker_id = $1
-                    WHERE id = $2
-                """, self.config.worker_id, job['id'])
-
+                        started_at = COALESCE(started_at, NOW()),
+                        worker_id = $1,
+                        lease_expires_at = $2
+                    WHERE id = $3
+                """,
+                    self.config.worker_id,
+                    lease_expiry,
+                    job["id"],
+                )
                 return dict(job)
+
+    async def _generate_with_lease(self, job: dict) -> tuple[str, float]:
+        """
+        Generate+upload while heartbeating the lease, under a hard timeout.
+
+        The heartbeat refreshes lease_expires_at so an in-progress (but slow)
+        job is not reaped; the timeout (review B6) prevents a hung model from
+        wedging a worker slot forever.
+        """
+        heartbeat = asyncio.create_task(self._heartbeat_loop(job["id"]))
+        try:
+            return await asyncio.wait_for(
+                self._generate_and_upload(job),
+                timeout=GENERATION_TIMEOUT_SECONDS,
+            )
+        finally:
+            heartbeat.cancel()
+            await _silently_cancel(heartbeat)
+
+    async def _heartbeat_loop(self, job_id: uuid.UUID) -> None:
+        """Periodically extend the lease while generation runs."""
+        while True:
+            await asyncio.sleep(JOB_LEASE_HEARTBEAT_SECONDS)
+            try:
+                await self._refresh_lease(job_id)
+            except Exception as e:  # noqa: BLE001 - keep generating; lease will warn
+                logger.warning("Lease heartbeat failed for %s: %s", job_id, e)
+
+    async def _refresh_lease(self, job_id: uuid.UUID) -> None:
+        """Extend lease_expires_at for an in-progress job."""
+        assert self.db is not None
+        lease_expiry = datetime.now(timezone.utc) + JOB_LEASE
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE generator_jobs
+                SET lease_expires_at = $1
+                WHERE id = $2 AND status = 'processing'
+            """,
+                lease_expiry,
+                job_id,
+            )
 
     async def _generate_and_upload(self, job: dict) -> tuple[str, float]:
         """
         Generate audio for a job and upload to Garage.
 
-        Args:
-            job: Job dict with generation parameters
-
         Returns:
-            Tuple of (garage_path, duration_seconds)
+            Tuple of (garage_path, duration_seconds).
         """
+        assert self.garage is not None
         # Generate using stable-audio-tools (blocking, runs in executor)
         loop = asyncio.get_running_loop()
         audio_array = await loop.run_in_executor(
             None,
             lambda: self.generators.generate_stem(
-                model_id=job['model_id'],
-                prompt=job['prompt'],
-                key=job.get('key'),
-                bpm=job.get('bpm'),
-                bars=job.get('bars', 4),
-            )
+                model_id=job["model_id"],
+                prompt=job["prompt"],
+                key=job.get("key") or "",
+                bpm=job.get("bpm") or 120,
+                bars=job.get("bars", 4),
+            ),
         )
 
         # Encode to AAC
-        aac_bytes = await loop.run_in_executor(
-            None,
-            lambda: encode_aac(audio_array, sample_rate=44100)
-        )
+        aac_bytes = await loop.run_in_executor(None, lambda: encode_aac(audio_array, sample_rate=44100))
 
         # Upload to Garage
         audio_path = f"audio/{job['id']}.aac"
@@ -216,37 +282,68 @@ class GeneratorWorker:
 
         return audio_path, duration
 
-    async def _mark_job_complete(self, job_id: uuid.UUID, audio_path: str, duration: float):
-        """Mark job as completed with result."""
-        async with self.db.acquire() as conn:
-            await conn.execute("""
-                UPDATE generator_jobs
-                SET status = 'completed',
-                    audio_path = $1,
-                    duration_seconds = $2,
-                    completed_at = NOW(),
-                    expires_at = NOW() + INTERVAL '24 hours'
-                WHERE id = $3
-            """, audio_path, duration, job_id)
+    async def _delete_orphan_audio(self, audio_path: str) -> None:
+        """Best-effort delete of an uploaded object whose DB row failed to commit (C5)."""
+        if not audio_path or self.garage is None:
+            return
+        try:
+            await self.garage.delete_object(audio_path)
+            logger.info("Deleted orphaned audio %s", audio_path)
+        except Exception as e:  # noqa: BLE001 - orphan cleanup must not mask the real error
+            logger.warning("Could not delete orphan audio %s: %s", audio_path, e)
 
-            # Notify listeners
-            await conn.execute(f"NOTIFY job_completed, '{job_id}'")
+    async def _mark_job_complete(self, job_id: uuid.UUID, audio_path: str, duration: float) -> None:
+        """Mark job completed and NOTIFY listeners in ONE transaction (A7/C6)."""
+        assert self.db is not None
+        async with self.db.acquire() as conn:  # noqa: SIM117 - acquire+tx can't be one CM
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    UPDATE generator_jobs
+                    SET status = 'completed',
+                        audio_path = $1,
+                        duration_seconds = $2,
+                        completed_at = NOW(),
+                        expires_at = NOW() + INTERVAL '24 hours',
+                        lease_expires_at = NULL
+                    WHERE id = $3
+                """,
+                    audio_path,
+                    duration,
+                    job_id,
+                )
+                # NOTIFY inside the same transaction: a crash between UPDATE and
+                # NOTIFY can no longer drop the notification (review A7/C6).
+                # pg_notify() is fully parameterized (no f-string payload).
+                await conn.execute("SELECT pg_notify('job_completed', $1)", str(job_id))
 
-    async def _mark_job_failed(self, job_id: uuid.UUID, error: str):
-        """Mark job as failed with error message."""
+    async def _mark_job_failed(self, job_id: uuid.UUID, error: str) -> None:
+        """Mark job as failed with error message and release its lease."""
+        assert self.db is not None
         async with self.db.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 UPDATE generator_jobs
                 SET status = 'failed',
                     error_message = $1,
                     completed_at = NOW(),
-                    expires_at = NOW() + INTERVAL '1 hour'
+                    expires_at = NOW() + INTERVAL '1 hour',
+                    lease_expires_at = NULL
                 WHERE id = $2
-            """, error, job_id)
+            """,
+                error,
+                job_id,
+            )
 
     async def _cleanup_loop(self):
         """Periodically clean up expired jobs."""
-        cleanup = JobExpirationCleanup(self.config)
+        cleanup = JobExpirationCleanup(
+            CleanupConfig(
+                pg_dsn=self.config.pg_dsn,
+                garage=self.config.garage,
+                cleanup_interval=self.config.cleanup_interval,
+            )
+        )
         cleanup.db = self.db
         cleanup.garage = self.garage
 
@@ -269,6 +366,7 @@ class GeneratorWorker:
 
     async def health_check(self) -> dict:
         """Check worker health status."""
+        assert self.db is not None
         try:
             # Check database connectivity
             async with self.db.acquire() as conn:

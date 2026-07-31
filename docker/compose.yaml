@@ -42,7 +42,11 @@ services:
     ports:
       - "0.0.0.0:4400:4400"
     environment:
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
+      # LLM endpoint — point LLM_BASE_URL (in .env) at your OpenAI-compatible server.
+      # Common defaults: LM Studio http://localhost:1234/v1, Ollama http://localhost:11434/v1,
+      # vLLM http://localhost:8001/v1. NOTE: no `vllm` service ships in this compose file,
+      # so the previous default (http://vllm:8000/v1) was unreachable out-of-the-box (review F8).
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1234/v1}
       - LLM_API_KEY=${LLM_API_KEY:-not-needed}
       - LLM_MODEL=${LLM_MODEL:-McClanker}
       - ICECAST_ENABLED=${ICECAST_ENABLED:-false}

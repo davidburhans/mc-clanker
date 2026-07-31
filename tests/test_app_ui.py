@@ -17,7 +17,7 @@ class TestAuthMiddleware:
         mock_state.dj_password = ""
         mock_state.audience_password = ""
 
-        with patch('app.app_ui.state', mock_state):
+        with patch("app.app_ui.state", mock_state):
             from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
@@ -32,9 +32,8 @@ class TestAuthMiddleware:
             request.headers.get.return_value = None
 
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                middleware.dispatch(request, mock_call_next)
-            )
+
+            result = asyncio.run(middleware.dispatch(request, mock_call_next))
             assert result.status_code == 200
 
     def test_dj_route_requires_auth_without_credentials(self):
@@ -45,7 +44,7 @@ class TestAuthMiddleware:
         mock_state.dj_password = "secret"
         mock_state.audience_password = ""
 
-        with patch('app.app_ui.state', mock_state):
+        with patch("app.app_ui.state", mock_state):
             from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
@@ -60,9 +59,8 @@ class TestAuthMiddleware:
             request.headers.get.return_value = None
 
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                middleware.dispatch(request, mock_call_next)
-            )
+
+            result = asyncio.run(middleware.dispatch(request, mock_call_next))
             assert result.status_code == 401
 
     def test_audience_route_requires_auth_without_credentials(self):
@@ -73,7 +71,7 @@ class TestAuthMiddleware:
         mock_state.dj_password = ""
         mock_state.audience_password = "audience_secret"
 
-        with patch('app.app_ui.state', mock_state):
+        with patch("app.app_ui.state", mock_state):
             from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
@@ -88,9 +86,8 @@ class TestAuthMiddleware:
             request.headers.get.return_value = None
 
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                middleware.dispatch(request, mock_call_next)
-            )
+
+            result = asyncio.run(middleware.dispatch(request, mock_call_next))
             assert result.status_code == 401
 
     def test_valid_credentials_pass_through(self):
@@ -101,7 +98,7 @@ class TestAuthMiddleware:
         mock_state.dj_password = "secret"
         mock_state.audience_password = ""
 
-        with patch('app.app_ui.state', mock_state):
+        with patch("app.app_ui.state", mock_state):
             from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
@@ -117,9 +114,8 @@ class TestAuthMiddleware:
             request.headers.get.return_value = f"Basic {creds}"
 
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                middleware.dispatch(request, mock_call_next)
-            )
+
+            result = asyncio.run(middleware.dispatch(request, mock_call_next))
             assert result.status_code == 200
 
     def test_non_protected_routes_bypass_auth(self):
@@ -130,7 +126,7 @@ class TestAuthMiddleware:
         mock_state.dj_password = "secret"
         mock_state.audience_password = ""
 
-        with patch('app.app_ui.state', mock_state):
+        with patch("app.app_ui.state", mock_state):
             from app.app_ui import AuthMiddleware
 
             app_mock = MagicMock()
@@ -145,9 +141,8 @@ class TestAuthMiddleware:
             request.headers.get.return_value = None
 
             import asyncio
-            result = asyncio.get_event_loop().run_until_complete(
-                middleware.dispatch(request, mock_call_next)
-            )
+
+            result = asyncio.run(middleware.dispatch(request, mock_call_next))
             assert result.status_code == 200
 
 
@@ -156,10 +151,11 @@ class TestAudioStreamGenerator:
 
     def test_poison_pill_before_first_chunk(self):
         """Generator should handle None poison pill before first chunk."""
-        with patch('app.app_ui.queue.Queue') as mock_queue_class, \
-             patch('app.app_ui.state') as mock_state, \
-             patch('app.app_ui.subprocess') as mock_subprocess:
-
+        with (
+            patch("app.app_ui.queue.Queue") as mock_queue_class,
+            patch("app.app_ui.state") as mock_state,
+            patch("app.app_ui.subprocess") as mock_subprocess,
+        ):
             mock_queue = MagicMock()
             mock_queue_class.return_value = mock_queue
             mock_queue.get.side_effect = [None]  # Poison pill immediately
@@ -168,6 +164,7 @@ class TestAudioStreamGenerator:
             mock_state.is_running = True
 
             from app.app_ui import audio_stream_generator
+
             gen = audio_stream_generator()
 
             # Should not raise and should return immediately
@@ -180,10 +177,11 @@ class TestAudioStreamGenerator:
 
     def test_timeout_waiting_for_first_chunk(self):
         """Generator should handle timeout waiting for first chunk."""
-        with patch('app.app_ui.queue.Queue') as mock_queue_class, \
-             patch('app.app_ui.state') as mock_state, \
-             patch('app.app_ui.subprocess') as mock_subprocess:
-
+        with (
+            patch("app.app_ui.queue.Queue") as mock_queue_class,
+            patch("app.app_ui.state") as mock_state,
+            patch("app.app_ui.subprocess") as mock_subprocess,
+        ):
             mock_queue = MagicMock()
             mock_queue_class.return_value = mock_queue
             mock_queue.get.side_effect = queue.Empty()
@@ -192,6 +190,7 @@ class TestAudioStreamGenerator:
             mock_state.is_running = True
 
             from app.app_ui import audio_stream_generator
+
             gen = audio_stream_generator()
 
             # Should not raise and should return on timeout
@@ -245,9 +244,7 @@ class TestStreamMp3:
         app = FastAPI()
         app.add_api_route("/stream.mp3", stream_mp3, methods=["GET"])
 
-        with patch('app.app_ui.state') as mock_state, \
-             patch('app.app_ui.audio_stream_generator') as mock_gen:
-
+        with patch("app.app_ui.state") as mock_state, patch("app.app_ui.audio_stream_generator") as mock_gen:
             mock_state.is_running = True
             mock_state.add_audio_client = MagicMock()
             mock_state.remove_audio_client = MagicMock()

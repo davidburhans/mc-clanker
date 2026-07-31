@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CleanupConfig:
     """Configuration for cleanup operations."""
+
     pg_dsn: str
     garage: GarageConfig
     cleanup_interval: float = 300.0  # 5 minutes
@@ -65,12 +66,7 @@ class JobExpirationCleanup:
         logger.info("Starting job expiration cleanup...")
 
         # Create database connection pool
-        self.db = await asyncpg.create_pool(
-            self.config.pg_dsn,
-            min_size=1,
-            max_size=5,
-            command_timeout=60
-        )
+        self.db = await asyncpg.create_pool(self.config.pg_dsn, min_size=1, max_size=5, command_timeout=60)
         logger.info("Connected to PostgreSQL")
 
         # Create Garage client
@@ -95,16 +91,58 @@ class JobExpirationCleanup:
         """
         Run a single cleanup cycle.
 
-        Atomically deletes expired jobs and collects their audio paths in one
-        CTE so we never query rows that were already deleted.
+        First reaps jobs orphaned in 'processing' by a dead worker (lapsed
+        lease), then atomically deletes expired terminal jobs and their audio
+        objects in one CTE so we never query rows already deleted.
 
         Returns:
-            Number of jobs cleaned up
+            Number of jobs acted on this cycle (reaped + deleted).
         """
+        reaped = await self._reap_stale_processing()
+        deleted_count = await self._delete_expired_jobs()
+        return reaped + deleted_count
+
+    async def _reap_stale_processing(self) -> int:
+        """
+        Fail jobs whose processing lease has expired.
+
+        Without this, a worker that crashed between claim and completion would
+        leave the job in 'processing' forever (the claim query only selects
+        'pending', and the expired-job DELETE only touches terminal statuses).
+        Reaped rows are given a short expiry so the expired-job deletion reclaims
+        their storage on a later cycle while keeping the failure record briefly.
+
+        Returns:
+            Number of jobs reaped.
+        """
+        assert self.db is not None  # initialized in start() before cleanup runs
         async with self.db.acquire() as conn:
-            # Single CTE: DELETE and return audio_path in one round-trip.
-            # This avoids the race where a separate SELECT finds nothing after
-            # the DELETE has already removed the rows.
+            rows = await conn.fetch("""
+                UPDATE generator_jobs
+                SET status = 'failed',
+                    error_message = COALESCE(error_message,
+                                            'Worker lease expired (stale)'),
+                    completed_at = NOW(),
+                    expires_at = NOW() + INTERVAL '1 hour'
+                WHERE status = 'processing'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < NOW()
+                RETURNING id
+            """)
+        reaped = len(rows)
+        if reaped:
+            logger.warning("Reaped %d stale 'processing' jobs (expired lease)", reaped)
+        return reaped
+
+    async def _delete_expired_jobs(self) -> int:
+        """
+        Delete expired terminal jobs and their Garage audio objects.
+
+        Uses a single DELETE ... RETURNING CTE so the audio paths we delete from
+        Garage always correspond to rows that still existed at delete time.
+        """
+        assert self.db is not None  # initialized in start() before cleanup runs
+        async with self.db.acquire() as conn:
             rows = await conn.fetch("""
                 WITH deleted AS (
                     DELETE FROM generator_jobs
@@ -116,22 +154,22 @@ class JobExpirationCleanup:
             """)
 
         deleted_audio_paths = [row["audio_path"] for row in rows]
-        deleted_count = len(rows)
-
-        # Delete audio files from Garage (outside transaction)
         if self.garage and deleted_audio_paths:
-            for audio_path in deleted_audio_paths:
-                try:
-                    await self.garage.delete_object(audio_path)
-                    logger.debug("Deleted audio: %s", audio_path)
-                except Exception as e:
-                    logger.warning("Failed to delete audio %s: %s", audio_path, e)
+            await self._delete_garage_objects(deleted_audio_paths)
 
-        if deleted_count > 0:
-            logger.info("Cleaned up %d expired jobs", deleted_count)
+        if rows:
+            logger.info("Cleaned up %d expired jobs", len(rows))
+        return len(rows)
 
-        return deleted_count
-
+    async def _delete_garage_objects(self, audio_paths: list[str]) -> None:
+        """Best-effort delete of each audio object; failures are logged, not fatal."""
+        assert self.garage is not None  # caller guards on truthiness
+        for audio_path in audio_paths:
+            try:
+                await self.garage.delete_object(audio_path)
+                logger.debug("Deleted audio: %s", audio_path)
+            except Exception as e:  # noqa: BLE001 - cleanup must be resilient
+                logger.warning("Failed to delete audio %s: %s", audio_path, e)
 
     def stop(self):
         """Stop the cleanup loop."""
@@ -159,19 +197,16 @@ async def cleanup_expired_jobs_once(pg_dsn: str) -> int:
             access_key=os.environ["GARAGE_ACCESS_KEY"],
             secret_key=os.environ["GARAGE_SECRET_KEY"],
             bucket=os.environ["GARAGE_BUCKET"],
-        )
+        ),
     )
     cleanup = JobExpirationCleanup(config)
     cleanup.garage = create_garage_client_from_env()
-    cleanup.db = await asyncpg.create_pool(
-        config.pg_dsn,
-        min_size=1,
-        max_size=5
-    )
+    cleanup.db = await asyncpg.create_pool(config.pg_dsn, min_size=1, max_size=5)
     try:
         return await cleanup._run_cleanup()
     finally:
-        await cleanup.db.close()
+        if cleanup.db is not None:
+            await cleanup.db.close()
 
 
 def create_cleanup_config_from_env() -> CleanupConfig:
@@ -184,7 +219,7 @@ def create_cleanup_config_from_env() -> CleanupConfig:
             secret_key=os.environ["GARAGE_SECRET_KEY"],
             bucket=os.environ["GARAGE_BUCKET"],
             region=os.environ.get("GARAGE_BUCKET_REGION", "garage"),
-        )
+        ),
     )
 
 

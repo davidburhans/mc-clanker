@@ -12,11 +12,24 @@ if str(_slop_pkg) not in sys.path:
 
 @pytest.fixture(autouse=True)
 def reset_db_singleton():
-    """Reset the DatabaseManager singleton between tests to prevent state leakage."""
-    from app.db import DatabaseManager
+    """Reset the DatabaseManager singleton between tests to prevent state leakage.
+
+    D1: the heavy `from app.db import DatabaseManager` import (which pulls in
+    sqlalchemy) used to run unconditionally for EVERY test — even pure-math
+    modules like test_harmonic — so a missing optional dependency poisoned the
+    whole suite. Guard it so a missing dep degrades to a no-op instead of
+    erroring every test.
+    """
+    try:
+        from app.db import DatabaseManager
+    except Exception:
+        # Optional web/DB stack unavailable (e.g. no sqlalchemy). Skip the
+        # reset so unrelated tests (pure math, harness) still run.
+        yield
+        return
+
     # Reset before the test
-    old_instance = DatabaseManager._instance
     DatabaseManager._instance = None
     yield
-    # Restore (tests that need a clean singleton got it; restore for next)
+    # Restore (tests that need a clean singleton got it; clear for the next)
     DatabaseManager._instance = None

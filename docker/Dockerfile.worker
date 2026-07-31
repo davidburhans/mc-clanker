@@ -33,9 +33,16 @@ RUN uv venv /app/.venv && \
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD pgrep -f "python -m app.worker" > /dev/null || exit 1
+# Worker health probe (review F3) — process + DB reachability.
+COPY docker/worker-healthcheck.sh /usr/local/bin/worker-healthcheck.sh
+RUN chmod +x /usr/local/bin/worker-healthcheck.sh
+
+# Health check — verifies the worker process is alive AND the database is
+# reachable. The worker runs the generation loop directly (no HTTP server), so
+# the in-process /api/worker/health endpoint is not curl-able from here; see
+# docker/worker-healthcheck.sh for rationale.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD /usr/local/bin/worker-healthcheck.sh || exit 1
 
 # Use venv Python
 CMD ["/app/.venv/bin/python", "-m", "app.worker"]

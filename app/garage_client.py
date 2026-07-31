@@ -28,9 +28,39 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 
+@dataclass(frozen=True)
+class S3Timeouts:
+    """Network timeouts/retries for S3/Garage operations.
+
+    Boto3/botocore has no default socket timeout, so a half-open connection
+    (network partition, overloaded Garage node, NAT-idled TCP) blocks forever,
+    wedging worker executor threads and the framework's audio-fetch coroutine.
+    These bounds make every S3 call fail fast instead of hanging indefinitely.
+    """
+
+    connect_timeout: float = 5.0  # seconds to establish a TCP connection
+    read_timeout: float = 30.0  # seconds to read a single HTTP response
+    max_attempts: int = 3  # retry attempts on transient errors
+
+
+#: Default timeouts applied to every GarageClient. Override via ``timeouts=``.
+DEFAULT_S3_TIMEOUTS = S3Timeouts()
+
+
+def build_boto3_config(timeouts: S3Timeouts = DEFAULT_S3_TIMEOUTS) -> Config:
+    """Build a botocore ``Config`` with bounded timeouts and adaptive retries."""
+    return Config(
+        signature_version="s3v4",
+        connect_timeout=timeouts.connect_timeout,
+        read_timeout=timeouts.read_timeout,
+        retries={"max_attempts": timeouts.max_attempts, "mode": "adaptive"},
+    )
+
+
 @dataclass
 class GarageConfig:
     """Configuration for Garage S3-compatible storage."""
+
     endpoint: str
     access_key: str
     secret_key: str
@@ -46,16 +76,16 @@ class GarageClient:
     blocking the async event loop.
     """
 
-    def __init__(self, config: GarageConfig):
+    def __init__(self, config: GarageConfig, timeouts: S3Timeouts = DEFAULT_S3_TIMEOUTS):
         self.bucket = config.bucket
         self.config = config
         self._client = boto3.client(
-            's3',
+            "s3",
             endpoint_url=config.endpoint,
             aws_access_key_id=config.access_key,
             aws_secret_access_key=config.secret_key,
             region_name=config.region,
-            config=Config(signature_version='s3v4'),
+            config=build_boto3_config(timeouts),
         )
 
     def _sync_put_object(self, key: str, data: bytes) -> None:
@@ -66,11 +96,7 @@ class GarageClient:
             key: Object key in bucket (e.g., "audio/job-123.aac")
             data: Raw bytes to upload
         """
-        self._client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=data
-        )
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data)
 
     def _sync_get_object(self, key: str) -> bytes:
         """
@@ -83,7 +109,7 @@ class GarageClient:
             Raw bytes from object
         """
         response = self._client.get_object(Bucket=self.bucket, Key=key)
-        return response['Body'].read()
+        return response["Body"].read()
 
     def _sync_delete_object(self, key: str) -> None:
         """
@@ -143,9 +169,7 @@ class GarageClient:
             Presigned URL string that can be used to GET the object
         """
         return self._client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': self.bucket, 'Key': key},
-            ExpiresIn=expires_in
+            "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=expires_in
         )
 
     async def exists(self, key: str) -> bool:
@@ -160,10 +184,7 @@ class GarageClient:
         """
         loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(
-                None,
-                lambda: self._client.head_object(Bucket=self.bucket, Key=key)
-            )
+            await loop.run_in_executor(None, lambda: self._client.head_object(Bucket=self.bucket, Key=key))
             return True
         except ClientError:
             return False

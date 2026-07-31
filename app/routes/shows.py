@@ -1,6 +1,8 @@
-import os
-import time
 import json
+import logging
+import os
+import struct
+import time
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from datetime import datetime, timezone
@@ -15,6 +17,112 @@ from .utils import require_show_owner, generate_audience_password
 from app.auth import get_current_user_from_request, hash_password
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
+
+# Canonical recording format: the mixer emits stereo 16-bit PCM at 44.1kHz
+# (framework_mixer.py: `(pcm * 32767).astype('<i2').tobytes()`). The WAV header
+# written here must match so show/export recordings are valid, playable WAVs.
+_RECORD_SAMPLE_RATE = 44100
+_RECORD_CHANNELS = 2
+_RECORD_SAMPLE_WIDTH = 2  # bytes per sample (16-bit)
+_WAV_HEADER_SIZE = 44
+# data_size + 36 must fit in a 32-bit RIFF size field.
+_WAV_MAX_DATA_SIZE = 0xFFFFFFFF - 36
+
+
+def _write_wav_header(handle) -> None:
+    """Write a canonical 44-byte WAV header (PCM/16-bit/stereo/44.1kHz).
+
+    RIFF + data sizes are zero placeholders patched by ``_finalize_wav`` at close.
+    ``broadcast_audio`` then streams raw int16 LE PCM straight into the data chunk
+    via ``handle.write()``, so the file is a valid, playable WAV with no postprocess
+    (review C4 — show/export recordings were previously headerless raw PCM served
+    as ``audio/wav``).
+    """
+    byte_rate = _RECORD_SAMPLE_RATE * _RECORD_CHANNELS * _RECORD_SAMPLE_WIDTH
+    block_align = _RECORD_CHANNELS * _RECORD_SAMPLE_WIDTH
+    handle.write(b"RIFF")
+    handle.write(struct.pack("<I", 0))
+    handle.write(b"WAVE")
+    handle.write(b"fmt ")
+    handle.write(struct.pack(
+        "<IHHIIHH", 16, 1, _RECORD_CHANNELS, _RECORD_SAMPLE_RATE,
+        byte_rate, block_align, _RECORD_SAMPLE_WIDTH * 8,
+    ))
+    handle.write(b"data")
+    handle.write(struct.pack("<I", 0))
+
+
+def _finalize_wav(handle) -> None:
+    """Patch RIFF + data sizes from file length, then flush + close the handle."""
+    if handle is None:
+        return
+    try:
+        total = handle.tell()
+    except OSError:
+        total = _WAV_HEADER_SIZE
+    data_size = max(0, total - _WAV_HEADER_SIZE)
+    try:
+        if data_size <= _WAV_MAX_DATA_SIZE:
+            handle.seek(4)
+            handle.write(struct.pack("<I", 36 + data_size))
+            handle.seek(40)
+            handle.write(struct.pack("<I", data_size))
+        else:
+            log.warning("Recording exceeds 4GB WAV limit; sizes left as placeholders")
+    except (OSError, struct.error) as exc:
+        log.warning("Could not finalize WAV header sizes: %r", exc)
+    try:
+        handle.flush()
+    except OSError:
+        pass
+    try:
+        handle.close()
+    except OSError:
+        pass
+
+
+def _transition_show_to_live(session, show_id, request, audio_file_path, started_at) -> None:
+    """Atomically move a show to 'live' (ownership + startable-status guard).
+
+    Raises 404 (not owner) or 400 (not startable). The conditional UPDATE makes
+    concurrent ``start_show`` requests race-safe (review C7) instead of leaking
+    file handles on a double-start.
+    """
+    require_show_owner(show_id, request, session)
+    updated = session.query(Show).filter(
+        Show.id == show_id,
+        Show.status.in_(("draft", "ended")),
+    ).update(
+        {"status": "live", "started_at": started_at,
+         "audio_file_path": audio_file_path},
+        synchronize_session=False,
+    )
+    session.flush()
+    if updated == 0:
+        current = session.query(Show).filter(Show.id == show_id).first()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot start show with status '{current.status}'",
+        )
+
+
+def _stop_show_recording():
+    """Clear show-recording flags + detach the handle under sync_lock (A1/B8).
+
+    Returns the detached handle so the caller can finalize/close it OUTSIDE the
+    lock (no I/O in the critical section). These fields are sync_lock-protected so
+    ``broadcast_audio``'s snapshot is consistent with the close.
+    """
+    with state.sync_lock:
+        show_file = state.current_show_audio_file
+        state.current_show_audio_file = None
+        state.is_show_recording = False
+        state.current_show_id = None
+        state.current_show_start_time = None
+        return show_file
+
 
 @router.get("/shows")
 async def list_shows(request: Request, limit: int = 50, offset: int = 0):
@@ -112,90 +220,84 @@ async def stop_current_show():
 
 @router.post("/shows/{show_id}/start")
 async def start_show(show_id: int, request: Request):
-    """Start show (status→live, begin recording)."""
+    """Start show (status→live, begin recording).
+
+    The DB transition commits BEFORE the recording file is opened or any framework
+    flags are set (review C7: a commit failure used to leak the file handle and
+    leave inconsistent state). An atomic conditional UPDATE guards against
+    concurrent double-starts.
+    """
+    async with state.lock:
+        config_snapshot = {
+            "bpm": state.current_bpm,
+            "key": state.current_key,
+            "vibe": state.user_override,
+        }
+
+    shows_dir = os.environ.get(
+        "SHOWS_DIR", os.path.join(os.path.dirname(__file__), "..", "data", "shows")
+    )
+    show_dir = os.path.join(shows_dir, str(show_id))
+    os.makedirs(show_dir, exist_ok=True)
+    audio_file_path = os.path.join(show_dir, "audio.wav")
+    started_at = datetime.now(timezone.utc)
+
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
-        show = require_show_owner(show_id, request, session)
-
-        if show.status not in ("draft", "ended"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot start show with status '{show.status}'"
-            )
-
-        show.status = "live"
-        show.started_at = datetime.now(timezone.utc)
-
-        # Create show directory and audio file
-        shows_dir = os.environ.get("SHOWS_DIR", os.path.join(os.path.dirname(__file__), "..", "data", "shows"))
-        show_dir = os.path.join(shows_dir, str(show_id))
-        os.makedirs(show_dir, exist_ok=True)
-        audio_file_path = os.path.join(show_dir, "audio.wav")
-        show.audio_file_path = audio_file_path
-
-        # Capture current config snapshot
-        async with state.lock:
-            show.config_snapshot = {
-                "bpm": state.current_bpm,
-                "key": state.current_key,
-                "vibe": state.user_override,
-            }
-
-        # Open audio file for writing (raw PCM, 44100 Hz, 16-bit, stereo)
-        audio_file = open(audio_file_path, "wb")
-
-        # Start recording in framework
-        async with state.lock:
-            state.is_show_recording = True
-            state.current_show_id = show_id
-            state.current_show_start_time = time.time()
-            state.llm_interaction_buffer = []
-            state.action_buffer = []
-            state.current_show_audio_file = audio_file
-            state.is_show_started = True
-
-        return show.to_dict(include_audience_password=True)
+        _transition_show_to_live(session, show_id, request, audio_file_path, started_at)
+        show = session.query(Show).filter(Show.id == show_id).first()
+        show.config_snapshot = config_snapshot
+        response = show.to_dict(include_audience_password=True)
+    # COMMIT succeeded → open the recording file (valid WAV header, C4) + set the
+    # sync_lock-protected recording flags (A1/B8). Nothing is leaked on commit fail.
+    audio_file = open(audio_file_path, "wb")
+    _write_wav_header(audio_file)
+    with state.sync_lock:
+        state.is_show_recording = True
+        state.current_show_id = show_id
+        state.current_show_start_time = time.time()
+        state.current_show_audio_file = audio_file
+    async with state.lock:
+        state.llm_interaction_buffer = []
+        state.action_buffer = []
+        state.is_show_started = True
+    return response
 
 @router.post("/shows/{show_id}/stop")
 async def stop_show(show_id: int, request: Request):
-    """Stop show (status→ended, finalize recording)."""
+    """Stop show (status→ended, finalize WAV recording).
+
+    DB commits first; then the recording handle is finalized (valid WAV sizes
+    patched, C4) and closed, and the sync_lock-protected flags cleared (A1/B8).
+    """
     db_manager = DatabaseManager.get_instance()
-
-    # Validate ownership BEFORE closing the file
+    ended_at = datetime.now(timezone.utc)
     with db_manager.session() as session:
-        show = require_show_owner(show_id, request, session)
-
-        if show.status != "live":
+        require_show_owner(show_id, request, session)
+        updated = session.query(Show).filter(
+            Show.id == show_id, Show.status == "live",
+        ).update({"status": "ended", "ended_at": ended_at}, synchronize_session=False)
+        session.flush()
+        if updated == 0:
+            current = session.query(Show).filter(Show.id == show_id).first()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Show is not live (status: '{show.status}')"
+                detail=f"Show is not live (status: '{current.status}')",
             )
-
-        show.status = "ended"
-        show.ended_at = datetime.now(timezone.utc)
-
-        # Calculate duration
+        show = session.query(Show).filter(Show.id == show_id).first()
         if show.started_at:
-            show.duration_seconds = int((show.ended_at - show.started_at).total_seconds())
-
-        # Close audio file
-        async with state.lock:
-            if state.current_show_audio_file is not None:
-                try:
-                    state.current_show_audio_file.close()
-                except Exception:
-                    pass
-                state.current_show_audio_file = None
-            state.is_show_recording = False
-            state.current_show_id = None
-            state.current_show_start_time = None
-            state.is_show_started = False
-
-        # Flush any remaining buffers
-        from app.framework.framework_main_async import flush_recording_buffers
-        await flush_recording_buffers()
-
-        return show.to_dict(include_audience_password=True)
+            show.duration_seconds = int((ended_at - show.started_at).total_seconds())
+        response = show.to_dict(include_audience_password=True)
+    # COMMIT succeeded — finalize/close the WAV + clear recording flags (A1/B8/C4).
+    show_file = _stop_show_recording()
+    if show_file is not None:
+        _finalize_wav(show_file)
+    async with state.lock:
+        state.is_show_started = False
+    # Flush any remaining audit buffers now that recording has stopped.
+    from app.framework.framework_main_async import flush_recording_buffers
+    await flush_recording_buffers()
+    return response
 
 @router.post("/shows/{show_id}/archive")
 async def archive_show(show_id: int, request: Request):
@@ -291,44 +393,65 @@ async def get_show_audio(show_id: int, request: Request):
 
 @router.post("/export/start")
 async def start_export(req: ExportStartRequest):
-    """Start recording to file (direct stream to disk)."""
+    """Start recording to file (direct stream to disk). WAV header for wav (C4).
+
+    The file is opened OUTSIDE the sync_lock (no I/O in the critical section);
+    the check+set is atomic under sync_lock so two concurrent starts can't both
+    win (A1/B8: is_recording/recording_file_handle are sync_lock-protected).
+    """
+    fmt = (req.format or "wav").lower()
     export_dir = os.environ.get("EXPORT_DIR", "/exports")
     os.makedirs(export_dir, exist_ok=True)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"mc_clanker_{timestamp}.{req.format}"
-    file_path = os.path.join(export_dir, filename)
+    file_path = os.path.join(export_dir, f"mc_clanker_{timestamp}.{fmt}")
 
-    async with state.lock:
+    file_handle = open(file_path, "wb")
+    if fmt == "wav":
+        _write_wav_header(file_handle)
+
+    with state.sync_lock:
         if state.is_recording:
-            raise HTTPException(status_code=400, detail="Already recording")
-
-        # Open file immediately (Issue 4.4 fix)
-        state.recording_file_handle = open(file_path, "wb")
-        state.is_recording = True
-        state.recording_format = req.format
-        state.recording_file_path = file_path
-        state.recording_start_time = time.time()
+            conflict = True
+        else:
+            conflict = False
+            state.recording_file_handle = file_handle
+            state.is_recording = True
+            state.recording_format = fmt
+            state.recording_file_path = file_path
+            state.recording_start_time = time.time()
+    if conflict:
+        file_handle.close()
+        raise HTTPException(status_code=400, detail="Already recording")
 
     return {"status": "started", "file_path": file_path}
 
 @router.post("/export/stop")
 async def stop_export():
-    """Stop recording and return file path"""
-    async with state.lock:
+    """Stop recording, finalize WAV (if wav), return file path."""
+    with state.sync_lock:
         if not state.is_recording:
             raise HTTPException(status_code=400, detail="Not recording")
-
+        handle = state.recording_file_handle
         file_path = state.recording_file_path
-        duration = time.time() - state.recording_start_time
-        
-        # Close handle (Issue 4.4 fix)
-        if hasattr(state, "recording_file_handle") and state.recording_file_handle:
-            state.recording_file_handle.close()
-            state.recording_file_handle = None
-
+        fmt = state.recording_format
+        start_time = state.recording_start_time
+        state.recording_file_handle = None
         state.is_recording = False
-
+    duration = (time.time() - start_time) if start_time else 0.0
+    # Close/finalize OUTSIDE the lock (no I/O in the critical section).
+    if handle is not None:
+        if fmt == "wav":
+            _finalize_wav(handle)
+        else:
+            try:
+                handle.flush()
+            except OSError:
+                pass
+            try:
+                handle.close()
+            except OSError:
+                pass
     return {"file_path": file_path, "duration": duration}
 
 @router.get("/shows/{show_id}/export/llm-dump")

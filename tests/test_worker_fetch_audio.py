@@ -7,6 +7,7 @@ is a stub that returns None instead of downloading and decoding audio.
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
+from uuid import uuid4
 import numpy as np
 
 
@@ -25,7 +26,7 @@ class TestFetchAudio:
         # Import the async framework
         from app.framework.framework_main_async import AsyncFrameworkLoop
 
-        loop = AsyncFrameworkLoop(session_id=None)
+        loop = AsyncFrameworkLoop(session_id=uuid4())
 
         # Mock garage client that returns fake AAC bytes
         mock_garage = MagicMock()
@@ -88,20 +89,37 @@ class TestFetchAudio:
             loop_run.close()
 
     def test_decode_aac_produces_numpy_array(self):
+        """D12: decode_aac round-trips AAC bytes to a numpy array.
+
+        This was an unconditional ``pytest.skip`` ("manual test only"), so the
+        AAC encode/decode bridge had ZERO executed coverage. It now encodes a
+        real sine wave with ``encode_aac`` and decodes it back, skipping ONLY
+        when ffmpeg is genuinely absent.
         """
-        decode_aac should convert AAC bytes to numpy array.
+        import shutil
+        import numpy as np
 
-        This is a helper test to verify the decode logic.
-        """
-        # The fix will need to decode AAC - this tests the expected behavior
-        # We can't easily test without ffmpeg, but we can verify the approach
-        from app.aac_encoder import decode_aac
+        from app.aac_encoder import encode_aac, decode_aac
 
-        # This will fail if ffmpeg isn't available or AAC is invalid
-        # But it verifies the function exists and is callable
-        import tempfile
-        import os
+        if shutil.which("ffmpeg") is None:
+            pytest.skip("ffmpeg not installed; cannot round-trip AAC")
 
-        # Create minimal valid test
-        # (We can't easily create valid AAC without ffmpeg)
-        pytest.skip("AAC decoding requires ffmpeg and valid AAC bytes - manual test only")
+        sample_rate = 44100
+        # 0.5 s mono sine wave, amplitude in [-1, 1]
+        samples = int(sample_rate * 0.5)
+        t = np.linspace(0, 0.5, samples, endpoint=False)
+        audio = (0.5 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+
+        aac_bytes = encode_aac(audio, sample_rate=sample_rate)
+        assert isinstance(aac_bytes, bytes) and aac_bytes, "encode_aac must return bytes"
+
+        decoded = decode_aac(aac_bytes, sample_rate=sample_rate)
+        assert isinstance(decoded, np.ndarray), (
+            f"decode_aac must return np.ndarray, got {type(decoded)}"
+        )
+        assert decoded.size > 0, "decoded audio must be non-empty"
+        # Mono round-trip: first axis is sample count, ~original length (codec
+        # framing may trim/pad a handful of samples).
+        assert abs(decoded.shape[0] - samples) < samples * 0.1, (
+            f"decoded length {decoded.shape[0]} far from encoded {samples}"
+        )

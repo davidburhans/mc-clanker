@@ -14,8 +14,9 @@ dist/
 build/
 *.egg
 
-# uv
-uv.lock
+# uv — uv.lock IS committed on purpose: Dockerfile.web and Dockerfile.worker
+# both run `uv sync --frozen`, so a fresh clone needs the lock present to build.
+# (Previously gitignored, which made images unbuildable from source — review F1.)
 
 # Environment
 .env
@@ -79,3 +80,6 @@ sim_data/
 # Dynamic App State
 instruments.json
 
+
+# pi sub-agent harness scratch (transcripts, artifacts) — never commit
+.pi-subagents/

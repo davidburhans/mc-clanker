@@ -164,7 +164,13 @@ class Mixer:
     def _callback(self, outdata: np.ndarray, frames: int, _time, _status):
         outdata.fill(0)
 
-        if not state.is_generating:
+        # Snapshot per-stem mixer state once per tick. These fields are mutated by
+        # route handlers; reading them unlocked risks a torn read and a
+        # 'Set/dict changed size during iteration' RuntimeError. snapshot_mixer_state
+        # copies them under state.sync_lock (the copies are also C-level atomic).
+        is_generating, soloed, muted, volumes = state.snapshot_mixer_state()
+
+        if not is_generating:
             pcm_out = np.clip(outdata, -1.0, 1.0)
             state.broadcast_audio((pcm_out * 32767).astype('<i2').tobytes())
             self.current_sample += frames
@@ -262,15 +268,17 @@ class Mixer:
                 and (t.start_sample + t.length) > self.current_sample
             ]
 
-            # Mute/solo filtering (read state without holding state.lock — safe for bool/set reads)
-            solo_active = len(state.soloed_stems) > 0
+            # Mute/solo/volume filtering using this tick's snapshot (see top of
+            # _callback). Reading state.soloed_stems etc. directly here would race
+            # with concurrent route-handler mutation (review A2).
+            solo_active = len(soloed) > 0
             final_mix_list = []
             for track in tracks_to_mix:
                 stem_idx = track.stem_index
                 if solo_active:
-                    if stem_idx in state.soloed_stems:
+                    if stem_idx in soloed:
                         final_mix_list.append(track)
-                elif stem_idx not in state.muted_stems:
+                elif stem_idx not in muted:
                     final_mix_list.append(track)
 
             # Dynamic gain to prevent clipping
@@ -283,7 +291,7 @@ class Mixer:
                 track_start = track.start_sample
                 track_end = track.start_sample + track.length
 
-                indiv_gain = state.stem_volumes.get(track.stem_index, 1.0)
+                indiv_gain = volumes.get(track.stem_index, 1.0)
                 total_gain = stem_gain_global * indiv_gain
 
                 if track_start < block_end and track_end > block_start:
@@ -304,7 +312,7 @@ class Mixer:
         if self._debug_count % 200 == 0:
             log.debug(
                 "Mixer: is_generating=%s tracks=%d out=[%.4f, %.4f]",
-                state.is_generating, len(self.tracks), outdata.min(), outdata.max(),
+                is_generating, len(self.tracks), outdata.min(), outdata.max(),
             )
 
         # Clip, convert, broadcast

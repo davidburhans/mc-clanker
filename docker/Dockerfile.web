@@ -36,9 +36,11 @@ RUN mkdir -p /exports/shows && \
 
 USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:4400/api/health')" || exit 1
+# Health check — readiness probe: returns HTTP 503 when the DB or object store is
+# unreachable (see app/routes/config.py::readiness_check). start-period gives the
+# app + its DB/S3 deps time to come up before the probe can mark it unhealthy.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:4400/api/health/ready', timeout=8)" || exit 1
 
 # Use venv Python
 CMD ["/app/.venv/bin/python", "-m", "uvicorn", "app.app_ui:app", "--host", "0.0.0.0", "--port", "4400"]

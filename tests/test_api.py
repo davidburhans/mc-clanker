@@ -176,22 +176,58 @@ def test_update_llm_config(client):
     assert state.llm_model == "test-model"
 
 
-def test_export_start(client):
-    """Test export start endpoint."""
-    with patch("os.makedirs"), patch("os.path.exists", return_value=True):
+def test_export_start(client, monkeypatch, tmp_path):
+    """Test export start endpoint + that a full start→stream→stop yields a valid WAV.
+
+    Regression for review C4: recordings were headerless raw PCM served as
+    audio/wav (unplayable). A WAV header is now written at open and sizes patched
+    at close, so the stopped file is a valid, playable WAV.
+    """
+    import wave
+    monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+    try:
         response = client.post("/api/export/start", json={"format": "wav"})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "started"
-    assert "file_path" in data
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "started"
+        assert "file_path" in data
+        file_path = data["file_path"]
+
+        # Simulate broadcast_audio streaming 1000 frames of stereo int16 LE PCM
+        # straight into the data chunk via handle.write().
+        handle = state.recording_file_handle
+        assert handle is not None, "export start must open a recording handle"
+        handle.write(b"\x00\x00" * (1000 * 2))
+
+        stop = client.post("/api/export/stop")
+        assert stop.status_code == 200
+        # The stopped file must be a valid, playable WAV (RIFF header + patched sizes).
+        with wave.open(file_path, "rb") as wf:
+            assert wf.getnchannels() == 2
+            assert wf.getframerate() == 44100
+            assert wf.getsampwidth() == 2
+            assert wf.getnframes() == 1000
+    finally:
+        # reset_state autouse does not reset recording flags; clean up explicitly
+        # so a leaked open handle does not poison later tests.
+        if getattr(state, "recording_file_handle", None) is not None:
+            try:
+                state.recording_file_handle.close()
+            except OSError:
+                pass
+        state.recording_file_handle = None
+        state.is_recording = False
 
 
-def test_export_start_already_recording(client):
+def test_export_start_already_recording(client, monkeypatch, tmp_path):
     """Test export start returns 400 when already recording."""
+    monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
     state.is_recording = True
-    response = client.post("/api/export/start", json={"format": "wav"})
-    assert response.status_code == 400
-    state.is_recording = False
+    try:
+        response = client.post("/api/export/start", json={"format": "wav"})
+        assert response.status_code == 400
+    finally:
+        state.is_recording = False
 
 
 def test_export_stop(client):
@@ -465,13 +501,22 @@ def test_llm_config_update_partial(client):
     assert state.llm_base_url is not None
 
 
-def test_export_start_default_format(client):
+def test_export_start_default_format(client, monkeypatch, tmp_path):
     """Test export start uses default wav format."""
-    with patch("os.makedirs"), patch("os.path.exists", return_value=True):
+    monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
+    try:
         response = client.post("/api/export/start", json={})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "started"
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "started"
+    finally:
+        if getattr(state, "recording_file_handle", None) is not None:
+            try:
+                state.recording_file_handle.close()
+            except OSError:
+                pass
+        state.recording_file_handle = None
+        state.is_recording = False
 
 
 def test_show_stop_when_not_started(client):
