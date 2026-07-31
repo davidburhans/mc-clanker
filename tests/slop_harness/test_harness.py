@@ -12,7 +12,6 @@ from slop_harness.dataset_writer import DatasetWriter
 from slop_harness.models import FOUNDATION_1_MODEL, INFINITE_PIANOS_MODEL
 from slop_harness.prompt_builder import PromptBuilder
 from slop_harness.state_generator import StateGenerator
-from slop_harness.vibe_prompt_bank import VibePromptBank
 
 
 def test_full_pipeline_single_interaction():

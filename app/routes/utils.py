@@ -1,4 +1,3 @@
-import os
 import secrets
 from fastapi import Request, HTTPException, status
 from app.auth import get_current_user_from_request

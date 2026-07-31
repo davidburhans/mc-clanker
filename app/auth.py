@@ -13,7 +13,6 @@ import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import bcrypt
 import jwt
@@ -89,7 +88,7 @@ def create_access_token(user_id: int) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def decode_token(token: str) -> Optional[dict]:
+def decode_token(token: str) -> dict | None:
     """Decode and validate a JWT token. Returns None on any failure."""
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -129,7 +128,7 @@ class CompatAudUser:
 # Request-level auth extraction
 # ---------------------------------------------------------------------------
 
-def get_current_user_from_request(request) -> Optional[object]:
+def get_current_user_from_request(request) -> object | None:
     """Extract and validate user from request.
 
     Priority:
@@ -168,7 +167,7 @@ def get_current_user_from_request(request) -> Optional[object]:
         # No passwords configured — anonymous access allowed
         return None
 
-    provided_pass: Optional[str] = None
+    provided_pass: str | None = None
     if auth_header and auth_header.startswith("Basic "):
         import base64
         try:
@@ -196,8 +195,8 @@ def get_current_user_from_request(request) -> Optional[object]:
 # ---------------------------------------------------------------------------
 
 def get_current_user(
-    credentials: Optional[HTTPBasicCredentials] = Depends(HTTPBasic(auto_error=False))
-) -> Optional[User]:
+    credentials: HTTPBasicCredentials | None = Depends(HTTPBasic(auto_error=False))
+) -> User | None:
     """FastAPI dependency — exists for route signature compatibility.
     Actual auth is handled by get_current_user_from_request in middleware.
     """

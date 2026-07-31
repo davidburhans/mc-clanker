@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from app.framework.framework_mixer import Mixer, Track
+from app.framework.framework_mixer import Mixer
 from app.framework.framework_state import state
 
 @pytest.fixture(autouse=True)

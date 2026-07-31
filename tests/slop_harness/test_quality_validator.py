@@ -9,8 +9,6 @@ Covers all 5 validation checks:
 """
 
 import json
-import os
-import tempfile
 
 import pytest
 

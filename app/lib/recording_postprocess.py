@@ -10,10 +10,8 @@ Called after a show stops to:
 """
 
 import os
-import json
-import time
 import logging
-from typing import List, Dict, Optional, Any
+from typing import Any
 
 from app.lib.recording_metadata import (
     build_chapter_markers,
@@ -28,17 +26,17 @@ log = logging.getLogger(__name__)
 
 
 def compute_loop_timestamps(
-    actions: List[Dict],
-    interactions: List[Dict],
-    show_data: Dict,
-) -> Dict[int, float]:
+    actions: list[dict],
+    interactions: list[dict],
+    show_data: dict,
+) -> dict[int, float]:
     """
     Compute per-loop start timestamps in seconds from show start.
 
     Uses relative_time_ms from actions/interactions to build a timeline.
     Returns dict mapping loop_index -> seconds_from_start.
     """
-    timestamps: Dict[int, float] = {}
+    timestamps: dict[int, float] = {}
 
     for interaction in interactions:
         li = interaction.get("loop_index", 0)
@@ -67,17 +65,17 @@ def compute_loop_timestamps(
 
 
 def build_loop_history_from_db(
-    actions: List[Dict],
-    interactions: List[Dict],
-    config_snapshot: Optional[Dict] = None,
-) -> List[Dict]:
+    actions: list[dict],
+    interactions: list[dict],
+    config_snapshot: dict | None = None,
+) -> list[dict]:
     """
     Reconstruct loop_history format expected by build_chapter_markers
     from DB actions and interactions.
 
     Each loop entry: {loop_index, timestamp, set_name, reasoning, stems}
     """
-    loops: Dict[int, Dict] = {}
+    loops: dict[int, dict] = {}
 
     for interaction in interactions:
         li = interaction.get("loop_index", 0)
@@ -132,10 +130,10 @@ def build_loop_history_from_db(
 async def postprocess_show_recording(
     show_id: int,
     audio_file_path: str,
-    show_data: Dict,
-    actions: List[Dict],
-    interactions: List[Dict],
-) -> Dict[str, Any]:
+    show_data: dict,
+    actions: list[dict],
+    interactions: list[dict],
+) -> dict[str, Any]:
     """
     Run post-show recording enrichment after flush_recording_buffers.
 
@@ -236,9 +234,9 @@ async def postprocess_show_recording(
 
 def split_show_chapters(
     audio_file_path: str,
-    chapters: List[Dict],
+    chapters: list[dict],
     show_title: str = "show",
-) -> List[Dict]:
+) -> list[dict]:
     """
     Split a show's WAV file into per-chapter segments.
     Called on-demand by the split endpoint (not during postprocess).
@@ -259,22 +257,22 @@ def split_show_chapters(
 
 def export_show_format(
     audio_file_path: str,
-    chapters: List[Dict],
-    show_data: Dict,
+    chapters: list[dict],
+    show_data: dict,
     output_dir: str,
     fmt: str = "mp3",
-) -> Optional[str]:
+) -> str | None:
     """
     Export the show audio to MP3 or FLAC with ID3/ID3v2 tags and chapter markers.
 
     Requires mutagen for tagging. Returns path to exported file, or None on failure.
     """
     try:
-        from mutagen.id3 import (
+        from mutagen.id3 import (  # noqa: F401  availability probe (optional mutagen)
             ID3, TIT2, TPE1, TALB, TCON, TXXX, COMM, CTOC, CHAP, WXXX, TYER
         )
-        from mutagen.mp3 import MP3
-        from mutagen.flac import FLAC
+        from mutagen.mp3 import MP3  # noqa: F401  availability probe
+        from mutagen.flac import FLAC  # noqa: F401  availability probe
     except ImportError:
         log.error("mutagen not installed, cannot export %s with tags", fmt)
         return None
@@ -308,7 +306,6 @@ def export_show_format(
     try:
         if fmt == "wav":
             # WAV with ID3 tags
-            from mutagen.wavpack import WavPack
             # Actually, mutagen supports WAV via the generic AudioFile or ID3 directly
             # Let's use the WAV-compatible approach: write ID3 to .wav via mutagen
             from mutagen import File as MutagenFile
@@ -319,7 +316,6 @@ def export_show_format(
 
             if audio is None:
                 # Create ID3 tags for WAV
-                from mutagen.wavpack import WavPack
                 # WAV doesn't natively support ID3 chunks well in mutagen,
                 # so we just copy and return without embedded tags for WAV
                 shutil.move(temp_wav, output_path)
@@ -378,13 +374,13 @@ def _tag_mp3(
     mp3_path: str,
     show_title: str,
     show_id: int,
-    config_snapshot: Dict,
-    chapters: List[Dict],
+    config_snapshot: dict,
+    chapters: list[dict],
 ):
     """Add ID3v2 tags with chapters to an MP3 file."""
     from mutagen.mp3 import MP3
     from mutagen.id3 import (
-        ID3, TIT2, TPE1, TALB, COMM, TCON, TXXX, CTOC, CHAP, TYER, TDAT
+        TIT2, TPE1, TALB, COMM, TCON, TXXX, CTOC, CHAP
     )
 
     try:
@@ -445,8 +441,8 @@ def _tag_flac(
     flac_path: str,
     show_title: str,
     show_id: int,
-    config_snapshot: Dict,
-    chapters: List[Dict],
+    config_snapshot: dict,
+    chapters: list[dict],
 ):
     """Add Vorbis comments with chapter markers to a FLAC file."""
     from mutagen.flac import FLAC

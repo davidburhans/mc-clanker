@@ -10,7 +10,7 @@ class TestAuthModule:
     """Tests for auth.py functions."""
 
     def test_hash_password(self):
-        from app.auth import hash_password, verify_password
+        from app.auth import hash_password
 
         password = "test_password_123"
         hashed = hash_password(password)
@@ -358,7 +358,6 @@ class TestJWTSecret:
 
     def test_jwt_secret_from_environment(self):
         """Test that JWT_SECRET can be set from environment."""
-        import os
         from app.auth import JWT_SECRET
 
         # Should have a default value

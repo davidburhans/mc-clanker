@@ -16,7 +16,6 @@ Note: this does NOT itself neutralize the silent string-patch no-op risk
 names remain bound and callable so a relocation that drops them fails loudly.
 """
 
-import uuid
 from uuid import uuid4
 
 import app.framework.framework_main_async as mfa

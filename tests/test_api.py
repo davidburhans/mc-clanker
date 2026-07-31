@@ -1,10 +1,7 @@
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from app.routes import api_router as router
 from app.framework.framework_state import state
 import numpy as np
-import json
 import time
 from unittest.mock import MagicMock, patch
 

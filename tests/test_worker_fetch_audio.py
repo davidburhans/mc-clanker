@@ -6,7 +6,7 @@ is a stub that returns None instead of downloading and decoding audio.
 """
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 import numpy as np
 

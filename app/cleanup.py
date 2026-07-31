@@ -24,7 +24,6 @@ import logging
 import os
 import signal
 from dataclasses import dataclass
-from typing import Optional, List
 
 import asyncpg
 
@@ -57,8 +56,8 @@ class JobExpirationCleanup:
 
     def __init__(self, config: CleanupConfig):
         self.config = config
-        self.db: Optional[asyncpg.Pool] = None
-        self.garage: Optional[GarageClient] = None
+        self.db: asyncpg.Pool | None = None
+        self.garage: GarageClient | None = None
         self.running = True
 
     async def start(self):

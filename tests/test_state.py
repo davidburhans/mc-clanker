@@ -1,4 +1,3 @@
-import pytest
 import os
 from unittest.mock import MagicMock, patch
 from app.framework.framework_state import GlobalState
@@ -605,7 +604,6 @@ class TestStateLockBehavior:
 
     def test_sync_lock_is_threading_lock(self):
         """state.sync_lock must be threading.Lock for the Mixer and broadcast_audio."""
-        import threading
         state = GlobalState()
         assert hasattr(state, "sync_lock")
         # threading.Lock() returns a _thread.lock

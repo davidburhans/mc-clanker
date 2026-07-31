@@ -8,7 +8,7 @@ import time
 
 import pytest
 import numpy as np
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from app.framework.framework_mixer import Mixer, Track
 from app.framework.framework_state import state

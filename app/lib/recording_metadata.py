@@ -14,7 +14,7 @@ import struct
 import wave
 import json
 import time
-from typing import List, Dict, Optional, Any
+from typing import Any
 
 
 def format_cue_time(seconds: float) -> str:
@@ -29,10 +29,10 @@ def format_cue_time(seconds: float) -> str:
 def write_cue_sheet(
     cue_path: str,
     audio_filename: str,
-    chapters: List[Dict[str, Any]],
+    chapters: list[dict[str, Any]],
     title: str = "",
     performer: str = "MC Clanker",
-    metadata: Optional[Dict] = None,
+    metadata: dict | None = None,
 ) -> str:
     """
     Write a CUE sheet file from chapter markers.
@@ -71,8 +71,8 @@ def write_cue_sheet(
 
 def embed_wav_metadata(
     wav_path: str,
-    metadata: Dict[str, str],
-    chapters: Optional[List[Dict[str, Any]]] = None,
+    metadata: dict[str, str],
+    chapters: list[dict[str, Any]] | None = None,
 ) -> str:
     """
     Embed metadata into a WAV file by writing LIST/INFO and chunks before the
@@ -136,7 +136,7 @@ def embed_wav_metadata(
     return wav_path
 
 
-def _build_list_chunk(info_lines: List[tuple]) -> bytes:
+def _build_list_chunk(info_lines: list[tuple]) -> bytes:
     """Build a LIST/INFO chunk."""
     data = b""
     for tag, value in info_lines:
@@ -156,7 +156,7 @@ def _build_list_chunk(info_lines: List[tuple]) -> bytes:
     return header + data
 
 
-def _build_cue_chunk(chapters: List[Dict[str, Any]]) -> bytes:
+def _build_cue_chunk(chapters: list[dict[str, Any]]) -> bytes:
     """
     Build a WAV 'cue ' chunk with cue points for each chapter.
     Each cue point: (id, position, data_chunk_id, chunk_start, block_start, sample_offset)
@@ -200,7 +200,7 @@ def _build_cue_chunk(chapters: List[Dict[str, Any]]) -> bytes:
     return header + data
 
 
-def _build_chapter_list_chunk(chapters: List[Dict[str, Any]]) -> bytes:
+def _build_chapter_list_chunk(chapters: list[dict[str, Any]]) -> bytes:
     """Build a LIST/adtl chunk with labels for each cue point."""
     data = b""
     for i, chapter in enumerate(chapters):
@@ -284,10 +284,10 @@ def _write_wav_with_metadata(
 
 def split_wav_by_chapters(
     wav_path: str,
-    chapters: List[Dict[str, Any]],
+    chapters: list[dict[str, Any]],
     output_dir: str,
     show_title: str = "show",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Split a WAV file at chapter boundaries.
 
@@ -353,11 +353,11 @@ def split_wav_by_chapters(
 
 
 def build_chapter_markers(
-    loop_history: List[Dict],
-    actions: List[Dict],
-    llm_interactions: List[Dict],
-    config_snapshot: Optional[Dict] = None,
-) -> List[Dict[str, Any]]:
+    loop_history: list[dict],
+    actions: list[dict],
+    llm_interactions: list[dict],
+    config_snapshot: dict | None = None,
+) -> list[dict[str, Any]]:
     """
     Build chapter marker metadata from loop transitions, actions, and LLM interactions.
 
@@ -466,8 +466,8 @@ def generate_export_filename(
 
 def write_metadata_json(
     output_path: str,
-    show_data: Dict,
-    chapters: List[Dict],
+    show_data: dict,
+    chapters: list[dict],
     format: str = "wav",
 ) -> str:
     """Write a sidecar JSON file with full metadata for the export."""

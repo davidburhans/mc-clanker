@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import Any
 from app.lib.constants import VALID_KEYS
 
 
@@ -11,7 +11,7 @@ class HarmonicHelper:
     """
 
     # 1A to 12A (Minor) and 1B to 12B (Major)
-    KEY_TO_CAMELOT: Dict[str, str] = {
+    KEY_TO_CAMELOT: dict[str, str] = {
         "G# minor": "1A", "B major": "1B",
         "D# minor": "2A", "F# major": "2B",
         "A# minor": "3A", "C# major": "3B",
@@ -26,7 +26,7 @@ class HarmonicHelper:
         "C# minor": "12A", "E major": "12B",
     }
 
-    CAMELOT_TO_KEY: Dict[str, str] = {v: k for k, v in KEY_TO_CAMELOT.items()}
+    CAMELOT_TO_KEY: dict[str, str] = {v: k for k, v in KEY_TO_CAMELOT.items()}
 
     @classmethod
     def get_camelot_code(cls, key: str) -> str:
@@ -40,7 +40,7 @@ class HarmonicHelper:
         return cls.KEY_TO_CAMELOT[key]
 
     @classmethod
-    def get_harmonic_neighbors(cls, key: str) -> List[str]:
+    def get_harmonic_neighbors(cls, key: str) -> list[str]:
         """
         Get the 3 harmonically compatible transition keys for the given key:
         1. Relative major/minor (same Camelot number, opposite letter)
@@ -71,7 +71,7 @@ class HarmonicHelper:
         return [cls.CAMELOT_TO_KEY[c] for c in neighbor_codes]
 
     @classmethod
-    def get_harmonic_map(cls) -> Dict[str, Dict[str, Any]]:
+    def get_harmonic_map(cls) -> dict[str, dict[str, Any]]:
         """
         Generate a complete dictionary of all keys mapped to their Camelot codes and neighbors.
         Excellent for pre-caching on the frontend.

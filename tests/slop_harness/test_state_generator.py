@@ -1,4 +1,3 @@
-import pytest
 from slop_harness.state_generator import StateGenerator
 
 

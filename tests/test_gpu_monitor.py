@@ -10,7 +10,7 @@ import types
 from typing import Any
 
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 
 # Create a mock 'torch' module so tests can run without torch installed

@@ -10,10 +10,8 @@ container where the worker runs.
 """
 
 import pytest
-import sys
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 import uuid
-from datetime import datetime, timedelta
 
 # Skip entire module if framework_generator can't be imported (torch/torchaudio issues)
 # This happens at module load time, before any tests can run

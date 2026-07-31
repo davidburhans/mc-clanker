@@ -17,7 +17,6 @@ import json
 import logging
 import time
 from collections import defaultdict
-from typing import Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -36,7 +35,7 @@ class ConnectionManager:
     def __init__(self) -> None:
         # topic -> set of WebSocket connections
         # topic is "state", "stems", or "conductor"
-        self._connections: dict[str, Set[WebSocket]] = defaultdict(set)
+        self._connections: dict[str, set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, topic: str) -> None:
@@ -49,7 +48,7 @@ class ConnectionManager:
         async with self._lock:
             self._connections[topic].discard(websocket)
 
-    def _connections_sync(self, topic: str) -> Set[WebSocket]:
+    def _connections_sync(self, topic: str) -> set[WebSocket]:
         """Non-async accessor — safe to call from sync contexts."""
         return self._connections.get(topic, set())
 

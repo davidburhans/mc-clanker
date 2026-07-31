@@ -30,7 +30,7 @@ Usage:
 """
 
 import logging
-from typing import Callable, Optional
+from typing import Callable
 
 import torch
 
@@ -247,7 +247,7 @@ class GPUMonitor:
     def select_offload_candidates(
         self,
         loaded_model_ids: list[str],
-        active_model_id: Optional[str] = None,
+        active_model_id: str | None = None,
     ) -> list[str]:
         """
         Select models that are candidates for offloading to CPU.

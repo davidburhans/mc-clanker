@@ -1,7 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
-from typing import Optional
-import numpy as np
+from fastapi import APIRouter, HTTPException, Response
 import io
 import wave
 

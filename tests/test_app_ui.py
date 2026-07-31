@@ -1,5 +1,3 @@
-import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 import queue
@@ -238,8 +236,7 @@ class TestStreamMp3:
     def test_stream_response_headers(self):
         """Test streaming response has correct headers."""
         from fastapi import FastAPI
-        from fastapi.responses import StreamingResponse
-        from app.app_ui import stream_mp3, audio_stream_generator
+        from app.app_ui import stream_mp3
 
         app = FastAPI()
         app.add_api_route("/stream.mp3", stream_mp3, methods=["GET"])

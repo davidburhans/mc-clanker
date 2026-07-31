@@ -86,8 +86,8 @@ class GeneratorWorker:
 
     def __init__(self, config: WorkerConfig):
         self.config = config
-        self.db: Optional[asyncpg.Pool] = None
-        self.garage: Optional[GarageClient] = None
+        self.db: asyncpg.Pool | None = None
+        self.garage: GarageClient | None = None
         self.generators = GeneratorRegistry()
         self.running = True
         self.jobs_processed = 0
@@ -164,7 +164,7 @@ class GeneratorWorker:
             await self._mark_job_failed(job["id"], str(e))
             self.jobs_failed += 1
 
-    async def _claim_next_job(self) -> Optional[dict]:
+    async def _claim_next_job(self) -> dict | None:
         """
         Atomically claim the next pending job, or reclaim one whose lease expired.
 

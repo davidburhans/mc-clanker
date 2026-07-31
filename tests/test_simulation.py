@@ -12,7 +12,6 @@ These tests verify the fixes for issues found during code review:
 import pytest
 from unittest.mock import patch, MagicMock
 import inspect
-import re
 import threading
 
 
@@ -263,7 +262,6 @@ class TestSerializationFailure:
         import asyncio
         import json as _json
 
-        import simulation.jockey as jockey_mod
         from simulation.jockey import SlopJockey
 
         jockey = SlopJockey(
@@ -321,7 +319,6 @@ class TestEnableThinkingCLI:
         enable_thinking through the CLI and into SlopJockey.
         """
         from simulation import cli
-        import argparse
 
         # Get the parser used by cli.parse_args
         parser_code = inspect.getsource(cli.parse_args)

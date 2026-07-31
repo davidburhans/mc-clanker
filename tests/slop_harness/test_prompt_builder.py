@@ -1,4 +1,3 @@
-import pytest
 from slop_harness.prompt_builder import PromptBuilder, SYSTEM_INSTRUCTION, AVAILABLE_INSTRUMENTS
 
 

@@ -359,7 +359,6 @@ if os.path.exists(static_dir):
 @app.get("/setup")
 def serve_setup():
     """Serve the setup/onboarding wizard."""
-    import pathlib
     setup_path = os.path.join(
         os.path.dirname(os.path.dirname(__file__)), "static", "mc-clanker", "setup.html"
     )

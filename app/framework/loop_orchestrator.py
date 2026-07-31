@@ -21,17 +21,15 @@ Usage:
 """
 
 import asyncio
-import os
 import time
 import uuid
 import numpy as np
-from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 from app.framework.framework_state import state
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_conductor_async import ConductorLLMAsync
-from app.framework.domain_audio import calc_duration, to_two_channel as _to_two_channel, tile_to_loop
+from app.framework.domain_audio import tile_to_loop
 from app.framework.audio_fetch import GarageAudioAdapter
 from app.framework.audit_recording import append_loop_audit
 from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (routes/shows.py, tests import these from here)
@@ -91,17 +89,17 @@ class AsyncFrameworkLoop:
             session_id: UUID of the session this loop handles
         """
         self.session_id = session_id
-        self.mixer: Optional[Mixer] = None
+        self.mixer: Mixer | None = None
         self.conductor = ConductorLLMAsync()
         self._garage = None  # Lazy initialization on first use
-        self._audio_adapter: Optional[GarageAudioAdapter] = None  # Lazy GarageAudioAdapter
+        self._audio_adapter: GarageAudioAdapter | None = None  # Lazy GarageAudioAdapter
         self.running = False
-        self.loop_task: Optional[asyncio.Task] = None
-        self.stem_cache: Dict[str, Dict] = {}  # cache_key -> {audio_data, last_used}
-        self._pregen_task: Optional[asyncio.Task] = None  # Background pre-generation task
+        self.loop_task: asyncio.Task | None = None
+        self.stem_cache: dict[str, dict] = {}  # cache_key -> {audio_data, last_used}
+        self._pregen_task: asyncio.Task | None = None  # Background pre-generation task
         self._pregen_done = asyncio.Event()  # Signaled when pre-gen is complete
         self._pregen_loop_idx = 0  # Which loop we're pre-generating for
-        self._pregen_results: Optional[Dict[str, Any]] = None  # Results from pre-generation
+        self._pregen_results: dict[str, Any] | None = None  # Results from pre-generation
 
     @property
     def garage(self):
@@ -636,7 +634,7 @@ class AsyncFrameworkLoop:
 
         self._finish_loop()
 
-    def _build_prompt(self, track: Dict, key: str, bpm: int) -> str:
+    def _build_prompt(self, track: dict, key: str, bpm: int) -> str:
         """Build a generation prompt; delegates to conductor_interaction (Phase 4)."""
         return build_track_prompt(track, key, bpm)
 
@@ -649,7 +647,7 @@ class AsyncFrameworkLoop:
         model_id: str,
         key: str,
         bpm: int,
-        timbre_tags: List[str],
+        timbre_tags: list[str],
         bars: int,
     ) -> uuid.UUID:
         """Submit a generation job; delegates to job_queue (Phase 5).
@@ -668,7 +666,7 @@ class AsyncFrameworkLoop:
             bars=bars,
         )
 
-    async def _fetch_audio(self, audio_path: str) -> Optional[np.ndarray]:
+    async def _fetch_audio(self, audio_path: str) -> np.ndarray | None:
         """
         Fetch audio from Garage and decode to numpy array.
 
@@ -693,7 +691,7 @@ class AsyncFrameworkLoop:
         """
         await append_loop_audit(conductor_response, active_stems, loop_idx)
 
-    async def _pre_generate_next_loop(self, for_loop_idx: int, snapshot: Dict[str, Any]):
+    async def _pre_generate_next_loop(self, for_loop_idx: int, snapshot: dict[str, Any]):
         """Pre-generate the next loop; delegates to pregeneration (Phase 6).
 
         Kept as a method so ``patch.object(loop, '_pre_generate_next_loop')`` and

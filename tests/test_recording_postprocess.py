@@ -5,9 +5,7 @@ chapter markers, CUE sheets, WAV metadata embedding, and export routes.
 
 import os
 import json
-import struct
 import wave
-import tempfile
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient

@@ -7,8 +7,6 @@ directly to asyncpg.create_pool() without converting it to a string.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
-import uuid
 
 
 def test_db_engine_url_is_sqlalchemy_url_object():
@@ -40,7 +38,7 @@ def test_asyncpg_create_pool_rejects_url_object():
     asyncpg.create_pool() will fail.
     """
     try:
-        import asyncpg
+        import asyncpg  # noqa: F401  availability probe
     except ImportError:
         pytest.skip("asyncpg not installed")
 
