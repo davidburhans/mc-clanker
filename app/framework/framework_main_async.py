@@ -45,6 +45,7 @@ from app.framework.conductor_interaction import (
     process_actions,  # noqa: F401  frozen public API (simulation/session_state imports it from here)
 )
 from app.framework.job_queue import submit_generator_job
+from app.framework.pregeneration import run_pregeneration
 from app.job_waiter import wait_for_multiple_jobs
 # Kept at module top for import-compatibility: frozen bindings (and tests) still
 # import these names from this shim module even though the real fetch call sites
@@ -693,158 +694,15 @@ class AsyncFrameworkLoop:
         await append_loop_audit(conductor_response, active_stems, loop_idx)
 
     async def _pre_generate_next_loop(self, for_loop_idx: int, snapshot: Dict[str, Any]):
+        """Pre-generate the next loop; delegates to pregeneration (Phase 6).
+
+        Kept as a method so ``patch.object(loop, '_pre_generate_next_loop')`` and
+        the ``_pregen_*`` attribute assertions in tests keep working. The body
+        lives in app.framework.pregeneration.run_pregeneration, which shares
+        this loop's ``stem_cache`` (R11) and preserves the cache_stem divergence
+        (brief-01 risk #4: background path never calls state.cache_stem).
         """
-        Pre-generate the next loop's audio in the background.
-
-        This runs the LLM call and job submission for the next loop while
-        the current loop is playing. This allows us to have the next loop's
-        audio ready before the current loop ends.
-
-        Args:
-            for_loop_idx: The loop index this pre-generation is for
-            snapshot: State snapshot taken at the time of pre-gen initiation
-        """
-        print(f"[AsyncFrameworkLoop] Pre-generating loop {for_loop_idx} in background...")
-
-        try:
-            # Build prompt from snapshot
-            current_bpm = snapshot["current_bpm"]
-            current_key = snapshot["current_key"]
-            active_stems = snapshot["active_stems"]
-            llm_config = snapshot["llm_config"]
-
-            # Get available models (Phase 4: shared helper).
-            available_models = load_available_models()
-
-            # Call LLM
-            try:
-                conductor_response = await self.conductor.get_next_state_async(
-                    current_bpm=current_bpm,
-                    current_key=current_key,
-                    active_stems=active_stems,
-                    user_override=snapshot.get("user_override"),
-                    available_instruments=snapshot.get("available_instruments", []),
-                    stem_history=snapshot.get("stem_history", []),
-                    llm_config=llm_config,
-                    available_models=available_models,
-                )
-            except Exception as e:  # noqa: BLE001
-                print(f"[AsyncFrameworkLoop] Pre-gen LLM call failed: {e}")
-                conductor_response = build_fallback_response(current_bpm, current_key, active_stems, e)
-
-            # Process actions
-            deduped_tracks = process_actions(conductor_response.get("actions", []), active_stems)
-
-            # Build next stems info
-            next_stems = []
-            for t in deduped_tracks:
-                m_id = t.get("model_id", "foundation-1")
-                prompt = self._build_prompt(t, current_key, current_bpm)
-                next_stems.append(
-                    {
-                        "prompt": prompt,
-                        "model_id": m_id,
-                        "bpm": current_bpm,
-                        "key": current_key,
-                        "bars": t.get("bars", 8),
-                        "_original_details": t,
-                        "_age": t.get("_age", 0),
-                    }
-                )
-
-            # Submit jobs
-            pending_jobs = []
-            for i, t in enumerate(next_stems):
-                prompt = t["prompt"]
-                track_bars = t["bars"]
-                m_id = t.get("model_id")
-                cache_key = f"{m_id}_{prompt}_{current_bpm}_{current_key}_{track_bars}"
-
-                if cache_key in self.stem_cache:
-                    continue
-
-                orig = t.get("_original_details", {})
-                job_id = await self._submit_job(
-                    session_id=self.session_id,
-                    instrument=orig.get("sub_family", "Unknown"),
-                    prompt=prompt,
-                    major_family=orig.get("major_family"),
-                    model_id=m_id,
-                    key=current_key,
-                    bpm=current_bpm,
-                    timbre_tags=orig.get("timbre_tags", []),
-                    bars=track_bars,
-                )
-                pending_jobs.append((job_id, i, cache_key))
-
-            # Wait for jobs
-            if pending_jobs:
-                job_ids = [job_id for job_id, _, _ in pending_jobs]
-                results = await wait_for_multiple_jobs(job_ids, timeout=120.0)
-
-                # Fetch audio
-                for job_id, orig_idx, cache_key in pending_jobs:
-                    audio_path = results.get(job_id)
-                    if audio_path:
-                        audio_data = await self._fetch_audio(audio_path)
-                        if audio_data is not None:
-                            self.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
-
-            # Prepare tracks
-            loop_bars = max([t.get("bars", 8) for t in deduped_tracks] + [8])
-            duration_seconds = calc_duration(current_bpm, loop_bars)
-            loop_duration_samples = int(duration_seconds * ((self.mixer.sample_rate if self.mixer else None) or 44100))
-
-            tracks_data = [None] * len(next_stems)
-            for i, t in enumerate(next_stems):
-                prompt = t["prompt"]
-                track_bars = t["bars"]
-                m_id = t.get("model_id")
-                cache_key = f"{m_id}_{prompt}_{current_bpm}_{current_key}_{track_bars}"
-
-                if cache_key in self.stem_cache:
-                    audio_data = self.stem_cache[cache_key]["audio_data"]
-                else:
-                    audio_data = None
-
-                if audio_data is not None:
-                    # B11: ensure 2-D before tiling (mono 1-D would raise).
-                    audio_data = _to_two_channel(audio_data)
-                    if len(audio_data) < loop_duration_samples:
-                        repeats = (loop_duration_samples // len(audio_data)) + 1
-                        audio_data = np.tile(audio_data, (repeats, 1))[:loop_duration_samples, :]
-                    tracks_data[i] = audio_data
-
-            # Build prepared tracks
-            prepared_tracks = []
-            for audio_data, stem_idx in zip(tracks_data, range(len(tracks_data))):
-                if audio_data is None:
-                    print(f"[AsyncFrameworkLoop] Stem {stem_idx} fell back to silence")
-                    audio_data = np.zeros((loop_duration_samples, 2), dtype=np.float32)
-                prepared_tracks.append((audio_data, stem_idx))
-
-            # Store results for the main loop to use
-            self._pregen_results = {
-                "prepared_tracks": prepared_tracks,
-                "loop_duration_samples": loop_duration_samples,
-                "loop_idx": for_loop_idx,
-                "next_stems": next_stems,
-                "master_bpm": conductor_response.get("master_bpm", current_bpm),
-                "master_key": conductor_response.get("master_key", current_key),
-                "set_name": conductor_response.get("name", "Unknown Set"),
-                "reasoning": conductor_response.get("reasoning", "No reasoning provided."),
-                "actions": conductor_response.get("actions", []),
-            }
-            self._pregen_done.set()
-            print(f"[AsyncFrameworkLoop] Pre-generation for loop {for_loop_idx} complete!")
-
-        except Exception as e:
-            print(f"[AsyncFrameworkLoop] Pre-generation error: {e}")
-            import traceback
-
-            traceback.print_exc()
-            self._pregen_results = None
-            self._pregen_done.set()
+        await run_pregeneration(self, for_loop_idx, snapshot)
 
 
 async def run_framework_loop_async(session_id: uuid.UUID):
