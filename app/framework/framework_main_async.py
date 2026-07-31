@@ -38,6 +38,12 @@ from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (ro
     _flush_lock,
     flush_recording_buffers,
 )
+from app.framework.conductor_interaction import (
+    build_fallback_response,
+    build_track_prompt,
+    load_available_models,
+    process_actions,  # noqa: F401  frozen public API (simulation/session_state imports it from here)
+)
 from app.job_waiter import wait_for_multiple_jobs
 # Kept at module top for import-compatibility: frozen bindings (and tests) still
 # import these names from this shim module even though the real fetch call sites
@@ -62,68 +68,9 @@ LOOP_RETRY_BACKOFF_SECONDS = 2.0
 
 
 
-def process_actions(actions: List[Dict[str, Any]], active_stems: List[Dict]) -> List[Dict]:
-    """Process Conductor DJ actions and return deduplicated track list.
+# process_actions now lives in app.framework.conductor_interaction (Phase 4);
+# re-exported above for frozen-binding compatibility (simulation/session_state).
 
-    Mirrors the action processing logic from AsyncFrameworkLoop._run_loop().
-
-    Actions:
-    - retain: keep stem, _age+1 (in-place mutation of _original_details)
-    - add: new stem with _age=0
-    - remove: stem is excluded
-
-    Deduplication key: model_id_major_family_sub_family_timbre_tags_notation_fx
-
-    Returns:
-        List of deduplicated track dicts (each with _age set appropriately).
-    """
-    new_tracks: List[Dict] = []
-
-    for action in actions:
-        a_type = action.get("action_type")
-        idx = action.get("stem_index")
-
-        if a_type == "retain" and idx is not None and 0 <= idx < len(active_stems):
-            s = active_stems[idx]
-            orig = s.get("_original_details", {})
-            orig["_age"] = s.get("_age", 0) + 1
-            new_tracks.append(orig)
-
-        elif a_type == "add":
-            major = action.get("major_family", "Synth")
-            sub = action.get("sub_family", "Synth Lead")
-            new_tracks.append(
-                {
-                    "model_id": action.get("model_id"),
-                    "major_family": major,
-                    "sub_family": sub,
-                    "timbre_tags": action.get("timbre_tags", ["Warm"]),
-                    "notation_tag": action.get("notation_tag", "melody"),
-                    "fx_tag": action.get("fx_tag", "Medium Reverb"),
-                    "bars": action.get("bars", 4),
-                    "_age": 0,
-                }
-            )
-
-        elif a_type == "remove" and idx is not None and 0 <= idx < len(active_stems):
-            # Remove: excluded from new_tracks (no action needed)
-            pass
-
-    # Deduplicate
-    unique_tracks: Dict[str, Dict] = {}
-    for t in new_tracks:
-        if not t:
-            continue
-        m_id = t.get("model_id", "default")
-        t_key = (
-            f"{m_id}_{t.get('major_family')}_{t.get('sub_family')}_"
-            f"{'_'.join(t.get('timbre_tags', []))}_{t.get('notation_tag')}_"
-            f"{t.get('fx_tag')}"
-        )
-        if t_key not in unique_tracks:
-            unique_tracks[t_key] = t
-
-    return list(unique_tracks.values())
 
 
 class AsyncFrameworkLoop:
@@ -336,23 +283,8 @@ class AsyncFrameworkLoop:
                         "model": state.llm_model,
                     }
 
-                # Get available models
-                available_models = []
-                generator = getattr(state, "generator", None)
-                if generator and hasattr(generator, "models"):
-                    import json as json_module
-
-                    _config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
-                    if os.path.exists(_config_path):
-                        with open(_config_path) as f:
-                            cfg = json_module.load(f)
-                            for model_id in generator.models:
-                                m_info = cfg.get("models", {}).get(model_id, {})
-                                desc = m_info.get("description", "No description")
-                                supported_families = m_info.get("supported_families", ["Any"])
-                                available_models.append(
-                                    {"id": model_id, "description": desc, "supported_families": supported_families}
-                                )
+                # Get available models (Phase 4: shared helper).
+                available_models = load_available_models()
 
                 # Step 2: Call LLM Conductor (async)
                 # Only do this if we don't have pre-generated results
@@ -368,15 +300,9 @@ class AsyncFrameworkLoop:
                             llm_config=llm_config,
                             available_models=available_models,
                         )
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         print(f"LLM call failed: {e}")
-                        conductor_response = {
-                            "master_bpm": current_bpm,
-                            "master_key": current_key,
-                            "actions": [{"action_type": "retain", "stem_index": i} for i in range(len(active_stems))],
-                            "reasoning": f"LLM failed ({e}). Retaining current groove.",
-                            "name": "Fallback State",
-                        }
+                        conductor_response = build_fallback_response(current_bpm, current_key, active_stems, e)
 
                     # Step 3: Process actions and submit jobs
                     deduped_tracks = process_actions(conductor_response.get("actions", []), active_stems)
@@ -709,38 +635,8 @@ class AsyncFrameworkLoop:
         self._finish_loop()
 
     def _build_prompt(self, track: Dict, key: str, bpm: int) -> str:
-        """Build generation prompt from track details."""
-        generator = getattr(state, "generator", None)
-        m_id = track.get("model_id", "foundation-1")
-
-        if generator and m_id in generator.models:
-            engine = generator.models[m_id]
-            prompt_template = getattr(engine, "prompt_template", None)
-        else:
-            prompt_template = None
-
-        if not prompt_template:
-            prompt_template = (
-                "{major_family}, {sub_family}, {timbre_tags}, {notation_tag}, {fx_tag}, {key}, {bpm} BPM, {bars} Bars"
-            )
-
-        major = track.get("major_family", "Synth")
-        sub = track.get("sub_family", "Synth Lead")
-        timbres = " ".join(track.get("timbre_tags", ["Warm"]))
-        notation = track.get("notation_tag", "melody")
-        fx = track.get("fx_tag", "Medium Reverb")
-        bars = track.get("bars", 8)
-
-        return prompt_template.format(
-            major_family=major,
-            sub_family=sub,
-            timbre_tags=timbres,
-            notation_tag=notation,
-            fx_tag=fx,
-            key=key,
-            bpm=bpm,
-            bars=bars,
-        )
+        """Build a generation prompt; delegates to conductor_interaction (Phase 4)."""
+        return build_track_prompt(track, key, bpm)
 
     async def _submit_job(
         self,
@@ -833,23 +729,8 @@ class AsyncFrameworkLoop:
             active_stems = snapshot["active_stems"]
             llm_config = snapshot["llm_config"]
 
-            # Get available models
-            available_models = []
-            generator = getattr(state, "generator", None)
-            if generator and hasattr(generator, "models"):
-                import json as json_module
-
-                _config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
-                if os.path.exists(_config_path):
-                    with open(_config_path) as f:
-                        cfg = json_module.load(f)
-                        for model_id in generator.models:
-                            m_info = cfg.get("models", {}).get(model_id, {})
-                            desc = m_info.get("description", "No description")
-                            supported_families = m_info.get("supported_families", ["Any"])
-                            available_models.append(
-                                {"id": model_id, "description": desc, "supported_families": supported_families}
-                            )
+            # Get available models (Phase 4: shared helper).
+            available_models = load_available_models()
 
             # Call LLM
             try:
@@ -863,15 +744,9 @@ class AsyncFrameworkLoop:
                     llm_config=llm_config,
                     available_models=available_models,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"[AsyncFrameworkLoop] Pre-gen LLM call failed: {e}")
-                conductor_response = {
-                    "master_bpm": current_bpm,
-                    "master_key": current_key,
-                    "actions": [{"action_type": "retain", "stem_index": i} for i in range(len(active_stems))],
-                    "reasoning": f"LLM failed ({e}). Retaining current groove.",
-                    "name": "Fallback State",
-                }
+                conductor_response = build_fallback_response(current_bpm, current_key, active_stems, e)
 
             # Process actions
             deduped_tracks = process_actions(conductor_response.get("actions", []), active_stems)
