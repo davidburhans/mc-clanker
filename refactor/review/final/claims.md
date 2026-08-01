@@ -1,6 +1,7 @@
 # Final DoD Claim Verification (HEAD)
 
 Agent: claim-verifier (fresh context). Result: **7/8 Verified**.
+
 1. framework_main_async.py < 500 LOC → **Verified** (50-LOC shim).
 2. suite green ≥ 569 → **Verified** (569 passed, 0 failed; 58 skipped/9 xfailed/16 xpassed).
 3. ruff enforced + UP/F clean → **Weakened** (intent fully met — `ruff check` exit 0, UP006/UP007/UP045/F401 all 0; only the literal `ruff --select` syntax differs in ruff 0.16, a CLI-version artifact, not a code defect).

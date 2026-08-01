@@ -22,8 +22,9 @@ import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 
 from app.framework.framework_main_async import (
@@ -866,3 +867,94 @@ async def test_run_loop_pregen_and_fresh_paths_state_shaping(monkeypatch):
     assert pregen["llm_reasoning"] == "No reasoning provided."
     assert fresh["last_actions"] == ["Added Synth Pad"]
     assert pregen["last_actions"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Phase D0 (decomposition prep) — pin weakly-covered _run_loop phases.
+# These characterize CURRENT behavior so the _step_* extraction cannot silently
+# regress P3 (overrides), P4 (fallback), P7 (cache-HIT skip), P8 (foreground
+# cache_stem). P13 transition-event recording is acknowledged-untested (its
+# outside-lock invariant is already pinned by test_loop_lock_safety).
+# --------------------------------------------------------------------------- #
+
+
+async def test_d0_p3_override_applied_then_cleared(monkeypatch):
+    """target_bpm/key_override are applied to current_bpm/key then cleared."""
+    loop = AsyncFrameworkLoop(uuid.uuid4())
+    _seed_loop_for_run(loop, current_sample=0, stop_on=("add", 1))
+    state.active_stems = [_active_stem_for_retain()]
+    state.target_bpm_override = 140
+    state.target_key_override = "F major"
+    _wire_loop_no_io(loop, monkeypatch, response=_conductor_response_with_actions())
+    try:
+        await asyncio.wait_for(loop._run_loop(), timeout=5.0)
+        # Override wins over the conductor's master_bpm=128; overrides cleared.
+        assert state.current_bpm == 140
+        assert state.current_key == "F major"
+        assert state.target_bpm_override is None
+        assert state.target_key_override is None
+    finally:
+        state.target_bpm_override = None
+        state.target_key_override = None
+
+
+async def test_d0_p4_conductor_failure_uses_fallback(monkeypatch):
+    """Conductor raising -> the retain-all fallback (not a crash); tracks commit."""
+    loop = AsyncFrameworkLoop(uuid.uuid4())
+    mixer = _seed_loop_for_run(loop, current_sample=0, stop_on=("add", 1))
+    state.active_stems = [_active_stem_for_retain()]
+    _wire_loop_no_io(loop, monkeypatch, response=_conductor_response_with_actions())
+    # Override conductor to RAISE (exercises P4's nested try/except -> fallback).
+    loop.conductor.get_next_state_async = AsyncMock(side_effect=RuntimeError("LLM down"))
+    await asyncio.wait_for(loop._run_loop(), timeout=5.0)
+    # Fallback retains all active stems -> at least one track handed to the mixer.
+    assert len(mixer.add_track_internal_calls) >= 1
+
+
+async def test_d0_p7_cached_stem_skips_job_submission(monkeypatch):
+    """A stem already in stem_cache -> _submit_job NOT called for it (fresh path)."""
+    from app.framework.conductor_interaction import process_actions
+
+    loop = AsyncFrameworkLoop(uuid.uuid4())
+    _seed_loop_for_run(loop, current_sample=0, stop_on=("add", 1))
+    state.active_stems = []  # add-only -> exactly one stem to cache
+    state.current_bpm = 128
+    state.current_key = "A minor"
+
+    resp = _add_only_response()
+    _wire_loop_no_io(loop, monkeypatch, response=resp)
+    submit = AsyncMock(return_value=uuid.uuid4())
+    loop._submit_job = submit
+
+    # Pre-seed the cache with the EXACT key the loop computes for the add stem
+    # (model_id_prompt_bpm_key_bars), so P7's cache-HIT `continue` fires.
+    add_track = process_actions(resp["actions"], [])[0]
+    prompt = loop._build_prompt(add_track, "A minor", 128)
+    cache_key = f"foundation-1_{prompt}_128_A minor_4"
+    loop.stem_cache[cache_key] = {"audio_data": np.ones((10, 2), dtype=np.float32), "last_used": 0.0}
+
+    await asyncio.wait_for(loop._run_loop(), timeout=5.0)
+    submit.assert_not_called()
+
+
+async def test_d0_p8_foreground_fetch_routes_through_cache_stem(monkeypatch):
+    """Foreground _run_loop calls state.cache_stem when a stem's audio is fetched
+    (the divergence complement to the pregen path, which never calls it)."""
+    import app.framework.loop_orchestrator as orch
+
+    loop = AsyncFrameworkLoop(uuid.uuid4())
+    _seed_loop_for_run(loop, current_sample=0, stop_on=("add", 1))
+    state.active_stems = []  # add-only -> one submitted stem
+    state.current_bpm = 128
+    state.current_key = "A minor"
+
+    job_id = uuid.uuid4()
+    _wire_loop_no_io(loop, monkeypatch, response=_add_only_response())
+    # Override the no-IO wiring so a real audio path runs end-to-end.
+    loop._submit_job = AsyncMock(return_value=job_id)
+    loop._fetch_audio = AsyncMock(return_value=np.ones((100, 2), dtype=np.float32))
+    monkeypatch.setattr(orch, "wait_for_multiple_jobs", AsyncMock(return_value={job_id: "audio/x.aac"}))
+
+    with patch.object(state, "cache_stem") as cs:
+        await asyncio.wait_for(loop._run_loop(), timeout=5.0)
+    assert cs.called, "foreground _run_loop must route fetched audio through state.cache_stem"

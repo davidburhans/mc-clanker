@@ -107,8 +107,8 @@ class GlobalState:
 
         self.llm_reasoning = "Waiting for initial prompt..."
         self.user_override = ""
-        self.target_bpm_override = None
-        self.target_key_override = None
+        self.target_bpm_override: int | None = None
+        self.target_key_override: str | None = None
         self.should_reset = False
 
         self.llm_base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
