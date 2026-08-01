@@ -21,9 +21,11 @@ Usage:
 """
 
 import asyncio
+import enum
 import time
 import uuid
 import numpy as np
+from dataclasses import dataclass
 from typing import Any
 
 from app.framework.framework_state import state
@@ -45,6 +47,7 @@ from app.framework.conductor_interaction import (
 from app.framework.job_queue import submit_generator_job
 from app.framework.pregeneration import run_pregeneration
 from app.job_waiter import wait_for_multiple_jobs
+
 # Kept at module top for import-compatibility: frozen bindings (and tests) still
 # import these names from this shim module even though the real fetch call sites
 # now live in app.framework.audio_fetch (brief-02 §D). decode_aac is no longer
@@ -67,10 +70,33 @@ LOOP_RETRY_BACKOFF_SECONDS = 2.0
 # (Phase 3); re-exported above for frozen-binding compatibility.
 
 
-
 # process_actions now lives in app.framework.conductor_interaction (Phase 4);
 # re-exported above for frozen-binding compatibility (simulation/session_state).
 
+
+class _StepResult(enum.Enum):
+    """Outer-while control-flow signal for _step_* methods (brief-05 decomp).
+
+    Only 3 phases emit non-PROCEED: P1 shutdown (EXIT_LOOP), P1 not-generating
+    (RESTART_ITER), P2 will_call_llm False (RESTART_ITER). Every other
+    break/continue is local to its _step_* method.
+    """
+
+    PROCEED = enum.auto()
+    RESTART_ITER = enum.auto()  # -> `continue` the outer while-loop
+    EXIT_LOOP = enum.auto()  # -> `break` the outer while-loop
+
+
+@dataclass
+class _CommitResult:
+    """P11 atomic-commit outputs threaded into _step_post_commit (P12)."""
+
+    needs_pregen: bool
+    needs_initial_record: bool
+    rec_stems: list
+    rec_set_name: str
+    rec_reasoning: str
+    state_snapshot: dict
 
 
 class AsyncFrameworkLoop:
@@ -173,451 +199,82 @@ class AsyncFrameworkLoop:
         try/except so a single unexpected error logs, backs off, and retries
         rather than terminating the whole set until a manual restart. A true
         external supervisor (recreating the task) is still recommended.
+
+        Decomposed into ``_step_*`` methods (brief-05): each phase takes its
+        spanning-read locals as params and returns its spanning-write locals;
+        this driver threads them between calls and interprets the 3 outer-while
+        control-flow jumps via ``_StepResult``.
         """
-        loop_idx = 0
-        current_loop_end_sample = 0
+        self._loop_idx = 0
 
         while self.running and state.is_running:
             try:
-                # Wait for user to hit Start
-                while (
-                    not state.is_generating and self.running and state.is_running and not state.shutdown_event.is_set()
-                ):
-                    await asyncio.sleep(0.5)
-
-                if not self.running or state.shutdown_event.is_set():
+                r = await self._step_wait_for_start()
+                if r is _StepResult.EXIT_LOOP:
                     break
-
-                # Double-check: is_generating might have gone False while we were waiting
-                async with state.lock:
-                    still_generating = state.is_generating
-
-                if not still_generating:
-                    print(f"[AsyncLoop-{loop_idx or 1}] Stop detected before LLM call, returning to wait")
+                if r is _StepResult.RESTART_ITER:
                     continue
 
-                # After exiting wait loop, log why we exited
-                async with state.lock:
-                    current_gen = state.is_generating
-                print(f"[AsyncLoop-{loop_idx}] Exited is_generating wait: is_generating={current_gen}")
+                (
+                    r,
+                    pregen_ready,
+                    conductor_response,
+                    prepared_tracks,
+                    loop_duration_samples,
+                    _next_stems,
+                ) = await self._step_pregen_decision()
+                if r is _StepResult.RESTART_ITER:
+                    continue
 
-                loop_idx += 1
-                print(f"\n[AsyncLoop-{loop_idx}] Starting loop...")
-                async with state.lock:
-                    debug_gen = state.is_generating
-                    debug_run = state.is_running
-                print(f"[AsyncLoop-{loop_idx}] DEBUG: is_generating={debug_gen}, is_running={debug_run}")
+                (
+                    bpm_override,
+                    key_override,
+                    current_bpm,
+                    current_key,
+                    active_stems,
+                    user_override,
+                    available_instruments,
+                    stem_history,
+                    llm_config,
+                    available_models,
+                ) = await self._step_read_state()
 
-                # PRE-GENERATION PIPELINE: Check if we already have pre-generated results
-                # from the previous iteration's background task
-                pregen_ready = (
-                    loop_idx > 1
-                    and self._pregen_results is not None
-                    and self._pregen_results.get("loop_idx") == loop_idx
-                )
-
-                if pregen_ready:
-                    print(f"[AsyncLoop-{loop_idx}] Using pre-generated audio from background task")
-                    print(
-                        f"[AsyncLoop-{loop_idx}] DEBUG: pregen_results keys = {list(self._pregen_results.keys()) if self._pregen_results else None}"
-                    )
-                    print(
-                        f"[AsyncLoop-{loop_idx}] DEBUG: mixer.current_sample = {self.mixer.current_sample if self.mixer else None}"
-                    )
-                    # Use the pre-generated results directly
-                    # Extract conductor_response-like data from pre_gen_results
-                    async with state.lock:
-                        _pregen_bpm = state.current_bpm
-                        _pregen_key = state.current_key
-                        active_stems = list(state.active_stems)  # Pre-gen used the previous active_stems
-                    conductor_response = {
-                        "master_bpm": self._pregen_results.get("master_bpm", _pregen_bpm),
-                        "master_key": self._pregen_results.get("master_key", _pregen_key),
-                        "name": self._pregen_results.get("set_name", "Unknown Set"),
-                        "reasoning": self._pregen_results.get("reasoning", "No reasoning provided."),
-                        "actions": self._pregen_results.get("actions", []),
-                    }
-                    prepared_tracks = self._pregen_results["prepared_tracks"]
-                    loop_duration_samples = self._pregen_results["loop_duration_samples"]
-                    next_stems = self._pregen_results["next_stems"]
-                else:
-                    async with state.lock:
-                        will_call_llm = state.is_generating
-                    if will_call_llm:
-                        print(f"[AsyncLoop-{loop_idx}] Requesting track state from LLM Conductor...")
-                    else:
-                        print(f"[AsyncLoop-{loop_idx}] Skipping LLM call: is_generating={state.is_generating}")
-                        # Instead of proceeding, go back to waiting
-                        continue
-
-                # Step 1: Build Conductor prompt (only if not using pre-gen)
-                async with state.lock:
-                    if state.should_reset:
-                        print("SYSTEM RESET TRIGGERED")
-                        self.mixer.clear()
-                        self.stem_cache.clear()
-                        state.should_reset = False
-                        current_loop_end_sample = 0
-
-                    # Check for active overrides
-                    bpm_override = state.target_bpm_override
-                    key_override = state.target_key_override
-
-                    if bpm_override:
-                        state.current_bpm = bpm_override
-                        state.target_bpm_override = None
-                    if key_override:
-                        state.current_key = key_override
-                        state.target_key_override = None
-
-                    current_bpm = state.current_bpm
-                    current_key = state.current_key
-                    active_stems = list(state.active_stems)
-                    user_override = state.user_override
-                    available_instruments = list(state.available_instruments)
-                    stem_history = list(state.stem_history)
-
-                    llm_config = {
-                        "base_url": state.llm_base_url,
-                        "api_key": state.llm_api_key,
-                        "model": state.llm_model,
-                    }
-
-                # Get available models (Phase 4: shared helper).
-                available_models = load_available_models()
-
-                # Step 2: Call LLM Conductor (async)
-                # Only do this if we don't have pre-generated results
+                # P4-P9 run only on the fresh path: pregen already has
+                # conductor_response + prepared_tracks from P2 (review A1).
                 if not pregen_ready:
-                    try:
-                        conductor_response = await self.conductor.get_next_state_async(
-                            current_bpm=current_bpm,
-                            current_key=current_key,
-                            active_stems=active_stems,
-                            user_override=user_override,
-                            available_instruments=available_instruments,
-                            stem_history=stem_history,
-                            llm_config=llm_config,
-                            available_models=available_models,
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        print(f"LLM call failed: {e}")
-                        conductor_response = build_fallback_response(current_bpm, current_key, active_stems, e)
-
-                    # Step 3: Process actions and submit jobs
-                    deduped_tracks = process_actions(conductor_response.get("actions", []), active_stems)
-
-                    # Build action log for debugging/auditing
-                    async with state.lock:
-                        current_actions_log = []
-                        for action in conductor_response.get("actions", []):
-                            a_type = action.get("action_type")
-                            idx = action.get("stem_index")
-                            if a_type == "retain" and idx is not None and 0 <= idx < len(active_stems):
-                                s = active_stems[idx]
-                                prompt = s.get("prompt", "")
-                                prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                                current_actions_log.append(f"Retained {prompt_part}")
-                            elif a_type == "add":
-                                current_actions_log.append(f"Added {action.get('sub_family', '')}")
-                            elif a_type == "remove" and idx is not None and 0 <= idx < len(active_stems):
-                                s = active_stems[idx]
-                                prompt = s.get("prompt", "")
-                                prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                                current_actions_log.append(f"Removed {prompt_part}")
-                        state.last_actions = current_actions_log
-
-                    # Step 5: Update state with next stems info (before generation)
-                    async with state.lock:
-                        if bpm_override:
-                            state.current_bpm = bpm_override
-                        else:
-                            state.current_bpm = conductor_response.get("master_bpm", current_bpm)
-
-                        if key_override:
-                            state.current_key = key_override
-                        else:
-                            state.current_key = conductor_response.get("master_key", current_key)
-
-                        state.current_set_name = conductor_response.get("name", "Unknown Set")
-                        state.llm_reasoning = conductor_response.get("reasoning", "No reasoning provided.")
-
-                        # Build next_stems with generation info
-                        state.next_stems = []
-                        for t in deduped_tracks:
-                            m_id = t.get("model_id", "foundation-1")
-                            prompt = self._build_prompt(t, state.current_key, state.current_bpm)
-                            state.next_stems.append(
-                                {
-                                    "prompt": prompt,
-                                    "model_id": m_id,
-                                    "bpm": state.current_bpm,
-                                    "key": state.current_key,
-                                    "bars": t.get("bars", 8),
-                                    "_original_details": t,
-                                    "_age": t.get("_age", 0),
-                                }
-                            )
-
-                        # Capture as locals while we still hold the lock
-                        local_next_stems = list(state.next_stems)
-                        local_current_bpm = state.current_bpm
-                        local_current_key = state.current_key
-
-                    # Step 6: Submit jobs for new stems
-                    pending_jobs = []  # List of (job_id, original_index)
-
-                    for i, t in enumerate(local_next_stems):
-                        prompt = t["prompt"]
-                        track_bars = t["bars"]
-                        m_id = t.get("model_id")
-                        orig = t.get("_original_details", {})
-                        cache_key = f"{m_id}_{prompt}_{local_current_bpm}_{local_current_key}_{track_bars}"
-
-                        # Check cache
-                        if cache_key in self.stem_cache:
-                            print(f"Cache HIT: '{prompt}'")
-                            continue  # Already have audio
-
-                        # Submit job
-                        job_id = await self._submit_job(
-                            session_id=self.session_id,
-                            instrument=orig.get("sub_family", "Unknown"),
-                            prompt=prompt,
-                            major_family=orig.get("major_family"),
-                            model_id=m_id,
-                            key=local_current_key,
-                            bpm=local_current_bpm,
-                            timbre_tags=orig.get("timbre_tags", []),
-                            bars=track_bars,
-                        )
-                        pending_jobs.append((job_id, i, cache_key))
-
-                    # Step 7: Wait for jobs and collect audio
-                    if pending_jobs:
-                        job_ids = [job_id for job_id, _, _ in pending_jobs]
-                        print(f"[AsyncLoop-{loop_idx}] Waiting for {len(job_ids)} jobs to complete...")
-                        wait_start = time.time()
-
-                        results = await wait_for_multiple_jobs(job_ids, timeout=120.0)
-
-                        wait_duration = time.time() - wait_start
-                        print(f"[AsyncLoop-{loop_idx}] Jobs completed in {wait_duration:.2f}s")
-
-                        # Process results
-                        for (job_id, orig_idx, cache_key), audio_path in zip(pending_jobs, results.values()):
-                            if audio_path:
-                                # Fetch audio from Garage
-                                audio_data = await self._fetch_audio(audio_path)
-                                if audio_data is not None:
-                                    self.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
-                                    # B7: route through cache_stem so the 16-entry LRU
-                                    # cap is enforced (direct subscript bypassed it).
-                                    async with state.lock:
-                                        state.cache_stem(local_next_stems[orig_idx]["prompt"], audio_data)
-                            else:
-                                print(f"Job {job_id} failed or timed out")
-
-                    # Step 8 + 9: tile cached/decoded stem audio out to the loop
-                    # duration and assemble (audio, stem_idx) pairs (P9). Pure logic
-                    # lives in domain_audio.tile_to_loop (Phase 2); the background
-                    # pre-generation path still inlines this until Phase 6 extracts it.
-                    prepared_tracks, loop_duration_samples = tile_to_loop(
-                        next_stems=local_next_stems,
-                        stem_cache=self.stem_cache,
-                        bpm=local_current_bpm,
-                        key=local_current_key,
-                        sample_rate=self.mixer.sample_rate if self.mixer else None,
-                        deduped_tracks=deduped_tracks,
+                    conductor_response = await self._step_call_conductor(
+                        pregen_ready,
+                        current_bpm,
+                        current_key,
+                        active_stems,
+                        user_override,
+                        available_instruments,
+                        stem_history,
+                        llm_config,
+                        available_models,
+                    )
+                    deduped_tracks = await self._step_parse_actions(conductor_response, active_stems)
+                    local_next_stems, local_current_bpm, local_current_key = await self._step_build_next_stems(
+                        bpm_override,
+                        key_override,
+                        conductor_response,
+                        current_bpm,
+                        current_key,
+                        deduped_tracks,
+                    )
+                    pending_jobs = await self._step_submit_jobs(local_next_stems, local_current_bpm, local_current_key)
+                    await self._step_await_jobs_fetch(pending_jobs, local_next_stems)
+                    prepared_tracks, loop_duration_samples = await self._step_tile_audio(
+                        local_next_stems, local_current_bpm, local_current_key, deduped_tracks
                     )
 
-                # C1: persist this loop's Conductor decision + actions so the
-                # show audit trail (show_actions / llm_interactions) is populated.
-                await self._append_loop_audit(conductor_response, active_stems, loop_idx)
-
-                # Step 9/10: Add tracks to mixer (or use pre-generated tracks)
-                # When using pre-gen, get prepared_tracks from pregen_results
-                if pregen_ready:
-                    tracks_to_use = self._pregen_results["prepared_tracks"]
-                    duration_samples = self._pregen_results["loop_duration_samples"]
-                else:
-                    tracks_to_use = prepared_tracks
-                    duration_samples = loop_duration_samples
-
-                if loop_idx == 1:
-                    # First loop: add tracks at the mixer's CURRENT position (not 0),
-                    # otherwise they are immediately treated as past tracks if generation
-                    # took longer than we assumed.
-                    with self.mixer.lock:
-                        start_sample = self.mixer.current_sample
-                        for audio_data, stem_idx in tracks_to_use:
-                            self.mixer._add_track_internal(
-                                self.mixer._ensure_stereo(audio_data), start_sample, stem_idx
-                            )
-                        self.mixer.current_loop_end_sample = start_sample + duration_samples
-                        self.mixer._current_loop_duration = duration_samples
-                    current_loop_end_sample = self.mixer.current_loop_end_sample
-                else:
-                    # Subsequent loops: queue audio without touching current loop boundary.
-                    # The mixer will fire the transition when it reaches current_loop_end_sample
-                    # and then set the new boundary from duration_samples.
-                    self.mixer.set_next_loop(
-                        tracks_to_use, next_loop_duration_samples=duration_samples, loop_idx=loop_idx
-                    )
-                    with self.mixer.lock:
-                        current_loop_end_sample = self.mixer.current_loop_end_sample
-
-                # PRE-GENERATION: Only start if no pre-gen task is running
-                needs_pregen = loop_idx > 1 and (self._pregen_task is None or self._pregen_task.done())
-
-                # Step 10: Update state
-                # When using pre-gen, we need to use pregen_results['next_stems'] as our active_stems
-                # For loop_idx == 1 (first loop), record the initial "now playing" state after the
-                # lock releases since record_loop_transition acquires sync_lock.
-                needs_initial_record = False
-                _rec_stems = []
-                _rec_set_name = ""
-                _rec_reasoning = ""
-                async with state.lock:
-                    if state.active_stems:
-                        state.previous_stems = list(state.active_stems)
-                        state.stem_history.append(state.active_stems)
-                        if len(state.stem_history) > 8:
-                            state.stem_history.pop(0)
-
-                    if pregen_ready:
-                        state.active_stems = list(self._pregen_results["next_stems"])
-                    else:
-                        state.active_stems = list(state.next_stems)
-
-                    state.next_stems = []
-                    state.muted_stems.clear()
-                    state.soloed_stems.clear()
-                    state.stem_volumes.clear()
-                    state.loop_count += 1
-
-                    if pregen_ready:
-                        # Update BPM, key, etc. from pre-gen results
-                        state.current_bpm = self._pregen_results.get("master_bpm", state.current_bpm)
-                        state.current_key = self._pregen_results.get("master_key", state.current_key)
-                        state.current_set_name = self._pregen_results.get("set_name", "Unknown Set")
-                        state.llm_reasoning = self._pregen_results.get("reasoning", "No reasoning provided.")
-
-                        # Build action log for pre-generated loop
-                        current_actions_log = []
-                        for action in self._pregen_results.get("actions", []):
-                            a_type = action.get("action_type")
-                            idx = action.get("stem_index")
-                            if a_type == "retain" and idx is not None and 0 <= idx < len(state.previous_stems):
-                                s = state.previous_stems[idx]
-                                prompt = s.get("prompt", "")
-                                prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                                current_actions_log.append(f"Retained {prompt_part}")
-                            elif a_type == "add":
-                                current_actions_log.append(f"Added {action.get('sub_family', '')}")
-                            elif a_type == "remove" and idx is not None and 0 <= idx < len(state.previous_stems):
-                                s = state.previous_stems[idx]
-                                prompt = s.get("prompt", "")
-                                prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                                current_actions_log.append(f"Removed {prompt_part}")
-                        state.last_actions = current_actions_log
-
-                    # Capture for initial recording (loop_idx == 1 has no mixer transition event)
-                    if loop_idx == 1:
-                        needs_initial_record = True
-                        _rec_stems = list(state.active_stems)
-                        _rec_set_name = state.current_set_name
-                        _rec_reasoning = state.llm_reasoning
-
-                    # Apply pending UI overrides
-                    if state.target_bpm_override:
-                        state.current_bpm = state.target_bpm_override
-                        state.target_bpm_override = None
-                    if state.target_key_override:
-                        state.current_key = state.target_key_override
-                        state.target_key_override = None
-
-                    # Take state snapshot for pre-generation (before releasing lock)
-                    state_snapshot = {
-                        "current_bpm": state.current_bpm,
-                        "current_key": state.current_key,
-                        "active_stems": list(state.active_stems),
-                        "user_override": state.user_override,
-                        "available_instruments": list(state.available_instruments),
-                        "stem_history": list(state.stem_history),
-                        "llm_config": {
-                            "base_url": state.llm_base_url,
-                            "api_key": state.llm_api_key,
-                            "model": state.llm_model,
-                        },
-                    }
-
-                # Record initial "now playing" state for first loop (no mixer transition fires for loop 1)
-                if needs_initial_record:
-                    state.record_loop_transition(1, _rec_stems, _rec_set_name, _rec_reasoning)
-
-                # Cache maintenance
-                current_time = time.time()
-                stale_keys = [k for k, v in self.stem_cache.items() if current_time - v["last_used"] > 300]
-                for k in stale_keys:
-                    del self.stem_cache[k]
-
-                # PRE-GENERATION: Only start if we don't have a loop already queued
-                # and no pre-gen task is running
-                if needs_pregen:
-                    next_loop_idx = loop_idx + 1
-                    print(f"[AsyncLoop-{loop_idx}] No loop queued, starting pre-generation for loop {next_loop_idx}...")
-                    self._pregen_done.clear()
-                    self._pregen_results = None
-                    self._pregen_task = asyncio.create_task(self._pre_generate_next_loop(next_loop_idx, state_snapshot))
-                else:
-                    print(f"[AsyncLoop-{loop_idx}] Loop {loop_idx + 1} already queued, skipping pre-gen")
-                    # Signal that pre-gen is "done" - the loop is queued in the mixer
-                    self._pregen_done.set()
-                    # Update _pregen_results to reflect the queued loop.
-                    # Use active_stems (state.next_stems was already cleared to [] above).
-                    self._pregen_results = {
-                        "loop_idx": loop_idx + 1,
-                        "prepared_tracks": tracks_to_use,
-                        "loop_duration_samples": duration_samples,
-                        "next_stems": list(state.active_stems),
-                    }
-
-                # Step 11: Wait until we need to generate next loop
-                # Wait for pre-generation to complete (it runs the LLM call for us)
-                if self.running and not state.shutdown_event.is_set():
-                    while self.running:
-                        # Check if mixer transitioned to a new loop and record it
-                        transitioned_loop_idx = self.mixer.pop_transition_event()
-                        if transitioned_loop_idx is not None and transitioned_loop_idx > 0:
-                            # A3: record_loop_transition acquires the blocking sync_lock;
-                            # snapshot under state.lock, then call it OUTSIDE the lock so
-                            # the event loop is never stalled by the Mixer thread.
-                            async with state.lock:
-                                t_stems = list(state.active_stems)
-                                t_set = state.current_set_name
-                                t_reason = state.llm_reasoning
-                            state.record_loop_transition(transitioned_loop_idx, t_stems, t_set, t_reason)
-
-                        # Check if pre-gen is done first
-                        if self._pregen_done.is_set():
-                            print(f"[AsyncLoop-{loop_idx}] Pre-generation complete, using results")
-                            break
-
-                        # Read current boundary from the mixer (under lock so we see
-                        # transitions that may have already fired).
-                        with self.mixer.lock:
-                            live_end = self.mixer.current_loop_end_sample
-                            live_pos = self.mixer.current_sample
-                        current_ahead = (live_end - live_pos) / self.mixer.sample_rate
-                        if loop_idx > 1:
-                            print(
-                                f"[AsyncLoop-{loop_idx}] DEBUG: current_ahead={current_ahead:.2f}s, waiting for pre-gen..."
-                            )
-                        if current_ahead < 0.5:
-                            # Still waiting for pre-gen, but we need to break to avoid missing the loop transition
-                            break
-                        await asyncio.sleep(0.25)
+                await self._step_append_audit(conductor_response, active_stems)
+                tracks_to_use, duration_samples, _current_loop_end_sample = await self._step_commit_to_mixer(
+                    pregen_ready, prepared_tracks, loop_duration_samples
+                )
+                commit = await self._step_commit_state(pregen_ready, tracks_to_use, duration_samples)
+                await self._step_post_commit(commit, tracks_to_use, duration_samples)
+                await self._step_await_pregen()
 
             except asyncio.CancelledError:
                 # Cancellation (stop/shutdown): clean up, then propagate.
@@ -633,6 +290,581 @@ class AsyncFrameworkLoop:
                 continue
 
         self._finish_loop()
+
+    async def _step_wait_for_start(self) -> _StepResult:
+        """P1: wait until generation starts, then advance the loop counter.
+
+        Returns EXIT_LOOP on shutdown, RESTART_ITER if generation stopped before
+        the LLM call, else PROCEED (after incrementing ``self._loop_idx``). The
+        counter only advances on a real PROCEED iteration — it is placed AFTER
+        the early returns (matches original placement; misplacement breaks the
+        ``loop_idx == 1`` and pregen-ready gates in production).
+        """
+        while not state.is_generating and self.running and state.is_running and not state.shutdown_event.is_set():
+            await asyncio.sleep(0.5)
+
+        if not self.running or state.shutdown_event.is_set():
+            return _StepResult.EXIT_LOOP
+
+        async with state.lock:
+            still_generating = state.is_generating
+
+        if not still_generating:
+            print(f"[AsyncLoop-{self._loop_idx or 1}] Stop detected before LLM call, returning to wait")
+            return _StepResult.RESTART_ITER
+
+        async with state.lock:
+            current_gen = state.is_generating
+        print(f"[AsyncLoop-{self._loop_idx}] Exited is_generating wait: is_generating={current_gen}")
+
+        self._loop_idx += 1
+        print(f"\n[AsyncLoop-{self._loop_idx}] Starting loop...")
+        async with state.lock:
+            debug_gen = state.is_generating
+            debug_run = state.is_running
+        print(f"[AsyncLoop-{self._loop_idx}] DEBUG: is_generating={debug_gen}, is_running={debug_run}")
+        return _StepResult.PROCEED
+
+    async def _step_pregen_decision(self) -> tuple[_StepResult, bool, dict | None, list, int, list]:
+        """P2: decide fresh-vs-pregenerated and assemble the pregen outputs.
+
+        Returns (result, pregen_ready, conductor_response, prepared_tracks,
+        loop_duration_samples, next_stems). On RESTART_ITER (will_call_llm is
+        False) the rest are zeroed. The pregen branch fills the 5 pregen vars
+        from ``_pregen_results``; the fresh branch leaves them for P3-P9.
+
+        Note: P2's ``active_stems`` read is dropped here — it is overwritten by
+        ``_step_read_state`` (P3) which reads the identical value (the map's
+        shadowing analysis confirmed both reads see the same state.active_stems
+        with no mutation between them).
+        """
+        pregen_ready = (
+            self._loop_idx > 1
+            and self._pregen_results is not None
+            and self._pregen_results.get("loop_idx") == self._loop_idx
+        )
+
+        if pregen_ready:
+            print(f"[AsyncLoop-{self._loop_idx}] Using pre-generated audio from background task")
+            print(
+                f"[AsyncLoop-{self._loop_idx}] DEBUG: pregen_results keys = "
+                f"{list(self._pregen_results.keys()) if self._pregen_results else None}"
+            )
+            print(
+                f"[AsyncLoop-{self._loop_idx}] DEBUG: mixer.current_sample = "
+                f"{self.mixer.current_sample if self.mixer else None}"
+            )
+            async with state.lock:
+                _pregen_bpm = state.current_bpm
+                _pregen_key = state.current_key
+            conductor_response = {
+                "master_bpm": self._pregen_results.get("master_bpm", _pregen_bpm),
+                "master_key": self._pregen_results.get("master_key", _pregen_key),
+                "name": self._pregen_results.get("set_name", "Unknown Set"),
+                "reasoning": self._pregen_results.get("reasoning", "No reasoning provided."),
+                "actions": self._pregen_results.get("actions", []),
+            }
+            prepared_tracks = self._pregen_results["prepared_tracks"]
+            loop_duration_samples = self._pregen_results["loop_duration_samples"]
+            next_stems = self._pregen_results["next_stems"]
+            return (
+                _StepResult.PROCEED,
+                pregen_ready,
+                conductor_response,
+                prepared_tracks,
+                loop_duration_samples,
+                next_stems,
+            )
+
+        async with state.lock:
+            will_call_llm = state.is_generating
+        if will_call_llm:
+            print(f"[AsyncLoop-{self._loop_idx}] Requesting track state from LLM Conductor...")
+        else:
+            print(f"[AsyncLoop-{self._loop_idx}] Skipping LLM call: is_generating={state.is_generating}")
+            # Instead of proceeding, go back to waiting.
+            return _StepResult.RESTART_ITER, pregen_ready, None, [], 0, []
+
+        return _StepResult.PROCEED, pregen_ready, None, [], 0, []
+
+    async def _step_read_state(self) -> tuple:
+        """P3: reset handling + override apply/clear + conductor-prompt snapshot.
+
+        ONE ``async with state.lock:`` block holds the reset (mixer.clear +
+        stem_cache.clear — sync, allowed) and the override apply/clear, then
+        captures the snapshot. Returns the snapshot vars + available_models.
+        """
+        async with state.lock:
+            if state.should_reset:
+                print("SYSTEM RESET TRIGGERED")
+                self.mixer.clear()
+                self.stem_cache.clear()
+                state.should_reset = False
+
+            # Check for active overrides
+            bpm_override = state.target_bpm_override
+            key_override = state.target_key_override
+
+            if bpm_override:
+                state.current_bpm = bpm_override
+                state.target_bpm_override = None
+            if key_override:
+                state.current_key = key_override
+                state.target_key_override = None
+
+            current_bpm = state.current_bpm
+            current_key = state.current_key
+            active_stems = list(state.active_stems)
+            user_override = state.user_override
+            available_instruments = list(state.available_instruments)
+            stem_history = list(state.stem_history)
+
+            llm_config = {
+                "base_url": state.llm_base_url,
+                "api_key": state.llm_api_key,
+                "model": state.llm_model,
+            }
+
+        # Get available models (Phase 4: shared helper).
+        available_models = load_available_models()
+        return (
+            bpm_override,
+            key_override,
+            current_bpm,
+            current_key,
+            active_stems,
+            user_override,
+            available_instruments,
+            stem_history,
+            llm_config,
+            available_models,
+        )
+
+    async def _step_call_conductor(
+        self,
+        pregen_ready,
+        current_bpm,
+        current_key,
+        active_stems,
+        user_override,
+        available_instruments,
+        stem_history,
+        llm_config,
+        available_models,
+    ) -> dict | None:
+        """P4: call the LLM conductor (fresh path only).
+
+        The nested try/except swallows LLM errors into a fallback response; it
+        is deliberately NOT merged with B1's outer retry try. Returns None on
+        the pregen path (defensive — the skeleton only calls this when
+        ``not pregen_ready``).
+        """
+        if pregen_ready:
+            return None
+        try:
+            conductor_response = await self.conductor.get_next_state_async(
+                current_bpm=current_bpm,
+                current_key=current_key,
+                active_stems=active_stems,
+                user_override=user_override,
+                available_instruments=available_instruments,
+                stem_history=stem_history,
+                llm_config=llm_config,
+                available_models=available_models,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"LLM call failed: {e}")
+            conductor_response = build_fallback_response(current_bpm, current_key, active_stems, e)
+        return conductor_response
+
+    async def _step_parse_actions(self, conductor_response, active_stems) -> list:
+        """P5: dedupe conductor actions + build the last_actions audit log under lock."""
+        deduped_tracks = process_actions(conductor_response.get("actions", []), active_stems)
+
+        # Build action log for debugging/auditing
+        async with state.lock:
+            current_actions_log = []
+            for action in conductor_response.get("actions", []):
+                a_type = action.get("action_type")
+                idx = action.get("stem_index")
+                if a_type == "retain" and idx is not None and 0 <= idx < len(active_stems):
+                    s = active_stems[idx]
+                    prompt = s.get("prompt", "")
+                    prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
+                    current_actions_log.append(f"Retained {prompt_part}")
+                elif a_type == "add":
+                    current_actions_log.append(f"Added {action.get('sub_family', '')}")
+                elif a_type == "remove" and idx is not None and 0 <= idx < len(active_stems):
+                    s = active_stems[idx]
+                    prompt = s.get("prompt", "")
+                    prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
+                    current_actions_log.append(f"Removed {prompt_part}")
+            state.last_actions = current_actions_log
+
+        return deduped_tracks
+
+    async def _step_build_next_stems(
+        self,
+        bpm_override,
+        key_override,
+        conductor_response,
+        current_bpm,
+        current_key,
+        deduped_tracks,
+    ) -> tuple[list, int, str]:
+        """P6: write state.next_stems (bpm/key/set_name/reasoning) under lock; capture locals."""
+        async with state.lock:
+            if bpm_override:
+                state.current_bpm = bpm_override
+            else:
+                state.current_bpm = conductor_response.get("master_bpm", current_bpm)
+
+            if key_override:
+                state.current_key = key_override
+            else:
+                state.current_key = conductor_response.get("master_key", current_key)
+
+            state.current_set_name = conductor_response.get("name", "Unknown Set")
+            state.llm_reasoning = conductor_response.get("reasoning", "No reasoning provided.")
+
+            # Build next_stems with generation info
+            state.next_stems = []
+            for t in deduped_tracks:
+                m_id = t.get("model_id", "foundation-1")
+                prompt = self._build_prompt(t, state.current_key, state.current_bpm)
+                state.next_stems.append(
+                    {
+                        "prompt": prompt,
+                        "model_id": m_id,
+                        "bpm": state.current_bpm,
+                        "key": state.current_key,
+                        "bars": t.get("bars", 8),
+                        "_original_details": t,
+                        "_age": t.get("_age", 0),
+                    }
+                )
+
+            # Capture as locals while we still hold the lock
+            local_next_stems = list(state.next_stems)
+            local_current_bpm = state.current_bpm
+            local_current_key = state.current_key
+
+        return local_next_stems, local_current_bpm, local_current_key
+
+    async def _step_submit_jobs(self, local_next_stems, local_current_bpm, local_current_key) -> list:
+        """P7: submit generation jobs for uncached stems.
+
+        The cache-HIT ``continue`` is LOCAL to this for-loop (already have
+        audio) — it is not an outer-while jump, so it stays inline.
+        """
+        pending_jobs = []  # List of (job_id, original_index)
+
+        for i, t in enumerate(local_next_stems):
+            prompt = t["prompt"]
+            track_bars = t["bars"]
+            m_id = t.get("model_id")
+            orig = t.get("_original_details", {})
+            cache_key = f"{m_id}_{prompt}_{local_current_bpm}_{local_current_key}_{track_bars}"
+
+            # Check cache
+            if cache_key in self.stem_cache:
+                print(f"Cache HIT: '{prompt}'")
+                continue  # Already have audio
+
+            # Submit job
+            job_id = await self._submit_job(
+                session_id=self.session_id,
+                instrument=orig.get("sub_family", "Unknown"),
+                prompt=prompt,
+                major_family=orig.get("major_family"),
+                model_id=m_id,
+                key=local_current_key,
+                bpm=local_current_bpm,
+                timbre_tags=orig.get("timbre_tags", []),
+                bars=track_bars,
+            )
+            pending_jobs.append((job_id, i, cache_key))
+
+        return pending_jobs
+
+    async def _step_await_jobs_fetch(self, pending_jobs, local_next_stems) -> None:
+        """P8: wait for jobs, fetch audio, populate stem_cache + state.cache_stem.
+
+        B7: fetched audio is routed through ``state.cache_stem`` (under lock) so
+        the 16-entry LRU cap is enforced — the background pregen path never
+        calls it (brief-01 risk #4 divergence).
+        """
+        if pending_jobs:
+            job_ids = [job_id for job_id, _, _ in pending_jobs]
+            print(f"[AsyncLoop-{self._loop_idx}] Waiting for {len(job_ids)} jobs to complete...")
+            wait_start = time.time()
+
+            results = await wait_for_multiple_jobs(job_ids, timeout=120.0)
+
+            wait_duration = time.time() - wait_start
+            print(f"[AsyncLoop-{self._loop_idx}] Jobs completed in {wait_duration:.2f}s")
+
+            # Process results
+            for (job_id, orig_idx, cache_key), audio_path in zip(pending_jobs, results.values()):
+                if audio_path:
+                    # Fetch audio from Garage
+                    audio_data = await self._fetch_audio(audio_path)
+                    if audio_data is not None:
+                        self.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
+                        async with state.lock:
+                            state.cache_stem(local_next_stems[orig_idx]["prompt"], audio_data)
+                else:
+                    print(f"Job {job_id} failed or timed out")
+
+    async def _step_tile_audio(
+        self,
+        local_next_stems,
+        local_current_bpm,
+        local_current_key,
+        deduped_tracks,
+    ) -> tuple[list, int]:
+        """P9: tile cached/decoded stem audio out to the loop duration (pure transform)."""
+        prepared_tracks, loop_duration_samples = tile_to_loop(
+            next_stems=local_next_stems,
+            stem_cache=self.stem_cache,
+            bpm=local_current_bpm,
+            key=local_current_key,
+            sample_rate=self.mixer.sample_rate if self.mixer else None,
+            deduped_tracks=deduped_tracks,
+        )
+        return prepared_tracks, loop_duration_samples
+
+    async def _step_append_audit(self, conductor_response, active_stems) -> None:
+        """C1: buffer this loop's conductor decision + actions for the audit trail."""
+        await self._append_loop_audit(conductor_response, active_stems, self._loop_idx)
+
+    async def _step_commit_to_mixer(
+        self,
+        pregen_ready,
+        prepared_tracks,
+        loop_duration_samples,
+    ) -> tuple[list, int, int]:
+        """P10: add tracks to mixer at live position (loop 1) or queue via set_next_loop (>1).
+
+        Loop 1 adds at ``mixer.current_sample`` (not 0) so tracks aren't treated
+        as past; loop>1 queues without touching the current boundary.
+        """
+        if pregen_ready:
+            tracks_to_use = self._pregen_results["prepared_tracks"]
+            duration_samples = self._pregen_results["loop_duration_samples"]
+        else:
+            tracks_to_use = prepared_tracks
+            duration_samples = loop_duration_samples
+
+        if self._loop_idx == 1:
+            # First loop: add tracks at the mixer's CURRENT position (not 0),
+            # otherwise they are immediately treated as past tracks if generation
+            # took longer than we assumed.
+            with self.mixer.lock:
+                start_sample = self.mixer.current_sample
+                for audio_data, stem_idx in tracks_to_use:
+                    self.mixer._add_track_internal(self.mixer._ensure_stereo(audio_data), start_sample, stem_idx)
+                self.mixer.current_loop_end_sample = start_sample + duration_samples
+                self.mixer._current_loop_duration = duration_samples
+            current_loop_end_sample = self.mixer.current_loop_end_sample
+        else:
+            # Subsequent loops: queue audio without touching current loop boundary.
+            # The mixer will fire the transition when it reaches current_loop_end_sample
+            # and then set the new boundary from duration_samples.
+            self.mixer.set_next_loop(
+                tracks_to_use, next_loop_duration_samples=duration_samples, loop_idx=self._loop_idx
+            )
+            with self.mixer.lock:
+                current_loop_end_sample = self.mixer.current_loop_end_sample
+
+        return tracks_to_use, duration_samples, current_loop_end_sample
+
+    async def _step_commit_state(self, pregen_ready, tracks_to_use, duration_samples) -> _CommitResult:
+        """P11: atomic single-lock state commit (~84 LOC, the >50 exception).
+
+        ONE ``async with state.lock:`` block performs the previous_stems/active_stems
+        rotation, stem_history, pregen metadata application, loop-1 recording
+        capture, UI override apply/clear, and the pre-gen snapshot. Returns the
+        handoff bundle consumed by ``_step_post_commit`` (P12).
+        """
+        # PRE-GENERATION: Only start if no pre-gen task is running
+        needs_pregen = self._loop_idx > 1 and (self._pregen_task is None or self._pregen_task.done())
+
+        # Step 10: Update state.
+        # When using pre-gen, we need to use pregen_results['next_stems'] as our active_stems.
+        # For loop_idx == 1 (first loop), record the initial "now playing" state after the
+        # lock releases since record_loop_transition acquires sync_lock.
+        needs_initial_record = False
+        _rec_stems: list = []
+        _rec_set_name = ""
+        _rec_reasoning = ""
+        async with state.lock:
+            if state.active_stems:
+                state.previous_stems = list(state.active_stems)
+                state.stem_history.append(state.active_stems)
+                if len(state.stem_history) > 8:
+                    state.stem_history.pop(0)
+
+            if pregen_ready:
+                state.active_stems = list(self._pregen_results["next_stems"])
+            else:
+                state.active_stems = list(state.next_stems)
+
+            state.next_stems = []
+            state.muted_stems.clear()
+            state.soloed_stems.clear()
+            state.stem_volumes.clear()
+            state.loop_count += 1
+
+            if pregen_ready:
+                # Update BPM, key, etc. from pre-gen results
+                state.current_bpm = self._pregen_results.get("master_bpm", state.current_bpm)
+                state.current_key = self._pregen_results.get("master_key", state.current_key)
+                state.current_set_name = self._pregen_results.get("set_name", "Unknown Set")
+                state.llm_reasoning = self._pregen_results.get("reasoning", "No reasoning provided.")
+
+                # Build action log for pre-generated loop
+                current_actions_log = []
+                for action in self._pregen_results.get("actions", []):
+                    a_type = action.get("action_type")
+                    idx = action.get("stem_index")
+                    if a_type == "retain" and idx is not None and 0 <= idx < len(state.previous_stems):
+                        s = state.previous_stems[idx]
+                        prompt = s.get("prompt", "")
+                        prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
+                        current_actions_log.append(f"Retained {prompt_part}")
+                    elif a_type == "add":
+                        current_actions_log.append(f"Added {action.get('sub_family', '')}")
+                    elif a_type == "remove" and idx is not None and 0 <= idx < len(state.previous_stems):
+                        s = state.previous_stems[idx]
+                        prompt = s.get("prompt", "")
+                        prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
+                        current_actions_log.append(f"Removed {prompt_part}")
+                state.last_actions = current_actions_log
+
+            # Capture for initial recording (loop_idx == 1 has no mixer transition event)
+            if self._loop_idx == 1:
+                needs_initial_record = True
+                _rec_stems = list(state.active_stems)
+                _rec_set_name = state.current_set_name
+                _rec_reasoning = state.llm_reasoning
+
+            # Apply pending UI overrides
+            if state.target_bpm_override:
+                state.current_bpm = state.target_bpm_override
+                state.target_bpm_override = None
+            if state.target_key_override:
+                state.current_key = state.target_key_override
+                state.target_key_override = None
+
+            # Take state snapshot for pre-generation (before releasing lock)
+            state_snapshot = {
+                "current_bpm": state.current_bpm,
+                "current_key": state.current_key,
+                "active_stems": list(state.active_stems),
+                "user_override": state.user_override,
+                "available_instruments": list(state.available_instruments),
+                "stem_history": list(state.stem_history),
+                "llm_config": {
+                    "base_url": state.llm_base_url,
+                    "api_key": state.llm_api_key,
+                    "model": state.llm_model,
+                },
+            }
+
+        return _CommitResult(
+            needs_pregen=needs_pregen,
+            needs_initial_record=needs_initial_record,
+            rec_stems=_rec_stems,
+            rec_set_name=_rec_set_name,
+            rec_reasoning=_rec_reasoning,
+            state_snapshot=state_snapshot,
+        )
+
+    async def _step_post_commit(self, commit: _CommitResult, tracks_to_use, duration_samples) -> None:
+        """P12: record initial loop, prune stem cache, spawn/skip pre-generation.
+
+        ``record_loop_transition`` (takes the blocking sync_lock) runs OUTSIDE
+        ``state.lock`` — it is called just after ``_step_commit_state``'s lock
+        released. The else-branch reads ``state.active_stems`` LIVE (unlocked)
+        per CONCERN-5: do NOT substitute a snapshot value (that would change
+        behavior).
+        """
+        # Record initial "now playing" state for first loop (no mixer transition fires for loop 1)
+        if commit.needs_initial_record:
+            state.record_loop_transition(1, commit.rec_stems, commit.rec_set_name, commit.rec_reasoning)
+
+        # Cache maintenance
+        current_time = time.time()
+        stale_keys = [k for k, v in self.stem_cache.items() if current_time - v["last_used"] > 300]
+        for k in stale_keys:
+            del self.stem_cache[k]
+
+        # PRE-GENERATION: Only start if we don't have a loop already queued
+        # and no pre-gen task is running
+        if commit.needs_pregen:
+            next_loop_idx = self._loop_idx + 1
+            print(f"[AsyncLoop-{self._loop_idx}] No loop queued, starting pre-generation for loop {next_loop_idx}...")
+            self._pregen_done.clear()
+            self._pregen_results = None
+            self._pregen_task = asyncio.create_task(self._pre_generate_next_loop(next_loop_idx, commit.state_snapshot))
+        else:
+            print(f"[AsyncLoop-{self._loop_idx}] Loop {self._loop_idx + 1} already queued, skipping pre-gen")
+            # Signal that pre-gen is "done" - the loop is queued in the mixer
+            self._pregen_done.set()
+            # Update _pregen_results to reflect the queued loop.
+            # Use active_stems (state.next_stems was already cleared to [] above).
+            self._pregen_results = {
+                "loop_idx": self._loop_idx + 1,
+                "prepared_tracks": tracks_to_use,
+                "loop_duration_samples": duration_samples,
+                "next_stems": list(state.active_stems),
+            }
+
+    async def _step_await_pregen(self) -> None:
+        """P13: await pre-generation completion, recording mixer transitions meanwhile.
+
+        The inner ``while self.running:`` is kept verbatim: both breaks are LOCAL
+        (they end this iteration, not the outer loop — the outer while re-checks
+        ``self.running and state.is_running`` after this returns).
+        ``record_loop_transition`` snapshots under ``state.lock`` then runs
+        OUTSIDE it (it acquires the blocking sync_lock).
+        """
+        # Step 11: Wait until we need to generate next loop.
+        # Wait for pre-generation to complete (it runs the LLM call for us)
+        if self.running and not state.shutdown_event.is_set():
+            while self.running:
+                # Check if mixer transitioned to a new loop and record it
+                transitioned_loop_idx = self.mixer.pop_transition_event()
+                if transitioned_loop_idx is not None and transitioned_loop_idx > 0:
+                    # A3: record_loop_transition acquires the blocking sync_lock;
+                    # snapshot under state.lock, then call it OUTSIDE the lock so
+                    # the event loop is never stalled by the Mixer thread.
+                    async with state.lock:
+                        t_stems = list(state.active_stems)
+                        t_set = state.current_set_name
+                        t_reason = state.llm_reasoning
+                    state.record_loop_transition(transitioned_loop_idx, t_stems, t_set, t_reason)
+
+                # Check if pre-gen is done first
+                if self._pregen_done.is_set():
+                    print(f"[AsyncLoop-{self._loop_idx}] Pre-generation complete, using results")
+                    break
+
+                # Read current boundary from the mixer (under lock so we see
+                # transitions that may have already fired).
+                with self.mixer.lock:
+                    live_end = self.mixer.current_loop_end_sample
+                    live_pos = self.mixer.current_sample
+                current_ahead = (live_end - live_pos) / self.mixer.sample_rate
+                if self._loop_idx > 1:
+                    print(
+                        f"[AsyncLoop-{self._loop_idx}] DEBUG: current_ahead={current_ahead:.2f}s, waiting for pre-gen..."
+                    )
+                if current_ahead < 0.5:
+                    # Still waiting for pre-gen, but we need to break to avoid missing the loop transition
+                    break
+                await asyncio.sleep(0.25)
 
     def _build_prompt(self, track: dict, key: str, bpm: int) -> str:
         """Build a generation prompt; delegates to conductor_interaction (Phase 4)."""
