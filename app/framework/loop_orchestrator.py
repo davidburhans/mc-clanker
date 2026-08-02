@@ -49,14 +49,6 @@ from app.framework.job_queue import submit_generator_job
 from app.framework.pregeneration import run_pregeneration
 from app.job_waiter import wait_for_multiple_jobs
 
-# Kept at module top for import-compatibility: frozen bindings (and tests) still
-# import these names from this shim module even though the real fetch call sites
-# now live in app.framework.audio_fetch (brief-02 §D). decode_aac is no longer
-# referenced directly here; create_garage_client_from_env backs the legacy
-# self.garage property below.
-from app.garage_client import create_garage_client_from_env
-from app.aac_encoder import decode_aac  # noqa: F401  (frozen-binding re-export)
-
 
 # Backoff between loop retries after a transient body error (review B1 watchdog).
 # Kept short so the set recovers quickly; overridable by tests / config.
@@ -154,23 +146,16 @@ class AsyncFrameworkLoop:
         self._pregen_results: dict[str, Any] | None = None  # Results from pre-generation
 
     @property
-    def garage(self):
-        """Lazily create and return the Garage client."""
-        if self._garage is None:
-            self._garage = create_garage_client_from_env()
-        return self._garage
-
-    @property
     def _audio(self) -> GarageAudioAdapter:
         """Lazily create the Garage audio-fetch adapter (Phase 2).
 
-        Reads ``self._garage`` (not the ``garage`` property) on purpose: a test
-        may inject a preset client (Gap 3 sets ``loop._garage``), AND client
-        creation must happen inside the adapter's fetch try/except via
-        ``audio_fetch.create_garage_client_from_env``. The ``garage`` property
-        eagerly calls this module's factory name (outside any try/except), which
-        raises KeyError when Garage env is unset — so using it here would break
-        the migrated string-patches and the empty-bytes / exception None paths.
+        Reads ``self._garage`` (the raw, possibly-None instance attr) on purpose,
+        not an eager ``create_garage_client_from_env()`` call: a test may inject a
+        preset client (Gap 3 sets ``loop._garage``), AND client creation must happen
+        inside the adapter's fetch try/except via
+        ``audio_fetch.create_garage_client_from_env`` — calling the factory eagerly
+        here would raise KeyError when Garage env is unset and break the migrated
+        string-patches / the empty-bytes / exception None paths.
         """
         if self._audio_adapter is None:
             self._audio_adapter = GarageAudioAdapter(self._garage)
