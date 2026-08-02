@@ -60,16 +60,20 @@ class AsyncFrameworkLoop(_LoopSteps):
     invariants (single-lock P11 commit, no I/O inside ``state.lock``).
     """
 
-    def __init__(self, session_id: uuid.UUID):
+    def __init__(self, session_id: uuid.UUID, *, conductor: ConductorLLMAsync | None = None):
         """
         Initialize the async framework loop.
 
         Args:
             session_id: UUID of the session this loop handles
+            conductor: optional conductor override (E5 dependency injection).
+                Defaults to a real ``ConductorLLMAsync``; inject another instance
+                (or substitute via ``patch.object(loop, 'conductor')``) for tests.
         """
         self.session_id = session_id
         self.mixer: Mixer | None = None
-        self.conductor = ConductorLLMAsync()
+        # Driving adapter (E5): constructor-injectable instead of hard-coded.
+        self.conductor: ConductorLLMAsync = conductor if conductor is not None else ConductorLLMAsync()
         self._garage = None  # Lazy initialization on first use
         self._audio_adapter: GarageAudioAdapter | None = None  # Lazy GarageAudioAdapter
         self.running = False

@@ -7,8 +7,20 @@ adapter — satisfying the dependency-inversion rule in CLAUDE.md and making the
 framework core testable with fakes.
 
 Design notes:
-- All ports use structural typing (``Protocol``) so the existing concrete
-  classes (``ConductorLLMAsync``, ``Mixer``) satisfy them without inheritance.
+- All ports use structural typing (``Protocol``).
+- ``ConductorPort``: the conductor is now CONSTRUCTOR-INJECTABLE on
+  ``AsyncFrameworkLoop`` (``__init__(session_id, *, conductor=None)``) against
+  the concrete ``ConductorLLMAsync`` — the practical CLAUDE.md DI goal. Full
+  Protocol-typed injection is deferred: ``ConductorLLMAsync.get_next_state_async``
+  declares its list/dict params non-optional but defaults them to ``None`` (a
+  pre-existing type lie, flagged for a separate conductor-typing cleanup), so it
+  does not yet STRUCTURALLY satisfy this Protocol. The Protocol documents the
+  intended contract for that follow-up.
+- ``JobQueuePort`` / ``AudioFetchPort`` / ``AuditSinkPort``: documented contracts.
+  The concrete adapters are wired today through the orchestrator's delegate
+  methods (``_submit_job`` / ``_fetch_audio`` / ``_append_loop_audit``), which
+  are the runtime injection seam tests use via ``patch.object``. Promoting them
+  to constructor-injected port objects is a future enhancement.
 - ``MixerController`` is declared for documentation/typing only in this pass:
   the concrete ``Mixer`` is NOT yet fully behind it (the orchestrator still
   reaches a few private members at P10/P13 — see refactor/plan.md Phase 11,
