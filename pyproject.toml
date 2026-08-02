@@ -76,3 +76,10 @@ target-version = "py310"
 # F (unused, 20), and I (import sorting, 105) carry pre-existing debt and are
 # staged as separate follow-up cleanup — enabling them now would fail on it.
 select = ["UP006", "UP007", "UP045"]
+
+[tool.pyright]
+# Point Pyright (the LSP pi-lens uses) at the venv site-packages so third-party
+# imports (pydantic, sqlalchemy, fastapi, boto3, ...) resolve. extraPaths is the
+# robust choice for uv-managed venvs: it adds packages WITHOUT displacing
+# Pyright's bundled typeshed stdlib (venv/venvPath caused 499 reportUndefinedVariable).
+extraPaths = [".venv/lib/python3.12/site-packages"]
