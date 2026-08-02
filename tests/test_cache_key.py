@@ -55,9 +55,8 @@ def test_no_inline_cache_key_fstring_remains_in_framework() -> None:
         for lineno, line in enumerate(py.read_text().splitlines(), 1):
             if _INLINE_CACHE_KEY_FSTRING.search(line):
                 offenders.append(f"{py.name}:{lineno}: {line.strip()}")
-    assert not offenders, (
-        "Inline cache_key f-string found — route through make_cache_key() instead:\n"
-        + "\n".join(offenders)
+    assert not offenders, "Inline cache_key f-string found — route through make_cache_key() instead:\n" + "\n".join(
+        offenders
     )
 
 

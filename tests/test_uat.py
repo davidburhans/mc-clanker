@@ -310,6 +310,7 @@ class TestUATAdversarialFixes:
         """UAT-5.2: Input validation has reasonable bounds (SEC-1)."""
         from app.routes.schemas import GenerationConfig, JobSubmission
         from pydantic import ValidationError
+        from uuid import UUID
 
         # GenerationConfig.cfg_scale has le=20.0
         try:
@@ -325,7 +326,7 @@ class TestUATAdversarialFixes:
             pass
         # JobSubmission.bars has le=32
         try:
-            JobSubmission(session_id="550e8400-e29b-41d4-a716-446655440000", instrument="Bass", prompt="test", bars=999)
+            JobSubmission(session_id=UUID("550e8400-e29b-41d4-a716-446655440000"), instrument="Bass", prompt="test", bars=999)
             assert False, "Should reject bars > 32"
         except ValidationError:
             pass

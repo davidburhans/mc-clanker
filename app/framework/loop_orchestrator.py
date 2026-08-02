@@ -43,12 +43,14 @@ from app.framework.conductor_interaction import (
 from app.framework.framework_conductor_async import ConductorLLMAsync
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_state import state
+from app.garage_client import GarageClient
 from app.framework.job_queue import submit_generator_job
 from app.framework.loop_steps import (
     LOOP_RETRY_BACKOFF_SECONDS,
     _LoopSteps,
     _StepResult,
 )
+from app.framework.ports import ConductorPort
 from app.framework.pregeneration import run_pregeneration
 
 
@@ -60,21 +62,22 @@ class AsyncFrameworkLoop(_LoopSteps):
     invariants (single-lock P11 commit, no I/O inside ``state.lock``).
     """
 
-    def __init__(self, session_id: uuid.UUID, *, conductor: ConductorLLMAsync | None = None):
+    def __init__(self, session_id: uuid.UUID, *, conductor: ConductorPort | None = None):
         """
         Initialize the async framework loop.
 
         Args:
             session_id: UUID of the session this loop handles
-            conductor: optional conductor override (E5 dependency injection).
-                Defaults to a real ``ConductorLLMAsync``; inject another instance
-                (or substitute via ``patch.object(loop, 'conductor')``) for tests.
+            conductor: optional driving-port override (E5 dependency injection).
+                Defaults to a real ``ConductorLLMAsync`` (which structurally
+                satisfies ``ConductorPort``); inject any ``ConductorPort`` fake
+                for in-memory testing.
         """
         self.session_id = session_id
         self.mixer: Mixer | None = None
-        # Driving adapter (E5): constructor-injectable instead of hard-coded.
-        self.conductor: ConductorLLMAsync = conductor if conductor is not None else ConductorLLMAsync()
-        self._garage = None  # Lazy initialization on first use
+        # Driving port (E5): injectable for fakes; defaults to the real conductor.
+        self.conductor: ConductorPort = conductor if conductor is not None else ConductorLLMAsync()
+        self._garage: GarageClient | None = None  # Lazy GarageClient (injected or env-built)
         self._audio_adapter: GarageAudioAdapter | None = None  # Lazy GarageAudioAdapter
         self.running = False
         self.loop_task: asyncio.Task | None = None

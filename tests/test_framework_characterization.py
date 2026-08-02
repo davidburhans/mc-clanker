@@ -505,7 +505,7 @@ async def test_fetch_audio_empty_bytes_and_exception_return_none():
     # Case A: get_object returns b"" → falsy → None (no decode attempted).
     garage_empty = MagicMock()
     garage_empty.get_object = AsyncMock(return_value=b"")
-    loop._garage = garage_empty
+    loop._garage = garage_empty  # type: ignore[assignment]  # injecting a fake garage client
     assert await loop._fetch_audio("audio/x.aac") is None
 
     # Case B: get_object raises → swallowed → None (no propagation).
@@ -516,7 +516,7 @@ async def test_fetch_audio_empty_bytes_and_exception_return_none():
     loop._audio_adapter = None
     garage_err = MagicMock()
     garage_err.get_object = AsyncMock(side_effect=RuntimeError("s3 down"))
-    loop._garage = garage_err
+    loop._garage = garage_err  # type: ignore[assignment]  # injecting a fake garage client
     assert await loop._fetch_audio("audio/y.aac") is None
     # Prove Case B actually exercised the exception client (not Case A's).
     garage_err.get_object.assert_awaited()

@@ -46,8 +46,8 @@ if TYPE_CHECKING:
 
     import numpy as np
 
-    from app.framework.framework_conductor_async import ConductorLLMAsync
     from app.framework.framework_mixer import Mixer
+    from app.framework.ports import ConductorPort
 
 # Backoff between loop retries after a transient body error (review B1 watchdog).
 # Kept short so the set recovers quickly; overridable by tests / config.
@@ -119,7 +119,7 @@ class _LoopSteps:
     running: bool
     mixer: Mixer | None
     session_id: uuid.UUID
-    conductor: ConductorLLMAsync
+    conductor: ConductorPort
     stem_cache: dict[str, dict]
     _loop_idx: int  # set by _run_loop / _step_wait_for_start on the orchestrator
     _pregen_results: dict[str, Any] | None
@@ -344,9 +344,7 @@ class _LoopSteps:
 
         # Build action log for debugging/auditing (shared shaper, see format_action_log)
         async with state.lock:
-            state.last_actions = format_action_log(
-                conductor_response.get("actions", []), active_stems
-            )
+            state.last_actions = format_action_log(conductor_response.get("actions", []), active_stems)
 
         return deduped_tracks
 
@@ -572,9 +570,7 @@ class _LoopSteps:
                 state.llm_reasoning = self._pregen_results.get("reasoning", "No reasoning provided.")
 
                 # Build action log for pre-generated loop (shared shaper)
-                state.last_actions = format_action_log(
-                    self._pregen_results.get("actions", []), state.previous_stems
-                )
+                state.last_actions = format_action_log(self._pregen_results.get("actions", []), state.previous_stems)
 
             # Capture for initial recording (loop_idx == 1 has no mixer transition event)
             if self._loop_idx == 1:

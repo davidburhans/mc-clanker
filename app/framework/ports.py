@@ -8,14 +8,11 @@ framework core testable with fakes.
 
 Design notes:
 - All ports use structural typing (``Protocol``).
-- ``ConductorPort``: the conductor is now CONSTRUCTOR-INJECTABLE on
-  ``AsyncFrameworkLoop`` (``__init__(session_id, *, conductor=None)``) against
-  the concrete ``ConductorLLMAsync`` — the practical CLAUDE.md DI goal. Full
-  Protocol-typed injection is deferred: ``ConductorLLMAsync.get_next_state_async``
-  declares its list/dict params non-optional but defaults them to ``None`` (a
-  pre-existing type lie, flagged for a separate conductor-typing cleanup), so it
-  does not yet STRUCTURALLY satisfy this Protocol. The Protocol documents the
-  intended contract for that follow-up.
+- ``ConductorPort``: WIRED. ``AsyncFrameworkLoop.__init__(session_id, *,
+  conductor=None)`` injects against this Protocol (default ``ConductorLLMAsync``,
+  which STRUCTURALLY satisfies it after its ``param = None`` type lies were
+  corrected). The framework core depends on the abstraction, not the concrete
+  class — satisfying the CLAUDE.md dependency-inversion rule.
 - ``JobQueuePort`` / ``AudioFetchPort`` / ``AuditSinkPort``: documented contracts.
   The concrete adapters are wired today through the orchestrator's delegate
   methods (``_submit_job`` / ``_fetch_audio`` / ``_append_loop_audit``), which
@@ -42,15 +39,15 @@ class ConductorPort(Protocol):
 
     async def get_next_state_async(
         self,
-        *,
         current_bpm: int,
         current_key: str,
         active_stems: list[dict[str, Any]],
-        user_override: str | None,
-        available_instruments: list[str],
-        stem_history: list[list[dict[str, Any]]],
-        llm_config: dict[str, Any],
-        available_models: list[dict[str, Any]],
+        user_override: str | None = "",
+        available_instruments: list[str] | None = None,
+        stem_history: list[list[dict[str, Any]]] | None = None,
+        llm_config: dict[str, Any] | None = None,
+        available_models: list[dict[str, Any]] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the conductor's decision (master_bpm/key/actions/reasoning/...)."""
         ...

@@ -10,13 +10,10 @@ constructor/parameter, not global/import"). These pin:
 - the pre-existing ``patch.object(loop, 'conductor')`` runtime substitution
   still works (backward compatibility for the existing test harness).
 
-Note on the ``ConductorPort`` Protocol in ``app/framework/ports.py``: it
-documents the driving-port contract, but the concrete ``ConductorLLMAsync`` does
-not yet *structurally* satisfy it (its ``get_next_state_async`` params are typed
-``list[str]``/``dict`` but defaulted to ``None`` — a pre-existing type lie flagged
-for a separate cleanup). So injection today is typed against the concrete class;
-full Protocol-typed injection is a follow-up once the conductor annotations are
-honest.
+Note on the ``ConductorPort`` Protocol in ``app/framework/ports.py``: the default
+``ConductorLLMAsync`` now STRUCTURALLY satisfies it (its ``param = None`` type
+lies were corrected), so injection is typed against the Protocol — a fake
+implementing ``ConductorPort`` can be passed directly. These tests pin that.
 """
 
 from __future__ import annotations
@@ -27,6 +24,13 @@ from uuid import uuid4
 
 from app.framework.framework_conductor_async import ConductorLLMAsync
 from app.framework.loop_orchestrator import AsyncFrameworkLoop
+from app.framework.ports import ConductorPort
+
+
+def test_default_conductor_satisfies_conductor_port() -> None:
+    """The default conductor structurally satisfies the ConductorPort Protocol."""
+    loop = AsyncFrameworkLoop(uuid4())
+    assert isinstance(loop.conductor, ConductorPort)
 
 
 def test_loop_constructs_with_default_conductor() -> None:

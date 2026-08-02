@@ -34,8 +34,13 @@ def load_available_models() -> list[dict[str, Any]]:
         return []
     if not os.path.exists(_MODELS_CONFIG_PATH):
         return []
-    with open(_MODELS_CONFIG_PATH) as f:
-        cfg = json.load(f)
+    try:
+        with open(_MODELS_CONFIG_PATH) as f:
+            cfg = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        # Unreadable / malformed config degrades to "no models", matching the
+        # missing-file branch above (the LLM still runs, just without descriptions).
+        return []
     models: list[dict[str, Any]] = []
     for model_id in generator.models:
         m_info = cfg.get("models", {}).get(model_id, {})

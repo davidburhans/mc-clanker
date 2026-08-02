@@ -43,7 +43,7 @@ def parse_llm_json_response(content: str) -> dict[str, Any]:
     first_brace = content.find("{")
     last_brace = content.rfind("}")
     if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        candidate = content[first_brace:last_brace + 1]
+        candidate = content[first_brace : last_brace + 1]
         try:
             return json.loads(candidate)
         except json.JSONDecodeError:
@@ -61,12 +61,7 @@ class ConductorLLMAsync:
     making it suitable for use in the async framework loop.
     """
 
-    def __init__(
-        self,
-        api_base: str = None,
-        model_name: str = "local-model",
-        api_key: str = "not-needed"
-    ):
+    def __init__(self, api_base: str | None = None, model_name: str = "local-model", api_key: str = "not-needed"):
         self.api_base = api_base or os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
         self.model_name = model_name
         self.api_key = api_key
@@ -126,31 +121,28 @@ STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Pr
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
 """
 
-    def _get_async_client(self, config: dict[str, str] = None) -> AsyncOpenAI:
+    def _get_async_client(self, config: dict[str, str] | None = None) -> AsyncOpenAI:
         """Get or create async client based on config."""
         if config:
-            config_key = (config.get('base_url'), config.get('api_key'), config.get('model'))
+            config_key = (config.get("base_url"), config.get("api_key"), config.get("model"))
             if self._cached_config != config_key:
                 self._async_client = AsyncOpenAI(
-                    base_url=config.get('base_url', self.api_base),
-                    api_key=config.get('api_key', self.api_key)
+                    base_url=config.get("base_url", self.api_base), api_key=config.get("api_key", self.api_key)
                 )
                 self._cached_config = config_key
+            assert self._async_client is not None  # set above or on a prior matching-config call
             return self._async_client
 
         if self._async_client is None:
-            self._async_client = AsyncOpenAI(
-                base_url=self.api_base,
-                api_key=self.api_key
-            )
+            self._async_client = AsyncOpenAI(base_url=self.api_base, api_key=self.api_key)
         return self._async_client
 
     async def call_async(
         self,
         prompt: str,
-        llm_config: dict[str, str] = None,
+        llm_config: dict[str, str] | None = None,
         max_retries: int = 3,
-        extra_body: dict[str, Any] = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Make an async call to the LLM with JSON parse retry.
@@ -169,7 +161,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             ValueError: If all retries fail to produce parseable JSON
         """
         client = self._get_async_client(llm_config)
-        model_name = (llm_config or {}).get('model', self.model_name)
+        model_name = (llm_config or {}).get("model", self.model_name)
 
         last_error: str = ""
 
@@ -179,11 +171,11 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                     model=model_name,
                     messages=[
                         {"role": "system", "content": self.system_instruction},
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": prompt},
                     ],
                     temperature=0.7,
                     timeout=60.0,
-                    response_format=get_response_format_schema(),
+                    response_format=get_response_format_schema(),  # type: ignore[arg-type]  # openai accepts the json_schema dict at runtime; its overload stubs are stricter
                     extra_body=extra_body,
                 )
 
@@ -207,12 +199,12 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         current_bpm: int,
         current_key: str,
         active_stems: list[dict],
-        user_override: str = "",
-        available_instruments: list[str] = None,
-        stem_history: list[list[dict]] = None,
-        llm_config: dict[str, str] = None,
-        available_models: list[dict] = None,
-        extra_body: dict[str, Any] = None,
+        user_override: str | None = "",
+        available_instruments: list[str] | None = None,
+        stem_history: list[list[dict]] | None = None,
+        llm_config: dict[str, str] | None = None,
+        available_models: list[dict] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Async version of get_next_state.
@@ -227,14 +219,14 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         # Build compact history
         simple_history = []
         for loop_stems in stem_history[-5:]:
-            prompts = [s.get('prompt', '').split(',')[0] for s in loop_stems]
+            prompts = [s.get("prompt", "").split(",")[0] for s in loop_stems]
             simple_history.append("+".join(prompts))
         history_str = " | ".join(simple_history)
 
         # Build current stems with indices
         simple_stems = []
         for idx, s in enumerate(active_stems):
-            age = s.get('_age', 0)
+            age = s.get("_age", 0)
             simple_stems.append(f"Index {idx} (age {age}): {s.get('prompt', 'Unknown')}")
 
         models_str = "None provided"
@@ -253,6 +245,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         )
 
         from app.lib.harmonic import HarmonicHelper
+
         neighbors = HarmonicHelper.get_harmonic_neighbors(current_key)
         neighbors_str = f"{neighbors[0]}, {neighbors[1]}, or {neighbors[2]}"
 
@@ -265,7 +258,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             instruments=", ".join(available_instruments),
             models=models_str,
             stem_count=stem_count,
-            density_directive=density_directive
+            density_directive=density_directive,
         )
 
         if user_override:
@@ -288,10 +281,10 @@ class ConductorPromptBuilder:
         current_bpm: int,
         current_key: str,
         active_stems: list[dict],
-        user_override: str = "",
-        available_instruments: list[str] = None,
-        stem_history: list[list[dict]] = None,
-        available_models: list[dict] = None
+        user_override: str | None = "",
+        available_instruments: list[str] | None = None,
+        stem_history: list[list[dict]] | None = None,
+        available_models: list[dict] | None = None,
     ) -> str:
         """Build a Conductor prompt from current state."""
         if available_instruments is None:
@@ -302,14 +295,14 @@ class ConductorPromptBuilder:
         # Compact history
         simple_history = []
         for loop_stems in stem_history[-5:]:
-            prompts = [s.get('prompt', '').split(',')[0] for s in loop_stems]
+            prompts = [s.get("prompt", "").split(",")[0] for s in loop_stems]
             simple_history.append("+".join(prompts))
         history_str = " | ".join(simple_history)
 
         # Current stems
         simple_stems = []
         for idx, s in enumerate(active_stems):
-            age = s.get('_age', 0)
+            age = s.get("_age", 0)
             simple_stems.append(f"Index {idx} (age {age}): {s.get('prompt', 'Unknown')}")
 
         models_str = "None provided"
@@ -357,9 +350,10 @@ STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Pr
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now."""
 
         from app.lib.harmonic import HarmonicHelper
+
         neighbors = HarmonicHelper.get_harmonic_neighbors(current_key)
         neighbors_str = f"{neighbors[0]}, {neighbors[1]}, or {neighbors[2]}"
- 
+
         prompt = template.format(
             bpm=current_bpm,
             key=current_key,
@@ -369,7 +363,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             instruments=", ".join(available_instruments),
             models=models_str,
             stem_count=stem_count,
-            density_directive=density_directive
+            density_directive=density_directive,
         )
 
         if user_override:
@@ -397,32 +391,30 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             available_instruments = state.available_instruments
             stem_history = state.stem_history
 
-            llm_config = {
-                'base_url': state.llm_base_url,
-                'api_key': state.llm_api_key,
-                'model': state.llm_model
-            }
+            llm_config = {"base_url": state.llm_base_url, "api_key": state.llm_api_key, "model": state.llm_model}
 
         # Get available models from generator if available
         available_models = []
-        generator = getattr(state, 'generator', None)
-        if generator and hasattr(generator, 'models'):
+        generator = getattr(state, "generator", None)
+        if generator and hasattr(generator, "models"):
             import json as json_module
             import os
+
             _config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "models_config.json")
             desc = "No description"
             if os.path.exists(_config_path):
-                with open(_config_path) as f:
-                    cfg = json_module.load(f)
-                    for model_id in generator.models:
+                try:
+                    with open(_config_path) as f:
+                        cfg = json_module.load(f)
+                except (OSError, json_module.JSONDecodeError):
+                    cfg = {}  # unreadable/malformed config -> no per-model metadata
+                for model_id in generator.models:
                         m_info = cfg.get("models", {}).get(model_id, {})
                         desc = m_info.get("description", desc)
                         supported_families = m_info.get("supported_families", ["Any"])
-                        available_models.append({
-                            "id": model_id,
-                            "description": desc,
-                            "supported_families": supported_families
-                        })
+                        available_models.append(
+                            {"id": model_id, "description": desc, "supported_families": supported_families}
+                        )
 
         return ConductorPromptBuilder.build_prompt(
             current_bpm=current_bpm,
@@ -431,5 +423,5 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             user_override=user_override,
             available_instruments=available_instruments,
             stem_history=stem_history,
-            available_models=available_models
+            available_models=available_models,
         ), llm_config

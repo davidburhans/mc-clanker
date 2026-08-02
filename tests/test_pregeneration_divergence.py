@@ -91,9 +91,7 @@ async def test_foreground_loop_routes_through_cache_stem() -> None:
     job_id = uuid4()
     audio = np.ones((1000, 2), dtype=np.float32)
     # Stem the foreground P8 path reads ``local_next_stems[orig_idx]["prompt"]`` from.
-    local_next_stems = [
-        {"prompt": "Synth Pad, A minor, 128", "bars": 4, "model_id": "foundation-1"}
-    ]
+    local_next_stems = [{"prompt": "Synth Pad, A minor, 128", "bars": 4, "model_id": "foundation-1"}]
     pending_jobs = [(job_id, 0, "foundation-1_Synth Pad, A minor, 128_128_A minor_4")]
 
     with (
