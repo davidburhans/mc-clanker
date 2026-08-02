@@ -69,3 +69,10 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+
+[tool.ruff.lint]
+# Phase 10 (E6): enforce the typing-modernization rules so the List/Dict/Optional
+# -> builtin/PEP-604 conversion (Phase 9) cannot regress. E (pycodestyle, 81),
+# F (unused, 20), and I (import sorting, 105) carry pre-existing debt and are
+# staged as separate follow-up cleanup — enabling them now would fail on it.
+select = ["UP006", "UP007", "UP045"]

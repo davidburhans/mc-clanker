@@ -10,7 +10,6 @@ because the _callback runs in a normal daemon thread, never in async context.
 import logging
 import threading
 import time
-from typing import Optional
 
 import numpy as np
 

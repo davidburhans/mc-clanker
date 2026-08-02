@@ -5,7 +5,6 @@ by constructing a minimal FastAPI app with just the ws_router mounted.
 """
 
 import pytest
-import json
 import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

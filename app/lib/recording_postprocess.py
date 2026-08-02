@@ -10,10 +10,8 @@ Called after a show stops to:
 """
 
 import os
-import json
-import time
 import logging
-from typing import List, Dict, Optional, Any
+from typing import Any
 
 from app.lib.recording_metadata import (
     build_chapter_markers,
@@ -28,17 +26,17 @@ log = logging.getLogger(__name__)
 
 
 def compute_loop_timestamps(
-    actions: List[Dict],
-    interactions: List[Dict],
-    show_data: Dict,
-) -> Dict[int, float]:
+    actions: list[dict],
+    interactions: list[dict],
+    show_data: dict,
+) -> dict[int, float]:
     """
     Compute per-loop start timestamps in seconds from show start.
 
     Uses relative_time_ms from actions/interactions to build a timeline.
     Returns dict mapping loop_index -> seconds_from_start.
     """
-    timestamps: Dict[int, float] = {}
+    timestamps: dict[int, float] = {}
 
     for interaction in interactions:
         li = interaction.get("loop_index", 0)
@@ -67,17 +65,17 @@ def compute_loop_timestamps(
 
 
 def build_loop_history_from_db(
-    actions: List[Dict],
-    interactions: List[Dict],
-    config_snapshot: Optional[Dict] = None,
-) -> List[Dict]:
+    actions: list[dict],
+    interactions: list[dict],
+    config_snapshot: dict | None = None,
+) -> list[dict]:
     """
     Reconstruct loop_history format expected by build_chapter_markers
     from DB actions and interactions.
 
     Each loop entry: {loop_index, timestamp, set_name, reasoning, stems}
     """
-    loops: Dict[int, Dict] = {}
+    loops: dict[int, dict] = {}
 
     for interaction in interactions:
         li = interaction.get("loop_index", 0)
@@ -118,10 +116,7 @@ def build_loop_history_from_db(
                 loops[li]["stems"] = [stem_details]
             else:
                 # Merge by index
-                existing_indices = {
-                    s.get("index", i) for i, s in enumerate(loops[li]["stems"])
-                    if isinstance(s, dict)
-                }
+                existing_indices = {s.get("index", i) for i, s in enumerate(loops[li]["stems"]) if isinstance(s, dict)}
                 idx = stem_details.get("index", len(loops[li]["stems"]))
                 if idx not in existing_indices:
                     loops[li]["stems"].append(stem_details)
@@ -132,10 +127,10 @@ def build_loop_history_from_db(
 async def postprocess_show_recording(
     show_id: int,
     audio_file_path: str,
-    show_data: Dict,
-    actions: List[Dict],
-    interactions: List[Dict],
-) -> Dict[str, Any]:
+    show_data: dict,
+    actions: list[dict],
+    interactions: list[dict],
+) -> dict[str, Any]:
     """
     Run post-show recording enrichment after flush_recording_buffers.
 
@@ -236,9 +231,9 @@ async def postprocess_show_recording(
 
 def split_show_chapters(
     audio_file_path: str,
-    chapters: List[Dict],
+    chapters: list[dict],
     show_title: str = "show",
-) -> List[Dict]:
+) -> list[dict]:
     """
     Split a show's WAV file into per-chapter segments.
     Called on-demand by the split endpoint (not during postprocess).
@@ -259,22 +254,32 @@ def split_show_chapters(
 
 def export_show_format(
     audio_file_path: str,
-    chapters: List[Dict],
-    show_data: Dict,
+    chapters: list[dict],
+    show_data: dict,
     output_dir: str,
     fmt: str = "mp3",
-) -> Optional[str]:
+) -> str | None:
     """
     Export the show audio to MP3 or FLAC with ID3/ID3v2 tags and chapter markers.
 
     Requires mutagen for tagging. Returns path to exported file, or None on failure.
     """
     try:
-        from mutagen.id3 import (
-            ID3, TIT2, TPE1, TALB, TCON, TXXX, COMM, CTOC, CHAP, WXXX, TYER
+        from mutagen.id3 import (  # noqa: F401  availability probe (optional mutagen)
+            ID3,
+            TIT2,
+            TPE1,
+            TALB,
+            TCON,
+            TXXX,
+            COMM,
+            CTOC,
+            CHAP,
+            WXXX,
+            TYER,
         )
-        from mutagen.mp3 import MP3
-        from mutagen.flac import FLAC
+        from mutagen.mp3 import MP3  # noqa: F401  availability probe
+        from mutagen.flac import FLAC  # noqa: F401  availability probe
     except ImportError:
         log.error("mutagen not installed, cannot export %s with tags", fmt)
         return None
@@ -308,10 +313,10 @@ def export_show_format(
     try:
         if fmt == "wav":
             # WAV with ID3 tags
-            from mutagen.wavpack import WavPack
             # Actually, mutagen supports WAV via the generic AudioFile or ID3 directly
             # Let's use the WAV-compatible approach: write ID3 to .wav via mutagen
             from mutagen import File as MutagenFile
+
             try:
                 audio = MutagenFile(temp_wav, easy=True)
             except Exception:
@@ -319,7 +324,6 @@ def export_show_format(
 
             if audio is None:
                 # Create ID3 tags for WAV
-                from mutagen.wavpack import WavPack
                 # WAV doesn't natively support ID3 chunks well in mutagen,
                 # so we just copy and return without embedded tags for WAV
                 shutil.move(temp_wav, output_path)
@@ -341,8 +345,7 @@ def export_show_format(
 
         proc = subprocess.run(cmd, capture_output=True, timeout=120)
         if proc.returncode != 0:
-            log.warning("ffmpeg failed (%s), falling back to WAV: %s",
-                       proc.returncode, proc.stderr.decode()[:200])
+            log.warning("ffmpeg failed (%s), falling back to WAV: %s", proc.returncode, proc.stderr.decode()[:200])
             # Fall back to WAV
             output_path_wav = output_path.rsplit(".", 1)[0] + ".wav"
             shutil.move(temp_wav, output_path_wav)
@@ -378,14 +381,12 @@ def _tag_mp3(
     mp3_path: str,
     show_title: str,
     show_id: int,
-    config_snapshot: Dict,
-    chapters: List[Dict],
+    config_snapshot: dict,
+    chapters: list[dict],
 ):
     """Add ID3v2 tags with chapters to an MP3 file."""
     from mutagen.mp3 import MP3
-    from mutagen.id3 import (
-        ID3, TIT2, TPE1, TALB, COMM, TCON, TXXX, CTOC, CHAP, TYER, TDAT
-    )
+    from mutagen.id3 import TIT2, TPE1, TALB, COMM, TCON, TXXX, CTOC, CHAP
 
     try:
         audio = MP3(mp3_path)
@@ -407,34 +408,36 @@ def _tag_mp3(
     if config_snapshot:
         bpm = config_snapshot.get("bpm", 0)
         if bpm:
-            audio.tags.add(TXXX(
-                encoding=3, desc="BPM", text=[str(bpm)]
-            ))
+            audio.tags.add(TXXX(encoding=3, desc="BPM", text=[str(bpm)]))
 
     # Add chapter markers (ID3v2 chapters)
     if chapters:
         # Create CTOC (table of contents)
         chapter_ids = [f"ch{i}" for i in range(len(chapters))]
         try:
-            audio.tags.add(CTOC(
-                element_id=b"chapters",
-                ordered=True,
-                top_level=True,
-                chapter_ids=chapter_ids,
-            ))
+            audio.tags.add(
+                CTOC(
+                    element_id=b"chapters",
+                    ordered=True,
+                    top_level=True,
+                    chapter_ids=chapter_ids,
+                )
+            )
         except Exception:
             pass
 
         for i, chapter in enumerate(chapters):
             try:
-                title = chapter.get("title", f"Chapter {i+1}")
+                title = chapter.get("title", f"Chapter {i + 1}")
                 start_ms = int(chapter.get("timestamp", 0) * 1000)
-                audio.tags.add(CHAP(
-                    chapter_id=f"ch{i}",
-                    start=start_ms,
-                    end=start_ms + 1000,
-                    title=title,
-                ))
+                audio.tags.add(
+                    CHAP(
+                        chapter_id=f"ch{i}",
+                        start=start_ms,
+                        end=start_ms + 1000,
+                        title=title,
+                    )
+                )
             except Exception:
                 pass
 
@@ -445,8 +448,8 @@ def _tag_flac(
     flac_path: str,
     show_title: str,
     show_id: int,
-    config_snapshot: Dict,
-    chapters: List[Dict],
+    config_snapshot: dict,
+    chapters: list[dict],
 ):
     """Add Vorbis comments with chapter markers to a FLAC file."""
     from mutagen.flac import FLAC

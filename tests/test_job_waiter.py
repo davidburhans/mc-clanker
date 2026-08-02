@@ -7,8 +7,6 @@ directly to asyncpg.create_pool() without converting it to a string.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
-import uuid
 
 
 def test_db_engine_url_is_sqlalchemy_url_object():
@@ -25,8 +23,9 @@ def test_db_engine_url_is_sqlalchemy_url_object():
     db_manager = DatabaseManager.get_instance()
 
     # db_manager.engine.url is a SQLAlchemy URL object
-    assert isinstance(db_manager.engine.url, sqlalchemy.engine.url.URL), \
+    assert isinstance(db_manager.engine.url, sqlalchemy.engine.url.URL), (
         f"Expected URL object, got {type(db_manager.engine.url)}"
+    )
 
     # And it cannot be passed directly to asyncpg - it must be converted to string
     # This is the bug that causes job_waiter to fail
@@ -40,7 +39,7 @@ def test_asyncpg_create_pool_rejects_url_object():
     asyncpg.create_pool() will fail.
     """
     try:
-        import asyncpg
+        import asyncpg  # noqa: F401  availability probe
     except ImportError:
         pytest.skip("asyncpg not installed")
 

@@ -5,7 +5,6 @@ Tests the IcecastStreamer class and its integration with broadcast_audio().
 
 import os
 import queue
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest

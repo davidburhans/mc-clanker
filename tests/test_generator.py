@@ -1,7 +1,7 @@
 import json
 import pytest
 import unittest
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import patch, MagicMock
 
 
 # Lazy import - defer until after pytest collection so we can handle torch failures gracefully

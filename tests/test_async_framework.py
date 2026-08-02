@@ -6,7 +6,7 @@ in a daemon thread, not the async framework.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 import asyncio
 import uuid
 
@@ -20,7 +20,6 @@ def test_app_uses_async_framework_not_sync():
     2. It starts the sync framework in a threading.Thread
     """
     # Check the import statement
-    import app.app_ui as app_ui_module
 
     # The sync import should NOT exist after the fix
     # Check if sync framework is imported

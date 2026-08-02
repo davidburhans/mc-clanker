@@ -15,6 +15,19 @@ import threading
 import time
 from collections import OrderedDict
 
+from app.framework.state_slices import (
+    GenerationControl,
+    InstrumentCatalog,
+    LLMConfig,
+    LoopCoordination,
+    MusicalParams,
+    PlaybackState,
+    RecordingState,
+    SessionConfig,
+    StemCacheView,
+    StemLevels,
+)
+
 log = logging.getLogger(__name__)
 
 DEFAULT_INSTRUMENTS = {
@@ -94,8 +107,8 @@ class GlobalState:
 
         self.llm_reasoning = "Waiting for initial prompt..."
         self.user_override = ""
-        self.target_bpm_override = None
-        self.target_key_override = None
+        self.target_bpm_override: int | None = None
+        self.target_key_override: str | None = None
         self.should_reset = False
 
         self.llm_base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
@@ -110,18 +123,18 @@ class GlobalState:
         self.is_running = True
 
         # Per-stem mixer state
-        self.stem_volumes = {}   # index → float gain (0.0–2.0)
+        self.stem_volumes = {}  # index → float gain (0.0–2.0)
         self.muted_stems = set()
         self.soloed_stems = set()
         self.loop_count = 0
-        self.last_actions = []   # List of descriptive action strings
+        self.last_actions = []  # List of descriptive action strings
 
         # Loop synchronization — what is ACTUALLY playing vs what was decided
-        self.currently_playing_loop_index = 0    # Authoritative "now audible" index
-        self.currently_playing_stems = []         # Stems currently audible
-        self.currently_playing_set_name = ""       # Set name currently audible
-        self.currently_playing_reasoning = ""      # Reasoning currently audible
-        self.loop_history = []                   # Rolling buffer of past loops
+        self.currently_playing_loop_index = 0  # Authoritative "now audible" index
+        self.currently_playing_stems = []  # Stems currently audible
+        self.currently_playing_set_name = ""  # Set name currently audible
+        self.currently_playing_reasoning = ""  # Reasoning currently audible
+        self.loop_history = []  # Rolling buffer of past loops
 
         # Loop transition coordination.
         # NOTE: a vestigial `next_loop_ready` threading.Event + `next_loop_tracks`
@@ -175,10 +188,9 @@ class GlobalState:
         self.dj_password = os.environ.get("DJ_PASSWORD", "")
         self.audience_password = os.environ.get("AUDIENCE_PASSWORD", "")
 
-        # Model management state
-        self.model_states = {}
-        self.model_errors = {}
-        self.download_progress = {}
+        # Model management — registry state lives on GeneratorRegistry
+        # (framework_generator.py); the vestigial model_states / model_errors /
+        # download_progress dicts here were never read (dead — brief-03 ssA).
         self.generator = None
 
         # Icecast
@@ -190,6 +202,52 @@ class GlobalState:
 
         # Framework task reference (set by lifespan)
         self.framework_task = None
+
+    # ------------------------------------------------------------------
+    # E3 pass-1 additive slice views (read-only, over the same __dict__).
+    # Legacy ``state.X`` access is unchanged; ``state.<slice>.X`` is a typed
+    # view. Storage is NOT moved and no attr is renamed (brief-03 ssB).
+    # ------------------------------------------------------------------
+    @property
+    def musical(self) -> MusicalParams:
+        return MusicalParams(self)
+
+    @property
+    def generation(self) -> GenerationControl:
+        return GenerationControl(self)
+
+    @property
+    def llm(self) -> LLMConfig:
+        return LLMConfig(self)
+
+    @property
+    def levels(self) -> StemLevels:
+        # Named ``levels`` (not ``mixer``) to avoid clashing with framework_mixer.Mixer.
+        return StemLevels(self)
+
+    @property
+    def loop_coord(self) -> LoopCoordination:
+        return LoopCoordination(self)
+
+    @property
+    def recording(self) -> RecordingState:
+        return RecordingState(self)
+
+    @property
+    def playback(self) -> PlaybackState:
+        return PlaybackState(self)
+
+    @property
+    def stem_cache_view(self) -> StemCacheView:
+        return StemCacheView(self)
+
+    @property
+    def catalog(self) -> InstrumentCatalog:
+        return InstrumentCatalog(self)
+
+    @property
+    def session(self) -> SessionConfig:
+        return SessionConfig(self)
 
     # ------------------------------------------------------------------
     # last_generated_stems — LRU cache with hard cap
@@ -252,13 +310,15 @@ class GlobalState:
             self.currently_playing_stems = copy.deepcopy(stems)
             self.currently_playing_set_name = set_name
             self.currently_playing_reasoning = reasoning
-            self.loop_history.append({
-                'loop_index': loop_index,
-                'set_name': set_name,
-                'reasoning': reasoning,
-                'stems': copy.deepcopy(stems),
-                'timestamp': time.time()
-            })
+            self.loop_history.append(
+                {
+                    "loop_index": loop_index,
+                    "set_name": set_name,
+                    "reasoning": reasoning,
+                    "stems": copy.deepcopy(stems),
+                    "timestamp": time.time(),
+                }
+            )
             if len(self.loop_history) > 10:
                 self.loop_history.pop(0)
 
@@ -272,6 +332,7 @@ class GlobalState:
                         self.custom_instruments = data.get("_metadata", {}).get("custom_instruments", {})
                         # Register existing custom families with the schema
                         from app.lib.constants import add_custom_major_family
+
                         for family in self.custom_instruments.values():
                             add_custom_major_family(family)
                         return data.get("instruments", DEFAULT_INSTRUMENTS.copy())
@@ -284,9 +345,7 @@ class GlobalState:
         with open(self.instruments_file, "w") as f:
             payload = {
                 "instruments": self.categorized_instruments,
-                "_metadata": {
-                    "custom_instruments": self.custom_instruments
-                }
+                "_metadata": {"custom_instruments": self.custom_instruments},
             }
             json.dump(payload, f, indent=2)
 
@@ -306,6 +365,7 @@ class GlobalState:
                 self.custom_instruments[name] = family
                 # Register with schema constants so LLM can use this family
                 from app.lib.constants import add_custom_major_family
+
                 add_custom_major_family(family)
         return self.categorized_instruments
 

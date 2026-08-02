@@ -10,13 +10,13 @@ This is the async version of framework_conductor.py
 import json
 import os
 import re
-from typing import Optional, Dict, Any, List
+from typing import Any
 from openai import AsyncOpenAI
 
 from app.lib.constants import get_response_format_schema
 
 
-def parse_llm_json_response(content: str) -> Dict[str, Any]:
+def parse_llm_json_response(content: str) -> dict[str, Any]:
     """Parse JSON from LLM response, handling markdown wrapping.
 
     Tries direct json.loads first, then strips common markdown patterns:
@@ -70,8 +70,8 @@ class ConductorLLMAsync:
         self.api_base = api_base or os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
         self.model_name = model_name
         self.api_key = api_key
-        self._async_client: Optional[AsyncOpenAI] = None
-        self._cached_config: Optional[tuple] = None
+        self._async_client: AsyncOpenAI | None = None
+        self._cached_config: tuple | None = None
 
         self.system_instruction = """You are an expert AI DJ and Electronic Music Producer. Your sole purpose is to guide an Automated DJ system by deciding the absolute best musical elements to generate or modify next.
 You are in control of a live dance floor. The music MUST flow seamlessly and maintain a strong groove.
@@ -126,7 +126,7 @@ STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Pr
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
 """
 
-    def _get_async_client(self, config: Dict[str, str] = None) -> AsyncOpenAI:
+    def _get_async_client(self, config: dict[str, str] = None) -> AsyncOpenAI:
         """Get or create async client based on config."""
         if config:
             config_key = (config.get('base_url'), config.get('api_key'), config.get('model'))
@@ -148,10 +148,10 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
     async def call_async(
         self,
         prompt: str,
-        llm_config: Dict[str, str] = None,
+        llm_config: dict[str, str] = None,
         max_retries: int = 3,
-        extra_body: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        extra_body: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Make an async call to the LLM with JSON parse retry.
 
@@ -206,14 +206,14 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         self,
         current_bpm: int,
         current_key: str,
-        active_stems: List[Dict],
+        active_stems: list[dict],
         user_override: str = "",
-        available_instruments: List[str] = None,
-        stem_history: List[List[Dict]] = None,
-        llm_config: Dict[str, str] = None,
-        available_models: List[Dict] = None,
-        extra_body: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        available_instruments: list[str] = None,
+        stem_history: list[list[dict]] = None,
+        llm_config: dict[str, str] = None,
+        available_models: list[dict] = None,
+        extra_body: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Async version of get_next_state.
 
@@ -287,11 +287,11 @@ class ConductorPromptBuilder:
     def build_prompt(
         current_bpm: int,
         current_key: str,
-        active_stems: List[Dict],
+        active_stems: list[dict],
         user_override: str = "",
-        available_instruments: List[str] = None,
-        stem_history: List[List[Dict]] = None,
-        available_models: List[Dict] = None
+        available_instruments: list[str] = None,
+        stem_history: list[list[dict]] = None,
+        available_models: list[dict] = None
     ) -> str:
         """Build a Conductor prompt from current state."""
         if available_instruments is None:
@@ -378,12 +378,12 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
         return prompt
 
     @staticmethod
-    def parse_actions(response: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def parse_actions(response: dict[str, Any]) -> list[dict[str, Any]]:
         """Parse actions from LLM response."""
         return response.get("actions", [])
 
     @staticmethod
-    def build(state, session_id) -> tuple[str, Dict[str, str]]:
+    def build(state, session_id) -> tuple[str, dict[str, str]]:
         """
         Build prompt from GlobalState.
 

@@ -6,7 +6,6 @@ import json
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from typing import Optional, List
 
 from app.db import DatabaseManager
 from app.models import LLMInteraction, Show
@@ -57,14 +56,14 @@ def _eq_filter(query, name: str, value):
 async def search_reasoning_logs(
     request: Request,
     show_id: int = Query(..., description="Show ID to query"),
-    action_type: Optional[str] = Query(None, description="Filter: retain | add | remove"),
-    bpm_min: Optional[float] = Query(None, description="Minimum BPM"),
-    bpm_max: Optional[float] = Query(None, description="Maximum BPM"),
-    key: Optional[str] = Query(None, description="Musical key (e.g. C, Am, F#)"),
-    instrument: Optional[str] = Query(None, description="Instrument name (partial match)"),
-    set_name: Optional[str] = Query(None, description="Set/section name (e.g. Verse, Chorus)"),
-    was_fallback: Optional[bool] = Query(None, description="Filter fallback responses"),
-    q: Optional[str] = Query(None, description="Full-text search in reasoning text"),
+    action_type: str | None = Query(None, description="Filter: retain | add | remove"),
+    bpm_min: float | None = Query(None, description="Minimum BPM"),
+    bpm_max: float | None = Query(None, description="Maximum BPM"),
+    key: str | None = Query(None, description="Musical key (e.g. C, Am, F#)"),
+    instrument: str | None = Query(None, description="Instrument name (partial match)"),
+    set_name: str | None = Query(None, description="Set/section name (e.g. Verse, Chorus)"),
+    was_fallback: bool | None = Query(None, description="Filter fallback responses"),
+    q: str | None = Query(None, description="Full-text search in reasoning text"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -111,12 +110,12 @@ async def search_reasoning_logs(
 async def export_reasoning_logs(
     request: Request,
     show_id: int = Query(..., description="Show ID to export"),
-    action_type: Optional[str] = Query(None),
-    bpm_min: Optional[float] = Query(None),
-    bpm_max: Optional[float] = Query(None),
-    key: Optional[str] = Query(None),
-    instrument: Optional[str] = Query(None),
-    set_name: Optional[str] = Query(None),
+    action_type: str | None = Query(None),
+    bpm_min: float | None = Query(None),
+    bpm_max: float | None = Query(None),
+    key: str | None = Query(None),
+    instrument: str | None = Query(None),
+    set_name: str | None = Query(None),
 ):
     """Export filtered reasoning logs as JSONL."""
     db_manager = DatabaseManager.get_instance()

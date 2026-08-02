@@ -1,6 +1,4 @@
-import pytest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
 import os
 
 # Set test environment before importing modules
@@ -253,7 +251,6 @@ class TestLLMInteractionModelEdgeCases:
         assert result["was_fallback"] is True
 
     def test_llm_interaction_to_llm_dump_dict_with_error(self):
-        from datetime import datetime
         from app.models.llm_interaction import LLMInteraction
 
         interaction = LLMInteraction(

@@ -1,13 +1,9 @@
 # tests/slop_harness/test_models.py
-import pytest
 from slop_harness.models import (
     FOUNDATION_1_MODEL,
-    INFINITE_PIANOS_MODEL,
-    VOCAL_TEXTURES_MODEL,
     ALL_MODELS,
     TIMBRE_TAGS_F1,
     FX_TAGS_F1,
-    NOTATION_TAGS_F1,
     KEYS_ALL,
     BPMS_ALL,
     BARS_ALL,

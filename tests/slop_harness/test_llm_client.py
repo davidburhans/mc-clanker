@@ -1,5 +1,4 @@
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from slop_harness.llm_client import LLMClient
@@ -108,7 +107,7 @@ async def test_call_raises_after_3_failures():
 @pytest.mark.asyncio
 async def test_call_uses_correct_payload():
     """call() sends correct payload to the API."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     captured_kwargs = {}
 

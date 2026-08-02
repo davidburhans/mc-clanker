@@ -71,7 +71,7 @@ def _normalize_dsn(dsn: str) -> str:
     return dsn
 
 
-def _resolve_asyncpg_dsn(db_manager) -> Optional[str]:
+def _resolve_asyncpg_dsn(db_manager) -> str | None:
     """Resolve an asyncpg-compatible DSN.
 
     Prefer the raw DATABASE_URL env var (the authoritative connection string);
@@ -103,7 +103,7 @@ class JobWaiter:
         self.db_pool = db_pool
         self._listeners = {}  # job_id -> asyncio.Event
 
-    async def wait_for_job_completion(self, job_id: uuid.UUID, timeout: float = 60.0) -> Optional[str]:
+    async def wait_for_job_completion(self, job_id: uuid.UUID, timeout: float = 60.0) -> str | None:
         """
         Wait for a job to complete using LISTEN/NOTIFY.
 
@@ -169,7 +169,7 @@ class JobWaiter:
         finally:
             await self.db_pool.release(conn)
 
-    async def _get_job(self, job_id: uuid.UUID) -> Optional[dict]:
+    async def _get_job(self, job_id: uuid.UUID) -> dict | None:
         """Fetch job from database."""
         async with self.db_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM generator_jobs WHERE id = $1", job_id)
@@ -181,7 +181,7 @@ class JobWaiter:
 # Polling-based fallback when asyncpg is not available
 async def wait_for_job_completion_poll(
     db_session, job_id: uuid.UUID, timeout: float = 60.0, poll_interval: float = 0.5
-) -> Optional[str]:
+) -> str | None:
     """
     Polling-based wait_for_job_completion fallback.
 
@@ -222,7 +222,7 @@ async def wait_for_job_completion_poll(
 
 
 # Main function - uses LISTEN/NOTIFY when available, falls back to polling
-async def wait_for_job_completion(job_id: uuid.UUID, timeout: float = 60.0, db_manager=None) -> Optional[str]:
+async def wait_for_job_completion(job_id: uuid.UUID, timeout: float = 60.0, db_manager=None) -> str | None:
     """
     Wait for a job to complete.
 
@@ -240,7 +240,7 @@ async def wait_for_job_completion(job_id: uuid.UUID, timeout: float = 60.0, db_m
     """
     # Check if asyncpg is available for LISTEN/NOTIFY
     try:
-        import asyncpg
+        import asyncpg  # noqa: F401  availability probe for optional asyncpg
 
         has_asyncpg = True
     except ImportError:
@@ -303,7 +303,7 @@ async def wait_for_job_completion(job_id: uuid.UUID, timeout: float = 60.0, db_m
 
 async def wait_for_multiple_jobs(
     job_ids: list[uuid.UUID], timeout: float = 60.0, db_manager=None
-) -> dict[uuid.UUID, Optional[str]]:
+) -> dict[uuid.UUID, str | None]:
     """
     Wait for multiple jobs to complete concurrently.
 

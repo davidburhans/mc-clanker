@@ -23,7 +23,6 @@ import queue
 import subprocess
 import threading
 import time
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -65,10 +64,10 @@ class IcecastStreamer:
 
         self._pcm_queue: queue.Queue = queue.Queue(maxsize=200)
         self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._ffmpeg_proc: Optional[subprocess.Popen] = None
-        self._http_proc: Optional[subprocess.Popen] = None
-        self._started_at: Optional[float] = None
+        self._thread: threading.Thread | None = None
+        self._ffmpeg_proc: subprocess.Popen | None = None
+        self._http_proc: subprocess.Popen | None = None
+        self._started_at: float | None = None
         self._bytes_streamed = 0
         self._lock = threading.Lock()
 
@@ -324,7 +323,7 @@ class IcecastStreamer:
                 self._ffmpeg_proc = None
 
 
-def create_icecast_streamer_from_env() -> Optional[IcecastStreamer]:
+def create_icecast_streamer_from_env() -> IcecastStreamer | None:
     """Create an IcecastStreamer from environment variables, or None if disabled."""
     enabled = os.environ.get("ICECAST_ENABLED", "false").lower() in ("true", "1", "yes")
     if not enabled:

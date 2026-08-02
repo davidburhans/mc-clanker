@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import os
 import json
-from app.framework.framework_state import state
 
 router = APIRouter()
 

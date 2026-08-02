@@ -9,7 +9,7 @@ from .stems import router as stems_router
 from .reasoning_logs import router as reasoning_logs_router
 
 # Export utilities for tests
-from .utils import require_show_owner, generate_audience_password
+from .utils import require_show_owner, generate_audience_password  # noqa: F401  re-exported route utilities
 
 api_router = APIRouter(prefix="/api")
 

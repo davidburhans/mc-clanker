@@ -1,9 +1,8 @@
 from pydantic import BaseModel, EmailStr, field_validator
-from typing import Optional, List
 import uuid
 from datetime import datetime
 
-from app.lib.constants import VALID_BPMS, VALID_KEYS, get_all_major_families
+from app.lib.constants import VALID_BPMS, VALID_KEYS
 
 
 class UserRegister(BaseModel):
@@ -33,38 +32,38 @@ class CustomInstrumentCreate(BaseModel):
 
 
 class StateUpdate(BaseModel):
-    is_generating: Optional[bool] = None
-    is_show_started: Optional[bool] = None
-    should_reset: Optional[bool] = None
-    user_override: Optional[str] = None
-    target_bpm_override: Optional[int] = None
-    target_key_override: Optional[str] = None
-    available_instruments: Optional[List[str]] = None
+    is_generating: bool | None = None
+    is_show_started: bool | None = None
+    should_reset: bool | None = None
+    user_override: str | None = None
+    target_bpm_override: int | None = None
+    target_key_override: str | None = None
+    available_instruments: list[str] | None = None
 
     @field_validator('target_bpm_override')
     @classmethod
-    def validate_bpm(cls, v: Optional[int]) -> Optional[int]:
+    def validate_bpm(cls, v: int | None) -> int | None:
         if v is not None and v not in VALID_BPMS:
             raise ValueError(f"Invalid BPM. Must be one of: {VALID_BPMS}")
         return v
 
     @field_validator('target_key_override')
     @classmethod
-    def validate_key(cls, v: Optional[str]) -> Optional[str]:
+    def validate_key(cls, v: str | None) -> str | None:
         if v is not None and v not in VALID_KEYS:
             raise ValueError(f"Invalid key. Must be one of: {VALID_KEYS}")
         return v
 
 class LLMConfig(BaseModel):
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
-    model: Optional[str] = None
-    icecast_enabled: Optional[bool] = None
-    audience_password: Optional[str] = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    icecast_enabled: bool | None = None
+    audience_password: str | None = None
 
 class GenerationConfig(BaseModel):
-    cfg_scale: Optional[float] = None
-    steps: Optional[int] = None
+    cfg_scale: float | None = None
+    steps: int | None = None
 
 class StemVolumeUpdate(BaseModel):
     volume: float
@@ -73,7 +72,7 @@ class ExportStartRequest(BaseModel):
     format: str = "wav"
 
 class ExportStopResponse(BaseModel):
-    file_path: Optional[str]
+    file_path: str | None
     status: str
 
 class CustomStemCreate(BaseModel):
@@ -88,23 +87,23 @@ class JobSubmission(BaseModel):
     session_id: uuid.UUID
     instrument: str
     prompt: str
-    major_family: Optional[str] = None
+    major_family: str | None = None
     model_id: str = "foundation-1"
-    key: Optional[str] = None
-    bpm: Optional[int] = None
-    timbre_tags: List[str] = []
+    key: str | None = None
+    bpm: int | None = None
+    timbre_tags: list[str] = []
     bars: int = 4
 
     @field_validator('bpm')
     @classmethod
-    def validate_bpm(cls, v: Optional[int]) -> Optional[int]:
+    def validate_bpm(cls, v: int | None) -> int | None:
         if v is not None and v not in VALID_BPMS:
             raise ValueError(f"Invalid BPM. Must be one of: {VALID_BPMS}")
         return v
 
     @field_validator('key')
     @classmethod
-    def validate_key(cls, v: Optional[str]) -> Optional[str]:
+    def validate_key(cls, v: str | None) -> str | None:
         if v is not None and v not in VALID_KEYS:
             raise ValueError(f"Invalid key. Must be one of: {VALID_KEYS}")
         return v
@@ -114,34 +113,34 @@ class JobResponse(BaseModel):
     session_id: str
     instrument: str
     prompt: str
-    major_family: Optional[str]
+    major_family: str | None
     model_id: str
-    key: Optional[str]
-    bpm: Optional[int]
-    timbre_tags: List[str]
+    key: str | None
+    bpm: int | None
+    timbre_tags: list[str]
     bars: int
     status: str
     priority: int
-    created_at: Optional[str]
-    started_at: Optional[str]
-    completed_at: Optional[str]
-    audio_path: Optional[str]
-    duration_seconds: Optional[float]
-    error_message: Optional[str]
-    worker_id: Optional[str]
-    expires_at: Optional[str]
+    created_at: str | None
+    started_at: str | None
+    completed_at: str | None
+    audio_path: str | None
+    duration_seconds: float | None
+    error_message: str | None
+    worker_id: str | None
+    expires_at: str | None
 
 class AudioResponse(BaseModel):
     audio_url: str
-    duration_seconds: Optional[float]
+    duration_seconds: float | None
 
 class ShowCreate(BaseModel):
     title: str
     description: str = ""
 
 class ShowUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
+    title: str | None = None
+    description: str | None = None
 
 class ShowResponse(BaseModel):
     id: int
@@ -149,12 +148,12 @@ class ShowResponse(BaseModel):
     title: str
     description: str
     status: str
-    audio_file_path: Optional[str]
-    config_snapshot: Optional[dict]
-    started_at: Optional[str]
-    ended_at: Optional[str]
-    duration_seconds: Optional[int]
-    created_at: Optional[str]
+    audio_file_path: str | None
+    config_snapshot: dict | None
+    started_at: str | None
+    ended_at: str | None
+    duration_seconds: int | None
+    created_at: str | None
 
 class SessionHeartbeatRequest(BaseModel):
     server_id: str

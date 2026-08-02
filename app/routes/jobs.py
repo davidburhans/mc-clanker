@@ -1,10 +1,8 @@
-from fastapi import APIRouter, HTTPException, Request
-from typing import Optional
+from fastapi import APIRouter, HTTPException
 import uuid
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
-from app.framework.framework_state import state
 from app.db import DatabaseManager
 from app.models.generator_job import GeneratorJob
 from .schemas import JobSubmission, SessionHeartbeatRequest, SessionServerResponse
@@ -92,8 +90,8 @@ async def cancel_job(job_id: uuid.UUID):
 
 @router.get("/jobs")
 async def list_jobs(
-    session_id: Optional[uuid.UUID] = None,
-    status: Optional[str] = None,
+    session_id: uuid.UUID | None = None,
+    status: str | None = None,
     limit: int = 50,
     offset: int = 0
 ):
