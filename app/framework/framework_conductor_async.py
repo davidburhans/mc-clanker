@@ -409,12 +409,12 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
                 except (OSError, json_module.JSONDecodeError):
                     cfg = {}  # unreadable/malformed config -> no per-model metadata
                 for model_id in generator.models:
-                        m_info = cfg.get("models", {}).get(model_id, {})
-                        desc = m_info.get("description", desc)
-                        supported_families = m_info.get("supported_families", ["Any"])
-                        available_models.append(
-                            {"id": model_id, "description": desc, "supported_families": supported_families}
-                        )
+                    m_info = cfg.get("models", {}).get(model_id, {})
+                    desc = m_info.get("description", desc)
+                    supported_families = m_info.get("supported_families", ["Any"])
+                    available_models.append(
+                        {"id": model_id, "description": desc, "supported_families": supported_families}
+                    )
 
         return ConductorPromptBuilder.build_prompt(
             current_bpm=current_bpm,
