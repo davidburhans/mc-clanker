@@ -99,7 +99,7 @@ async def test_foreground_loop_routes_through_cache_stem() -> None:
     with (
         patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio) as fetch_mock,
         patch(
-            "app.framework.loop_orchestrator.wait_for_multiple_jobs",
+            "app.framework.loop_steps.wait_for_multiple_jobs",
             new_callable=AsyncMock,
             return_value={job_id: "audio/x.aac"},
         ),

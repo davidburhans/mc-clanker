@@ -64,13 +64,13 @@ def test_no_inline_cache_key_fstring_remains_in_framework() -> None:
 def test_all_three_call_sites_invoke_make_cache_key() -> None:
     """The three consumers must reference ``make_cache_key`` by name.
 
-    Sites: ``domain_audio.tile_to_loop`` (P9), ``loop_orchestrator._step_submit_jobs``
+    Sites: ``domain_audio.tile_to_loop`` (P9), ``loop_steps._step_submit_jobs``
     (P7 foreground), ``pregeneration.run_pregeneration`` (background). If a site
     drops the call (e.g. re-inlines the key), this fails before the drift can ship.
     """
     expected = {
         "domain_audio.py": "make_cache_key",
-        "loop_orchestrator.py": "make_cache_key",
+        "loop_steps.py": "make_cache_key",
         "pregeneration.py": "make_cache_key",
     }
     for fname, needle in expected.items():

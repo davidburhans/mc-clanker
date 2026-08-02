@@ -32,8 +32,14 @@ def test_no_io_inside_state_lock_in_orchestrator() -> None:
     races). Source-inspected via AST so it catches regressions even if the lock
     block is later extracted into a _step_* method.
     """
-    src = Path("app/framework/loop_orchestrator.py").read_text()
-    tree = ast.parse(src)
+    # The ``_step_*`` methods (which hold the ``async with state.lock:`` blocks)
+    # live in loop_steps.py after Phase B; scan BOTH files so the invariant
+    # follows the code wherever it moves. CLAUDE.md forbids I/O inside the state
+    # lock (it stalls the event loop / opens races — brief-01 risk #2).
+    orchestrator_files = [
+        Path("app/framework/loop_orchestrator.py"),
+        Path("app/framework/loop_steps.py"),
+    ]
 
     def _is_state_lock_ctx(expr: ast.AST) -> bool:
         return (
@@ -43,18 +49,20 @@ def test_no_io_inside_state_lock_in_orchestrator() -> None:
             and expr.attr == "lock"
         )
 
-    violations: list[tuple[int, int, str]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.AsyncWith, ast.With)) and any(
-            _is_state_lock_ctx(item.context_expr) for item in node.items
-        ):
-            for child in ast.walk(node):
-                if child is node:
-                    continue
-                if isinstance(child, ast.Await):
-                    violations.append((node.lineno, child.lineno, "await"))
-                elif isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "open":
-                    violations.append((node.lineno, child.lineno, "open()"))
+    violations: list[str] = []
+    for src_path in orchestrator_files:
+        tree = ast.parse(src_path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.AsyncWith, ast.With)) and any(
+                _is_state_lock_ctx(item.context_expr) for item in node.items
+            ):
+                for child in ast.walk(node):
+                    if child is node:
+                        continue
+                    if isinstance(child, ast.Await):
+                        violations.append(f"{src_path.name}:L{node.lineno} await at L{child.lineno}")
+                    elif isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "open":
+                        violations.append(f"{src_path.name}:L{node.lineno} open() at L{child.lineno}")
 
     assert not violations, f"I/O inside state.lock forbidden (CLAUDE.md / brief-01 risk #2): {violations}"
 
