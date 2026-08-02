@@ -31,7 +31,7 @@ from typing import Any, NamedTuple
 from app.framework.framework_state import state
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_conductor_async import ConductorLLMAsync
-from app.framework.domain_audio import tile_to_loop
+from app.framework.domain_audio import make_cache_key, tile_to_loop
 from app.framework.audio_fetch import GarageAudioAdapter
 from app.framework.audit_recording import append_loop_audit
 from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (routes/shows.py, tests import these from here)
@@ -570,7 +570,7 @@ class AsyncFrameworkLoop:
             track_bars = t["bars"]
             m_id = t.get("model_id")
             orig = t.get("_original_details", {})
-            cache_key = f"{m_id}_{prompt}_{local_current_bpm}_{local_current_key}_{track_bars}"
+            cache_key = make_cache_key(m_id, prompt, local_current_bpm, local_current_key, track_bars)
 
             # Check cache
             if cache_key in self.stem_cache:

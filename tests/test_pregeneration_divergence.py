@@ -77,6 +77,40 @@ async def test_pregeneration_does_not_route_through_cache_stem() -> None:
     assert not cache_stem_mock.called, "pre-gen must NOT route through state.cache_stem (foreground-only)"
 
 
+async def test_foreground_loop_routes_through_cache_stem() -> None:
+    """Complementary half of brief-01 risk #4: the FOREGROUND path MUST route
+    fetched audio through ``state.cache_stem`` (the 16-entry LRU).
+
+    The sibling test above pins that the background pre-gen path does NOT call
+    it; this pins that the foreground P8 path (``_step_await_jobs_fetch``) DOES.
+    Together they pin the full foreground/background divergence and close DoD
+    gate-8.
+    """
+    loop = _new_loop()
+    loop._loop_idx = 1  # normally seeded by the _run_loop driver before P8 runs
+    job_id = uuid4()
+    audio = np.ones((1000, 2), dtype=np.float32)
+    # Stem the foreground P8 path reads ``local_next_stems[orig_idx]["prompt"]`` from.
+    local_next_stems = [
+        {"prompt": "Synth Pad, A minor, 128", "bars": 4, "model_id": "foundation-1"}
+    ]
+    pending_jobs = [(job_id, 0, "foundation-1_Synth Pad, A minor, 128_128_A minor_4")]
+
+    with (
+        patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio) as fetch_mock,
+        patch(
+            "app.framework.loop_orchestrator.wait_for_multiple_jobs",
+            new_callable=AsyncMock,
+            return_value={job_id: "audio/x.aac"},
+        ),
+        patch.object(state, "cache_stem") as cache_stem_mock,
+    ):
+        await loop._step_await_jobs_fetch(pending_jobs, local_next_stems)
+
+    fetch_mock.assert_awaited_once_with("audio/x.aac")
+    cache_stem_mock.assert_called_once_with("Synth Pad, A minor, 128", audio)
+
+
 async def test_pregen_result_tracks_are_non_silent_when_audio_fetched() -> None:
     """A fetched stem must yield non-zero audio in the pre-gen result (no silent fallback)."""
     loop = _new_loop()

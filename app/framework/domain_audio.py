@@ -9,6 +9,7 @@ Frozen public surface (re-exported by ``framework_main_async``):
 - ``calc_duration``   — loop length in seconds with a non-positive-BPM guard (B10)
 - ``to_two_channel``  — coerce mono/1-D audio to 2-D (samples, 2) (B11)
 - ``_to_two_channel`` — alias kept for frozen-binding / import compatibility
+- ``make_cache_key``  — single source of truth for the stem-audio cache key (R4)
 - ``tile_to_loop``    — tile cached/decoded stem audio out to the loop duration (P9)
 """
 
@@ -44,6 +45,23 @@ def to_two_channel(audio) -> np.ndarray:
 
 # Frozen-binding alias: callers/tests import ``_to_two_channel`` from the shim.
 _to_two_channel = to_two_channel
+
+
+def make_cache_key(model_id: object, prompt: str, bpm: int, key: str, bars: int) -> str:
+    """Build the stable cache key for a stem's generated audio (R4 divergence guard).
+
+    Single source of truth shared by the foreground path
+    (``_step_submit_jobs`` / ``tile_to_loop``) and the background pre-generation
+    path (``run_pregeneration``). Centralizing the format means a change here is
+    the ONLY way the two paths can agree on a key — preventing the silent
+    foreground/background cache drift that would otherwise re-submit a job the
+    other path already cached (duplicate stems / wasted GPU) while the
+    divergence tests stay green.
+
+    >>> make_cache_key("foundation-1", "Synth, A minor, 128", 128, "A minor", 4)
+    'foundation-1_Synth, A minor, 128_128_A minor_4'
+    """
+    return f"{model_id}_{prompt}_{bpm}_{key}_{bars}"
 
 
 def tile_to_loop(
@@ -84,7 +102,7 @@ def tile_to_loop(
         prompt = t["prompt"]
         track_bars = t["bars"]
         m_id = t.get("model_id")
-        cache_key = f"{m_id}_{prompt}_{bpm}_{key}_{track_bars}"
+        cache_key = make_cache_key(m_id, prompt, bpm, key, track_bars)
 
         if cache_key in stem_cache:
             audio_data = stem_cache[cache_key]["audio_data"]

@@ -26,7 +26,7 @@ from app.framework.conductor_interaction import (
     load_available_models,
     process_actions,
 )
-from app.framework.domain_audio import tile_to_loop
+from app.framework.domain_audio import make_cache_key, tile_to_loop
 from app.job_waiter import wait_for_multiple_jobs
 
 
@@ -82,7 +82,7 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
             prompt = t["prompt"]
             track_bars = t["bars"]
             m_id = t.get("model_id")
-            cache_key = f"{m_id}_{prompt}_{current_bpm}_{current_key}_{track_bars}"
+            cache_key = make_cache_key(m_id, prompt, current_bpm, current_key, track_bars)
 
             if cache_key in loop.stem_cache:
                 continue
