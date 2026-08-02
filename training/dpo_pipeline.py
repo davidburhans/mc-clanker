@@ -222,10 +222,10 @@ CORRUPTION_STRATEGIES = {
 # ============================================================
 
 def generate_preference_pairs(
-    samples: List[Dict],
-    corruption_types: Optional[List[str]] = None,
+    samples: list[dict],
+    corruption_types: list[str] | None = None,
     num_corruptions_per_sample: int = 1
-) -> List[Tuple[str, str]]:
+) -> list[tuple[str, str]]:
     """
     Generate chosen/rejected pairs for DPO training.
 
@@ -272,7 +272,7 @@ def generate_preference_pairs(
     return pairs
 
 
-def _extract_assistant_message(sample: Dict) -> Optional[str]:
+def _extract_assistant_message(sample: dict) -> str | None:
     """Extract the assistant message content from a sample."""
     messages = sample.get("messages", [])
     for msg in messages:
@@ -367,9 +367,9 @@ def _compute_quality_reward(data: dict) -> float:
 def generate_dpo_dataset_from_sft(
     sft_dataset_path: str,
     output_path: str,
-    corruption_types: Optional[List[str]] = None,
+    corruption_types: list[str] | None = None,
     num_corruptions_per_sample: int = 1,
-    max_samples: Optional[int] = None
+    max_samples: int | None = None
 ) -> int:
     """
     Generate a DPO dataset from an SFT dataset.
