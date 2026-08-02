@@ -185,6 +185,7 @@ class AsyncFrameworkLoop:
         # Initialize mixer in async context
         loop = asyncio.get_running_loop()
         self.mixer = await loop.run_in_executor(None, lambda: Mixer(sample_rate=44100, channels=2))
+        assert self.mixer is not None  # just assigned above (run_in_executor returns Any)
         self.mixer.start()
 
         # Start the loop
@@ -354,6 +355,7 @@ class AsyncFrameworkLoop:
         )
 
         if pregen_ready:
+            assert self._pregen_results is not None  # pregen_ready gate (P2 predicate)
             print(f"[AsyncLoop-{self._loop_idx}] Using pre-generated audio from background task")
             print(
                 f"[AsyncLoop-{self._loop_idx}] DEBUG: pregen_results keys = "
@@ -401,6 +403,7 @@ class AsyncFrameworkLoop:
         stem_cache.clear — sync, allowed) and the override apply/clear, then
         captures the snapshot. Returns the snapshot vars + available_models.
         """
+        assert self.mixer is not None  # set in start() before _run_loop spawns
         async with state.lock:
             if state.should_reset:
                 print("SYSTEM RESET TRIGGERED")
@@ -652,7 +655,9 @@ class AsyncFrameworkLoop:
         Loop 1 adds at ``mixer.current_sample`` (not 0) so tracks aren't treated
         as past; loop>1 queues without touching the current boundary.
         """
+        assert self.mixer is not None  # set in start() before _run_loop spawns
         if pregen_ready:
+            assert self._pregen_results is not None  # pregen_ready gate (P2 predicate)
             tracks_to_use = self._pregen_results["prepared_tracks"]
             duration_samples = self._pregen_results["loop_duration_samples"]
         else:
@@ -706,6 +711,7 @@ class AsyncFrameworkLoop:
                     state.stem_history.pop(0)
 
             if pregen_ready:
+                assert self._pregen_results is not None  # pregen_ready gate (P2)
                 state.active_stems = list(self._pregen_results["next_stems"])
             else:
                 state.active_stems = list(state.next_stems)
@@ -717,6 +723,7 @@ class AsyncFrameworkLoop:
             state.loop_count += 1
 
             if pregen_ready:
+                assert self._pregen_results is not None  # pregen_ready gate (P2)
                 # Update BPM, key, etc. from pre-gen results
                 state.current_bpm = self._pregen_results.get("master_bpm", state.current_bpm)
                 state.current_key = self._pregen_results.get("master_key", state.current_key)
@@ -830,6 +837,7 @@ class AsyncFrameworkLoop:
         ``record_loop_transition`` snapshots under ``state.lock`` then runs
         OUTSIDE it (it acquires the blocking sync_lock).
         """
+        assert self.mixer is not None  # set in start() before _run_loop spawns
         # Step 11: Wait until we need to generate next loop.
         # Wait for pre-generation to complete (it runs the LLM call for us)
         if self.running and not state.shutdown_event.is_set():
