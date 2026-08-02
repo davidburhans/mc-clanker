@@ -26,7 +26,7 @@ import time
 import uuid
 import numpy as np
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.framework.framework_state import state
 from app.framework.framework_mixer import Mixer
@@ -97,6 +97,31 @@ class _CommitResult:
     rec_set_name: str
     rec_reasoning: str
     state_snapshot: dict
+
+
+class _PregenDecision(NamedTuple):
+    """P2 decision outputs (named, not a brittle positional 5-tuple unpack)."""
+
+    result: _StepResult
+    pregen_ready: bool
+    conductor_response: dict | None
+    prepared_tracks: list
+    loop_duration_samples: int
+
+
+class _StateSnapshot(NamedTuple):
+    """P3 conductor-prompt snapshot (named, not a brittle positional 10-tuple)."""
+
+    bpm_override: int | None
+    key_override: str | None
+    current_bpm: int
+    current_key: str
+    active_stems: list
+    user_override: str
+    available_instruments: list
+    stem_history: list
+    llm_config: dict
+    available_models: list
 
 
 class AsyncFrameworkLoop:
@@ -215,51 +240,36 @@ class AsyncFrameworkLoop:
                 if r is _StepResult.RESTART_ITER:
                     continue
 
-                (
-                    r,
-                    pregen_ready,
-                    conductor_response,
-                    prepared_tracks,
-                    loop_duration_samples,
-                    _next_stems,
-                ) = await self._step_pregen_decision()
-                if r is _StepResult.RESTART_ITER:
+                pregen = await self._step_pregen_decision()
+                if pregen.result is _StepResult.RESTART_ITER:
                     continue
+                pregen_ready = pregen.pregen_ready
+                conductor_response = pregen.conductor_response
+                prepared_tracks = pregen.prepared_tracks
+                loop_duration_samples = pregen.loop_duration_samples
 
-                (
-                    bpm_override,
-                    key_override,
-                    current_bpm,
-                    current_key,
-                    active_stems,
-                    user_override,
-                    available_instruments,
-                    stem_history,
-                    llm_config,
-                    available_models,
-                ) = await self._step_read_state()
+                snap = await self._step_read_state()
 
                 # P4-P9 run only on the fresh path: pregen already has
                 # conductor_response + prepared_tracks from P2 (review A1).
                 if not pregen_ready:
                     conductor_response = await self._step_call_conductor(
-                        pregen_ready,
-                        current_bpm,
-                        current_key,
-                        active_stems,
-                        user_override,
-                        available_instruments,
-                        stem_history,
-                        llm_config,
-                        available_models,
+                        snap.current_bpm,
+                        snap.current_key,
+                        snap.active_stems,
+                        snap.user_override,
+                        snap.available_instruments,
+                        snap.stem_history,
+                        snap.llm_config,
+                        snap.available_models,
                     )
-                    deduped_tracks = await self._step_parse_actions(conductor_response, active_stems)
+                    deduped_tracks = await self._step_parse_actions(conductor_response, snap.active_stems)
                     local_next_stems, local_current_bpm, local_current_key = await self._step_build_next_stems(
-                        bpm_override,
-                        key_override,
+                        snap.bpm_override,
+                        snap.key_override,
                         conductor_response,
-                        current_bpm,
-                        current_key,
+                        snap.current_bpm,
+                        snap.current_key,
                         deduped_tracks,
                     )
                     pending_jobs = await self._step_submit_jobs(local_next_stems, local_current_bpm, local_current_key)
@@ -268,8 +278,8 @@ class AsyncFrameworkLoop:
                         local_next_stems, local_current_bpm, local_current_key, deduped_tracks
                     )
 
-                await self._step_append_audit(conductor_response, active_stems)
-                tracks_to_use, duration_samples, _current_loop_end_sample = await self._step_commit_to_mixer(
+                await self._step_append_audit(conductor_response, snap.active_stems)
+                tracks_to_use, duration_samples = await self._step_commit_to_mixer(
                     pregen_ready, prepared_tracks, loop_duration_samples
                 )
                 commit = await self._step_commit_state(pregen_ready, tracks_to_use, duration_samples)
@@ -325,13 +335,12 @@ class AsyncFrameworkLoop:
         print(f"[AsyncLoop-{self._loop_idx}] DEBUG: is_generating={debug_gen}, is_running={debug_run}")
         return _StepResult.PROCEED
 
-    async def _step_pregen_decision(self) -> tuple[_StepResult, bool, dict | None, list, int, list]:
+    async def _step_pregen_decision(self) -> _PregenDecision:
         """P2: decide fresh-vs-pregenerated and assemble the pregen outputs.
 
-        Returns (result, pregen_ready, conductor_response, prepared_tracks,
-        loop_duration_samples, next_stems). On RESTART_ITER (will_call_llm is
-        False) the rest are zeroed. The pregen branch fills the 5 pregen vars
-        from ``_pregen_results``; the fresh branch leaves them for P3-P9.
+        Returns a ``_PregenDecision``. On RESTART_ITER (will_call_llm is False)
+        the rest are zeroed. The pregen branch fills the pregen vars from
+        ``_pregen_results``; the fresh branch leaves them for P3-P9.
 
         Note: P2's ``active_stems`` read is dropped here — it is overwritten by
         ``_step_read_state`` (P3) which reads the identical value (the map's
@@ -366,14 +375,12 @@ class AsyncFrameworkLoop:
             }
             prepared_tracks = self._pregen_results["prepared_tracks"]
             loop_duration_samples = self._pregen_results["loop_duration_samples"]
-            next_stems = self._pregen_results["next_stems"]
-            return (
+            return _PregenDecision(
                 _StepResult.PROCEED,
                 pregen_ready,
                 conductor_response,
                 prepared_tracks,
                 loop_duration_samples,
-                next_stems,
             )
 
         async with state.lock:
@@ -383,11 +390,11 @@ class AsyncFrameworkLoop:
         else:
             print(f"[AsyncLoop-{self._loop_idx}] Skipping LLM call: is_generating={state.is_generating}")
             # Instead of proceeding, go back to waiting.
-            return _StepResult.RESTART_ITER, pregen_ready, None, [], 0, []
+            return _PregenDecision(_StepResult.RESTART_ITER, pregen_ready, None, [], 0)
 
-        return _StepResult.PROCEED, pregen_ready, None, [], 0, []
+        return _PregenDecision(_StepResult.PROCEED, pregen_ready, None, [], 0)
 
-    async def _step_read_state(self) -> tuple:
+    async def _step_read_state(self) -> _StateSnapshot:
         """P3: reset handling + override apply/clear + conductor-prompt snapshot.
 
         ONE ``async with state.lock:`` block holds the reset (mixer.clear +
@@ -427,7 +434,7 @@ class AsyncFrameworkLoop:
 
         # Get available models (Phase 4: shared helper).
         available_models = load_available_models()
-        return (
+        return _StateSnapshot(
             bpm_override,
             key_override,
             current_bpm,
@@ -442,7 +449,6 @@ class AsyncFrameworkLoop:
 
     async def _step_call_conductor(
         self,
-        pregen_ready,
         current_bpm,
         current_key,
         active_stems,
@@ -451,16 +457,13 @@ class AsyncFrameworkLoop:
         stem_history,
         llm_config,
         available_models,
-    ) -> dict | None:
+    ) -> dict:
         """P4: call the LLM conductor (fresh path only).
 
         The nested try/except swallows LLM errors into a fallback response; it
-        is deliberately NOT merged with B1's outer retry try. Returns None on
-        the pregen path (defensive — the skeleton only calls this when
-        ``not pregen_ready``).
+        is deliberately NOT merged with B1's outer retry try. The skeleton only
+        calls this when ``not pregen_ready``.
         """
-        if pregen_ready:
-            return None
         try:
             conductor_response = await self.conductor.get_next_state_async(
                 current_bpm=current_bpm,
@@ -643,7 +646,7 @@ class AsyncFrameworkLoop:
         pregen_ready,
         prepared_tracks,
         loop_duration_samples,
-    ) -> tuple[list, int, int]:
+    ) -> tuple[list, int]:
         """P10: add tracks to mixer at live position (loop 1) or queue via set_next_loop (>1).
 
         Loop 1 adds at ``mixer.current_sample`` (not 0) so tracks aren't treated
@@ -666,7 +669,6 @@ class AsyncFrameworkLoop:
                     self.mixer._add_track_internal(self.mixer._ensure_stereo(audio_data), start_sample, stem_idx)
                 self.mixer.current_loop_end_sample = start_sample + duration_samples
                 self.mixer._current_loop_duration = duration_samples
-            current_loop_end_sample = self.mixer.current_loop_end_sample
         else:
             # Subsequent loops: queue audio without touching current loop boundary.
             # The mixer will fire the transition when it reaches current_loop_end_sample
@@ -674,10 +676,8 @@ class AsyncFrameworkLoop:
             self.mixer.set_next_loop(
                 tracks_to_use, next_loop_duration_samples=duration_samples, loop_idx=self._loop_idx
             )
-            with self.mixer.lock:
-                current_loop_end_sample = self.mixer.current_loop_end_sample
 
-        return tracks_to_use, duration_samples, current_loop_end_sample
+        return tracks_to_use, duration_samples
 
     async def _step_commit_state(self, pregen_ready, tracks_to_use, duration_samples) -> _CommitResult:
         """P11: atomic single-lock state commit (~84 LOC, the >50 exception).
