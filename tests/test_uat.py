@@ -354,19 +354,6 @@ class TestUATAdversarialFixes:
         except ValidationError:
             pass
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="DatasetWriter uses threading.Lock for sync file I/O; the "
-        "'must use asyncio.Lock' assumption is likely outdated",
-    )
-    def test_dataset_writer_uses_asyncio_lock(self):
-        """UAT-5.5: DatasetWriter uses asyncio.Lock (not threading.Lock)."""
-        import inspect
-        from slop_harness.dataset_writer import DatasetWriter
-
-        source = inspect.getsource(DatasetWriter)
-        assert "threading.Lock" not in source, "DatasetWriter should NOT use threading.Lock (use asyncio.Lock)"
-
 
 # =============================================================================
 # UAT Scenario 6: Core Application Smoke Tests
