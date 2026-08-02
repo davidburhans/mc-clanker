@@ -158,3 +158,33 @@ def process_actions(actions: list[dict[str, Any]], active_stems: list[dict]) -> 
             unique_tracks[t_key] = t
 
     return list(unique_tracks.values())
+
+
+def format_action_log(actions: list[dict[str, Any]], stems: list[dict]) -> list[str]:
+    """Build the human-readable Retained/Added/Removed audit log for a loop.
+
+    Shared by the fresh path (``_step_parse_actions`` over ``active_stems``) and
+    the pregen path (``_step_commit_state`` over ``state.previous_stems``) so the
+    two near-identical loops can never drift. Pure: takes the action list and the
+    stem list to resolve indices against, returns the log lines.
+
+    >>> format_action_log(
+    ...     [{"action_type": "add", "sub_family": "Pad"}], []
+    ... )
+    ['Added Pad']
+    """
+    log: list[str] = []
+    for action in actions:
+        a_type = action.get("action_type")
+        idx = action.get("stem_index")
+        if a_type == "retain" and idx is not None and 0 <= idx < len(stems):
+            prompt = stems[idx].get("prompt", "")
+            prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
+            log.append(f"Retained {prompt_part}")
+        elif a_type == "add":
+            log.append(f"Added {action.get('sub_family', '')}")
+        elif a_type == "remove" and idx is not None and 0 <= idx < len(stems):
+            prompt = stems[idx].get("prompt", "")
+            prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
+            log.append(f"Removed {prompt_part}")
+    return log

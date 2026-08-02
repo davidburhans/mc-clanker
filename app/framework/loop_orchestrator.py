@@ -41,6 +41,7 @@ from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (ro
 from app.framework.conductor_interaction import (
     build_fallback_response,
     build_track_prompt,
+    format_action_log,
     load_available_models,
     process_actions,  # noqa: F401  frozen public API (simulation/session_state imports it from here)
 )
@@ -487,25 +488,11 @@ class AsyncFrameworkLoop:
         """P5: dedupe conductor actions + build the last_actions audit log under lock."""
         deduped_tracks = process_actions(conductor_response.get("actions", []), active_stems)
 
-        # Build action log for debugging/auditing
+        # Build action log for debugging/auditing (shared shaper, see format_action_log)
         async with state.lock:
-            current_actions_log = []
-            for action in conductor_response.get("actions", []):
-                a_type = action.get("action_type")
-                idx = action.get("stem_index")
-                if a_type == "retain" and idx is not None and 0 <= idx < len(active_stems):
-                    s = active_stems[idx]
-                    prompt = s.get("prompt", "")
-                    prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                    current_actions_log.append(f"Retained {prompt_part}")
-                elif a_type == "add":
-                    current_actions_log.append(f"Added {action.get('sub_family', '')}")
-                elif a_type == "remove" and idx is not None and 0 <= idx < len(active_stems):
-                    s = active_stems[idx]
-                    prompt = s.get("prompt", "")
-                    prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                    current_actions_log.append(f"Removed {prompt_part}")
-            state.last_actions = current_actions_log
+            state.last_actions = format_action_log(
+                conductor_response.get("actions", []), active_stems
+            )
 
         return deduped_tracks
 
@@ -730,24 +717,10 @@ class AsyncFrameworkLoop:
                 state.current_set_name = self._pregen_results.get("set_name", "Unknown Set")
                 state.llm_reasoning = self._pregen_results.get("reasoning", "No reasoning provided.")
 
-                # Build action log for pre-generated loop
-                current_actions_log = []
-                for action in self._pregen_results.get("actions", []):
-                    a_type = action.get("action_type")
-                    idx = action.get("stem_index")
-                    if a_type == "retain" and idx is not None and 0 <= idx < len(state.previous_stems):
-                        s = state.previous_stems[idx]
-                        prompt = s.get("prompt", "")
-                        prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                        current_actions_log.append(f"Retained {prompt_part}")
-                    elif a_type == "add":
-                        current_actions_log.append(f"Added {action.get('sub_family', '')}")
-                    elif a_type == "remove" and idx is not None and 0 <= idx < len(state.previous_stems):
-                        s = state.previous_stems[idx]
-                        prompt = s.get("prompt", "")
-                        prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
-                        current_actions_log.append(f"Removed {prompt_part}")
-                state.last_actions = current_actions_log
+                # Build action log for pre-generated loop (shared shaper)
+                state.last_actions = format_action_log(
+                    self._pregen_results.get("actions", []), state.previous_stems
+                )
 
             # Capture for initial recording (loop_idx == 1 has no mixer transition event)
             if self._loop_idx == 1:
