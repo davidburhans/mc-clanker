@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Index, Boolean
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, JSON, Index, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from ..db import Base
@@ -17,12 +17,17 @@ class LLMInteraction(Base):
     reasoning = Column(String(1000), nullable=True)
     error = Column(String(500), nullable=True)
     was_fallback = Column(Boolean, default=False)
+    # Conductor context captured per loop for the reasoning-log viewer.
+    # Populated by audit_recording.append_loop_audit from conductor_response.
+    bpm = Column(Float, nullable=True)
+    key = Column(String(50), nullable=True)
+    instruments = Column(JSON, nullable=True)
+    action_type = Column(String(50), nullable=True)
+    set_name = Column(String(255), nullable=True)
 
     show = relationship("Show", back_populates="llm_interactions")
 
-    __table_args__ = (
-        Index("ix_llm_interactions_show_loop", "show_id", "loop_index"),
-    )
+    __table_args__ = (Index("ix_llm_interactions_show_loop", "show_id", "loop_index"),)
 
     def to_dict(self):
         return {
@@ -35,6 +40,31 @@ class LLMInteraction(Base):
             "parsed_response": self.parsed_response,
             "reasoning": self.reasoning,
             "error": self.error,
+            "was_fallback": self.was_fallback,
+            "bpm": self.bpm,
+            "key": self.key,
+            "instruments": self.instruments,
+            "action_type": self.action_type,
+            "set_name": self.set_name,
+        }
+
+    def to_reasoning_export_dict(self):
+        """Structured view for the reasoning-log viewer/export (no raw prompts).
+
+        Used by GET /api/llm-config/reasoning-logs/export as one JSONL row.
+        Excludes prompt_messages/parsed_response to keep the export focused on
+        the conductor's per-loop musical decisions.
+        """
+        return {
+            "id": self.id,
+            "loop_index": self.loop_index,
+            "relative_time_ms": self.relative_time_ms,
+            "bpm": self.bpm,
+            "key": self.key,
+            "instruments": self.instruments,
+            "action_type": self.action_type,
+            "set_name": self.set_name,
+            "reasoning": self.reasoning,
             "was_fallback": self.was_fallback,
         }
 

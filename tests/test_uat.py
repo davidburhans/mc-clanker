@@ -9,6 +9,7 @@ Validates real-world scenarios from a stakeholder perspective:
 """
 
 import os
+
 os.environ["DATABASE_URL"] = ""  # Force SQLite
 
 import pytest
@@ -26,22 +27,12 @@ from app.models import LLMInteraction
 # everywhere else.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
 # Several UAT tests assert production features that are NOT implemented today.
 # They are marked xfail(strict=False): the suite stays green, the gap is
 # documented in the reason, and the tests automatically start passing once the
 # feature ships (an unexpected pass is reported, not a failure).
 # See adversarial_review/00_SYNTHESIS.md, section D (D6).
-_REASONING_NOT_MOUNTED = (
-    "reasoning_logs router is not included in app/routes/__init__.py; "
-    "all /api/llm-config/reasoning-* endpoints return 404 'Not Found' "
-    "(production wiring fix required)"
-)
-_LLM_COLS_MISSING = (
-    "LLMInteraction has no bpm/key/instruments/action_type/set_name columns "
-    "in app/models/llm_interaction.py (production feature not implemented)"
-)
-
-
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -50,6 +41,7 @@ def client():
 @pytest.fixture(autouse=True)
 def init_db():
     from app.db import DatabaseManager
+
     db = DatabaseManager.get_instance()
     db.create_tables()
 
@@ -66,7 +58,7 @@ def reset_state():
 # UAT Scenario 1: Conductor Reasoning Log Viewer - Happy Path
 # =============================================================================
 
-@pytest.mark.xfail(strict=False, reason=_REASONING_NOT_MOUNTED)
+
 class TestUATReasoningLogsHappyPath:
     """As a user, I want to search and filter my conductor reasoning logs
     so I can understand why the AI made specific musical decisions."""
@@ -125,7 +117,7 @@ class TestUATReasoningLogsHappyPath:
 # UAT Scenario 2: Reasoning Logs - Export & Timeline
 # =============================================================================
 
-@pytest.mark.xfail(strict=False, reason=_REASONING_NOT_MOUNTED)
+
 class TestUATReasoningLogsExportTimeline:
     """As a user, I want to export reasoning logs and view timeline segments."""
 
@@ -149,7 +141,7 @@ class TestUATReasoningLogsExportTimeline:
 # UAT Scenario 3: Reasoning Statistics
 # =============================================================================
 
-@pytest.mark.xfail(strict=False, reason=_REASONING_NOT_MOUNTED)
+
 class TestUATReasoningStats:
     """As a user, I want to see aggregate statistics about conductor decisions."""
 
@@ -164,9 +156,15 @@ class TestUATReasoningStats:
         if response.status_code == 200:
             data = response.json()
             expected_fields = [
-                "total_interactions", "action_counts", "avg_bpm",
-                "bpm_range", "keys_used", "instruments_used",
-                "fallback_count", "fallback_rate", "avg_reasoning_length"
+                "total_interactions",
+                "action_counts",
+                "avg_bpm",
+                "bpm_range",
+                "keys_used",
+                "instruments_used",
+                "fallback_count",
+                "fallback_rate",
+                "avg_reasoning_length",
             ]
             for field in expected_fields:
                 assert field in data, f"Missing field: {field}"
@@ -176,34 +174,30 @@ class TestUATReasoningStats:
 # UAT Scenario 4: LLMInteraction Model New Fields
 # =============================================================================
 
+
 class TestUATLLMInteractionModel:
     """The LLMInteraction model must correctly expose bpm, key, instruments,
     action_type, set_name fields."""
 
-    @pytest.mark.xfail(strict=False, reason=_LLM_COLS_MISSING)
     def test_model_has_bpm_field(self):
         """UAT-4.1: LLMInteraction has bpm column."""
-        assert hasattr(LLMInteraction, 'bpm')
+        assert hasattr(LLMInteraction, "bpm")
 
-    @pytest.mark.xfail(strict=False, reason=_LLM_COLS_MISSING)
     def test_model_has_key_field(self):
         """UAT-4.2: LLMInteraction has key column."""
-        assert hasattr(LLMInteraction, 'key')
+        assert hasattr(LLMInteraction, "key")
 
-    @pytest.mark.xfail(strict=False, reason=_LLM_COLS_MISSING)
     def test_model_has_instruments_field(self):
         """UAT-4.3: LLMInteraction has instruments column."""
-        assert hasattr(LLMInteraction, 'instruments')
+        assert hasattr(LLMInteraction, "instruments")
 
-    @pytest.mark.xfail(strict=False, reason=_LLM_COLS_MISSING)
     def test_model_has_action_type_field(self):
         """UAT-4.4: LLMInteraction has action_type column."""
-        assert hasattr(LLMInteraction, 'action_type')
+        assert hasattr(LLMInteraction, "action_type")
 
-    @pytest.mark.xfail(strict=False, reason=_LLM_COLS_MISSING)
     def test_model_has_set_name_field(self):
         """UAT-4.5: LLMInteraction has set_name column."""
-        assert hasattr(LLMInteraction, 'set_name')
+        assert hasattr(LLMInteraction, "set_name")
 
     def test_model_to_dict_includes_new_fields(self):
         """UAT-4.6: to_dict() output includes bpm, key, instruments, action_type, set_name."""
@@ -224,13 +218,21 @@ class TestUATLLMInteractionModel:
         obj.action_type = "retain"
         obj.set_name = "Verse"
         obj.to_dict.return_value = {
-            "id": 1, "show_id": 1, "loop_index": 1,
+            "id": 1,
+            "show_id": 1,
+            "loop_index": 1,
             "timestamp": "2024-01-01T00:00:00+00:00",
             "relative_time_ms": 4000,
-            "prompt_messages": [], "parsed_response": {},
-            "reasoning": "Test reasoning", "error": None, "was_fallback": False,
-            "bpm": 128.0, "key": "C", "instruments": ["Bass", "Drums"],
-            "action_type": "retain", "set_name": "Verse",
+            "prompt_messages": [],
+            "parsed_response": {},
+            "reasoning": "Test reasoning",
+            "error": None,
+            "was_fallback": False,
+            "bpm": 128.0,
+            "key": "C",
+            "instruments": ["Bass", "Drums"],
+            "action_type": "retain",
+            "set_name": "Verse",
         }
 
         d = obj.to_dict()
@@ -245,7 +247,6 @@ class TestUATLLMInteractionModel:
         assert d["action_type"] == "retain"
         assert d["set_name"] == "Verse"
 
-    @pytest.mark.xfail(strict=False, reason=_LLM_COLS_MISSING)
     def test_model_to_reasoning_export_includes_new_fields(self):
         """UAT-4.7: to_reasoning_export_dict() includes structured fields."""
         obj = MagicMock(spec=LLMInteraction)
@@ -265,10 +266,16 @@ class TestUATLLMInteractionModel:
         obj.action_type = "add"
         obj.set_name = "Chorus"
         obj.to_reasoning_export_dict.return_value = {
-            "id": 1, "loop_index": 1, "relative_time_ms": 4000,
-            "bpm": 130.0, "key": "Am", "instruments": ["Synth"],
-            "action_type": "add", "set_name": "Chorus",
-            "reasoning": "Test reasoning", "was_fallback": False,
+            "id": 1,
+            "loop_index": 1,
+            "relative_time_ms": 4000,
+            "bpm": 130.0,
+            "key": "Am",
+            "instruments": ["Synth"],
+            "action_type": "add",
+            "set_name": "Chorus",
+            "reasoning": "Test reasoning",
+            "was_fallback": False,
         }
 
         d = obj.to_reasoning_export_dict()
@@ -283,12 +290,14 @@ class TestUATLLMInteractionModel:
 # UAT Scenario 5: Adversarial Review Fixes Validation
 # =============================================================================
 
+
 class TestUATAdversarialFixes:
     """Validate that all adversarial review findings were correctly fixed."""
 
     def test_seed_mixing_fix(self):
         """UAT-5.1: StateGenerator uses per-instance deterministic seeding (BUG-1)."""
         from slop_harness.state_generator import StateGenerator
+
         gen1 = StateGenerator(batch_id=1, interaction_id=5)
         gen1_again = StateGenerator(batch_id=1, interaction_id=5)
         state1a = gen1.build()
@@ -297,15 +306,11 @@ class TestUATAdversarialFixes:
         assert state1a["bpm"] == state1b["bpm"]
         assert state1a["key"] == state1b["key"]
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="GenerationConfig no longer enforces cfg_scale<=20 / steps<=100 "
-               "bounds; production schema changed (SEC-1 bound removed)",
-    )
     def test_input_validation_bounds(self):
         """UAT-5.2: Input validation has reasonable bounds (SEC-1)."""
         from app.routes.schemas import GenerationConfig, JobSubmission
         from pydantic import ValidationError
+
         # GenerationConfig.cfg_scale has le=20.0
         try:
             GenerationConfig(cfg_scale=9999.0)
@@ -320,12 +325,7 @@ class TestUATAdversarialFixes:
             pass
         # JobSubmission.bars has le=32
         try:
-            JobSubmission(
-                session_id="550e8400-e29b-41d4-a716-446655440000",
-                instrument="Bass",
-                prompt="test",
-                bars=999
-            )
+            JobSubmission(session_id="550e8400-e29b-41d4-a716-446655440000", instrument="Bass", prompt="test", bars=999)
             assert False, "Should reject bars > 32"
         except ValidationError:
             pass
@@ -336,15 +336,11 @@ class TestUATAdversarialFixes:
         response = client.get("/openapi.json")
         assert response.status_code == 200
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="GenerationConfig no longer enforces cfg_scale<=20 / steps<=100 "
-               "bounds; production schema changed",
-    )
     def test_runaway_increment_bounds(self):
         """UAT-5.4: Concurrent requests bounded to prevent runaway increment (BUG-2)."""
         from app.routes.schemas import GenerationConfig
         from pydantic import ValidationError
+
         # cfg_scale maximum bound prevents runaway audio quality degradation
         try:
             GenerationConfig(cfg_scale=50.0, steps=1)
@@ -361,20 +357,21 @@ class TestUATAdversarialFixes:
     @pytest.mark.xfail(
         strict=False,
         reason="DatasetWriter uses threading.Lock for sync file I/O; the "
-               "'must use asyncio.Lock' assumption is likely outdated",
+        "'must use asyncio.Lock' assumption is likely outdated",
     )
     def test_dataset_writer_uses_asyncio_lock(self):
         """UAT-5.5: DatasetWriter uses asyncio.Lock (not threading.Lock)."""
         import inspect
         from slop_harness.dataset_writer import DatasetWriter
+
         source = inspect.getsource(DatasetWriter)
-        assert "threading.Lock" not in source, \
-            "DatasetWriter should NOT use threading.Lock (use asyncio.Lock)"
+        assert "threading.Lock" not in source, "DatasetWriter should NOT use threading.Lock (use asyncio.Lock)"
 
 
 # =============================================================================
 # UAT Scenario 6: Core Application Smoke Tests
 # =============================================================================
+
 
 class TestUATCoreApplicationSmoke:
     """Basic application health and endpoint availability."""
@@ -384,7 +381,6 @@ class TestUATCoreApplicationSmoke:
         response = client.get("/docs")
         assert response.status_code == 200
 
-    @pytest.mark.xfail(strict=False, reason=_REASONING_NOT_MOUNTED)
     def test_api_endpoints_registered(self, client):
         """UAT-6.2: Key API routes are registered in OpenAPI."""
         response = client.get("/openapi.json")
@@ -394,7 +390,6 @@ class TestUATCoreApplicationSmoke:
         reasoning_paths = [p for p in paths if "reasoning" in p.lower()]
         assert len(reasoning_paths) > 0, "No reasoning log routes registered"
 
-    @pytest.mark.xfail(strict=False, reason=_REASONING_NOT_MOUNTED)
     def test_auth_system_active(self, client):
         """UAT-6.3: Authentication is required for protected endpoints."""
         response = client.get("/api/llm-config/reasoning-logs?show_id=1")
@@ -413,6 +408,7 @@ class TestUATCoreApplicationSmoke:
 # UAT Scenario 7: No Leftover Debug/Scratch Files
 # =============================================================================
 
+
 class TestUATCodeCleanliness:
     """Validate that the codebase is clean after the rework loop."""
 
@@ -421,8 +417,13 @@ class TestUATCodeCleanliness:
         # D7: resolve the real repo root so this asserts against THIS checkout,
         # not a hardcoded path from another developer's machine.
         scratch_files = [
-            "_test_hang.py", "scratch.py", "debug.py", "test_manual.py",
-            "test_quick.py", "experiment.py", "poc.py"
+            "_test_hang.py",
+            "scratch.py",
+            "debug.py",
+            "test_manual.py",
+            "test_quick.py",
+            "experiment.py",
+            "poc.py",
         ]
         found = [f for f in scratch_files if (_REPO_ROOT / f).exists()]
         assert not found, f"Scratch files found: {found}"

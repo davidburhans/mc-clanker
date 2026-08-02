@@ -35,6 +35,11 @@ _LLM_INTERACTION_COLS = {
     "reasoning",
     "error",
     "was_fallback",
+    "bpm",
+    "key",
+    "set_name",
+    "instruments",
+    "action_type",
 }
 _SHOW_ACTION_COLS = {
     "show_id",

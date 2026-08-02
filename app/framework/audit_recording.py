@@ -138,6 +138,23 @@ def _audit_action_row(show_id, loop_idx, ts, relative_ms, action, active_stems) 
     }
 
 
+def _audit_loop_meta(conductor_response: dict[str, Any], active_stems: list[dict[str, Any]]) -> dict[str, Any]:
+    """Derive the per-loop conductor context stored on an LLMInteraction row.
+
+    bpm/key/set_name come straight from conductor_response; instruments is the
+    active stem names; action_type is a single rollup (add > remove > retain)
+    since one loop carries N actions but one interaction row.
+    """
+    action_types = {a.get("action") for a in (conductor_response.get("actions") or [])}
+    return {
+        "bpm": conductor_response.get("master_bpm"),
+        "key": conductor_response.get("master_key"),
+        "set_name": conductor_response.get("name"),
+        "instruments": [s.get("instrument") for s in active_stems if s.get("instrument")],
+        "action_type": next((t for t in ("add", "remove", "retain") if t in action_types), None),
+    }
+
+
 async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
     """Buffer one LLMInteraction + N ShowAction rows for later DB flush (C1).
 
@@ -164,6 +181,7 @@ async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
                 "reasoning": reasoning,
                 "error": None,
                 "was_fallback": is_fallback,
+                **_audit_loop_meta(conductor_response, active_stems),
             }
         )
         for action in actions:
