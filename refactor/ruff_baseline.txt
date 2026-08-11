@@ -1,1 +1,32 @@
-[*] 450 fixable with the `--fix` option (41 hidden fixes can be enabled with the `--unsafe-fixes` option).
+# Ruff lint baseline — Phase 10 close-out
+#
+# Captured at commit aab8b43 ("style(e10): enforce I (import sort)") after the
+# E1-E6 Phase 10 close-out completed FULL enforcement of:
+#   E (pycodestyle) + F (pyflakes) + I (isort/import-sort)
+#   + UP006/UP007/UP045 (typing modernization, E6/Phase 9).
+#
+# This file supersedes the earlier pre-enforcement baseline, which was a
+# malformed fragment capturing only the "[*] N fixable" summary footer (no
+# per-rule breakdown). That fragment was a stale artifact of the original
+# Phase 9 step (plan.md L316): `.venv/bin/ruff check app/ tests/ >
+# refactor/ruff_baseline.txt`, intended to anchor a "debt must not increase"
+# guard during the phased refactor.
+#
+# With E,F,I,UP all selected in [tool.ruff.lint], the enforced set is now
+# CLEAN (0 errors). This file is the REGRESSION CHECKPOINT: any future
+# `ruff check app/ tests/` output above zero is a regression to fix before
+# landing.
+#
+# Re-measure (authoritative — ruff output is version/scope-sensitive):
+#   .venv/bin/ruff check app/ tests/
+#   .venv/bin/ruff check --select E,F,I,UP006,UP007,UP045 --statistics app/ tests/
+#
+# Enforced rule set — pyproject.toml [tool.ruff.lint].select:
+#   ["E", "F", "I", "UP006", "UP007", "UP045"]
+#
+# --- live capture (commit aab8b43) ----------------------------------------
+# $ .venv/bin/ruff check app/ tests/
+# All checks passed!
+#
+# $ .venv/bin/ruff check --select E,F,I,UP006,UP007,UP045 --statistics app/ tests/
+# (no output — 0 errors across all enforced rules)
