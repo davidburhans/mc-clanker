@@ -136,7 +136,7 @@ def _reset_loop_state():
 class _FakeMixer:
     """Minimal mixer stand-in that records handoff calls for _run_loop tests."""
 
-    def __init__(self, *, current_sample=0, stop_on=None):
+    def __init__(self, *, current_sample=0, stop_on=None, transition_events=None):
         self.sample_rate = 44100
         self.current_sample = current_sample
         self.current_loop_end_sample = 0
@@ -151,6 +151,12 @@ class _FakeMixer:
         #            ("setnext", n) → stop after n-th set_next_loop.
         self._stop_on = stop_on
         self._loop = None  # back-ref set by _seed_loop_for_run; needed to flip loop.running
+        # Opt-in transition-event queue: when non-empty, pop_transition_event()
+        # returns each idx in turn, then flips loop.running=False to terminate the
+        # P13 await spin cleanly. When None/empty (default), always returns None —
+        # identical to pre-extension behavior, so existing tests are unaffected.
+        self._transition_events = list(transition_events) if transition_events else []
+        self._transition_event_iter = iter(self._transition_events)
 
     def _maybe_stop(self, kind):
         if self._stop_on is None:
@@ -179,7 +185,16 @@ class _FakeMixer:
 
     def pop_transition_event(self):
         self.pop_calls += 1
-        return None
+        if not self._transition_events:
+            return None  # default: unchanged behavior for all existing tests
+        try:
+            return next(self._transition_event_iter)
+        except StopIteration:
+            # Transition queue exhausted: terminate the P13 await spin
+            # (mirrors _maybe_stop's loop.running=False pattern).
+            if self._loop is not None:
+                self._loop.running = False
+            return None
 
     def set_next_loop(self, tracks, next_loop_duration_samples=None, loop_idx=None):
         self.set_next_loop_calls.append(
@@ -958,3 +973,89 @@ async def test_d0_p8_foreground_fetch_routes_through_cache_stem(monkeypatch):
     with patch.object(state, "cache_stem") as cs:
         await asyncio.wait_for(loop._run_loop(), timeout=5.0)
     assert cs.called, "foreground _run_loop must route fetched audio through state.cache_stem"
+
+
+# --------------------------------------------------------------------------- #
+# P13 transition-recording — _step_await_pregen dead-code branches
+# (refactor/decomp/04_adversarial.md UNTESTED-PATHS, pre-existing gap)
+# --------------------------------------------------------------------------- #
+
+
+async def test_step_await_pregen_records_transition_from_mixer_event(monkeypatch):
+    """Branch 1 (loop_steps.py:670-678): when pop_transition_event() returns a
+    positive loop idx, record_loop_transition IS called with that idx + the
+    snapshot of active_stems / current_set_name / llm_reasoning.
+
+    Drives _step_await_pregen directly with a fake mixer whose
+    pop_transition_event returns 2 once. current_ahead is kept >= 0.5 so the
+    inner while iterates past the transition recording. _pregen_done is never
+    set (proves the recording fires on a real await-spin iteration, not a
+    pre-gen-done fast-path).
+    """
+    loop = AsyncFrameworkLoop(uuid.uuid4())
+    mixer = _FakeMixer(current_sample=0, transition_events=[2])
+    mixer.current_loop_end_sample = 44100  # current_ahead = 44100/44100 = 1.0s
+    mixer._loop = loop
+    loop.mixer = mixer
+    loop.running = True
+    loop._loop_idx = 1
+    loop._pregen_done = asyncio.Event()  # unset -> enters while body
+
+    state.active_stems = [_active_stem_for_retain()]
+    state.current_set_name = "Test Set"
+    state.llm_reasoning = "transition reasoning"
+
+    record_calls = []
+    monkeypatch.setattr(
+        state, "record_loop_transition",
+        lambda idx, stems, set_name, reason: record_calls.append(
+            (idx, list(stems), set_name, reason)),
+    )
+    _patch_sleep_instant(monkeypatch)
+
+    await asyncio.wait_for(loop._step_await_pregen(), timeout=5.0)
+
+    # WIRING: the idx from pop_transition_event flows through to the record call
+    assert len(record_calls) == 1
+    assert record_calls[0][0] == 2                       # transitioned_loop_idx
+    assert record_calls[0][1] == list(state.active_stems)  # t_stems snapshot
+    assert record_calls[0][2] == "Test Set"              # t_set = current_set_name
+    assert record_calls[0][3] == "transition reasoning"  # t_reason = llm_reasoning
+    # Proves >= 2 iterations (transition consumed + exhausted flip)
+    assert mixer.pop_calls >= 2
+    # Loop terminated via running-flip, not pre-gen-done
+    assert not loop._pregen_done.is_set()
+
+
+async def test_step_await_pregen_breaks_when_current_ahead_below_half_second(monkeypatch):
+    """Branch 2 (loop_steps.py:695-697): when the mixer is < 0.5s from its loop
+    boundary, the await-spin breaks immediately (to avoid missing a transition).
+
+    current_loop_end_sample == current_sample == 0 → current_ahead = 0.0 < 0.5.
+    _pregen_done is unset (proves the break is from current_ahead, not pre-gen).
+    No transition event is queued, so record_loop_transition is NOT called.
+    """
+    loop = AsyncFrameworkLoop(uuid.uuid4())
+    mixer = _FakeMixer(current_sample=0)  # transition_events=None (default)
+    mixer.current_loop_end_sample = 0     # current_ahead = (0-0)/44100 = 0.0
+    mixer._loop = loop
+    loop.mixer = mixer
+    loop.running = True
+    loop._loop_idx = 1
+    loop._pregen_done = asyncio.Event()  # unset -> proves break is NOT from pre-gen
+
+    record_calls = []
+    monkeypatch.setattr(
+        state, "record_loop_transition",
+        lambda idx, stems, set_name, reason: record_calls.append(
+            (idx, list(stems), set_name, reason)),
+    )
+    _patch_sleep_instant(monkeypatch)
+
+    await asyncio.wait_for(loop._step_await_pregen(), timeout=5.0)
+
+    # Broke on the FIRST iteration via current_ahead < 0.5
+    assert mixer.pop_calls == 1            # exactly one pop → one iteration
+    assert record_calls == []              # no transition recorded
+    assert not loop._pregen_done.is_set()  # break was NOT from pre-gen-done
+    assert loop.running                     # running still True (break is local)
