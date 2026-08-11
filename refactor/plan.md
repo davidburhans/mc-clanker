@@ -111,6 +111,18 @@ class MixerController(Protocol):  # concrete Mixer satisfies structurally; PRIVA
     def stop(self) -> None: ...
 ```
 
+**E5 port-wiring status (as of Phase 10 close-out, commit `aab8b43`, 2026-08-11):** Of the five
+ports above, only **`ConductorPort` is constructor-injected** — `AsyncFrameworkLoop.__init__`
+accepts `conductor=...` (commit `344a28f`, the E5 driving port). `JobQueuePort`,
+`AudioFetchPort`, and `AuditSinkPort` are declared for **typing/documentation only**: the
+orchestrator still reaches them through internal delegate methods (`_submit_job`,
+`_fetch_audio`, `_append_loop_audit`), which tests exercise via `patch.object(loop, ...)`.
+Full keyword-injection of the remaining three ports (the Phase 7b
+`__init__(self, session_id, *, conductor, jobs, audio, audit, pregen)` spec) is **deferred**
+— the typing-only Protocol + delegate-method seam is accepted as the current boundary
+(option (a) of `refactor/review/final/quality.md` §E5). `MixerController` remains
+typing-only — see Phase 11 below.
+
 **Decision (flagged for reviewer):** Mixer stays a **concrete dependency** of the orchestrator for this effort. The `MixerController` Protocol is declared for typing/documentation only. The orchestrator continues to reach Mixer's private members (`_add_track_internal`, `_ensure_stereo`, `_current_loop_duration`, `mixer.lock`) at P10/P13 in the short term because promoting them touches the audio-critical real-time callback path (brief-01 risk #5). Full MixerPort extraction is **Phase 11, explicitly optional/deferred**.
 
 ### 1.4 GlobalState slice view-properties (E3 pass-1, additive)
@@ -329,7 +341,7 @@ The 3 dead ModelMgmt attrs (`model_states`, `model_errors`, `download_progress`)
 ### Phase 11 — *(OPTIONAL / DEFAULT-SKIPPED)* Full `MixerController` port 🔴 VERY HIGH RISK
 
 - **Objective:** Promote Mixer's private members (`_add_track_internal`, `_ensure_stereo`, `_current_loop_duration`, `mixer.lock`) to a public `MixerController`-satisfying surface and remove direct private reach from the orchestrator.
-- **Status:** **DEFERRED unless reviewer approves.** Touches the real-time `_callback` audio path (brief-01 risk #5); the dual-lock coordination (state.lock vs mixer.lock) at P10/P13 can deadlock or drop crossfade events if done wrong. The `MixerController` Protocol from Phase 1 gives typing now; full extraction is a separate, dedicated effort with its own adversarial audio-path review.
+- **Status:** **DEFERRED unless reviewer approves** (confirmed skipped in the 2026-08-11 Phase 10 close-out run — revisit only as a dedicated effort with its own adversarial audio-path review). Touches the real-time `_callback` audio path (brief-01 risk #5); the dual-lock coordination (state.lock vs mixer.lock) at P10/P13 can deadlock or drop crossfade events if done wrong. The `MixerController` Protocol from Phase 1 gives typing now; full extraction is a separate, dedicated effort with its own adversarial audio-path review.
 - **Risks respected:** risk #5 — left intact; flagged.
 
 ---
