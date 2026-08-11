@@ -6,7 +6,7 @@ Each interaction is derived from (batch_id, interaction_id):
 This produces:
   - song_age: 0-50 (loop count)
   - bpm: weighted by genre cluster
-  - key: random from KEYS_ALL
+  - key: random from ALL_KEYS
   - stem_count: 1-7 (weighted toward 4-5)
   - stems: list of stem dicts with _age values
   - history: up to 5 previous stem sets
@@ -17,12 +17,11 @@ from random import Random
 from typing import Any
 
 from slop_harness.models import (
-    ALL_MODELS,
-    BARS_ALL,
-    BPMS_ALL,
+    ALL_BARS,
+    ALL_BPMS,
+    ALL_KEYS,
     FOUNDATION_1_MODEL,
     FX_TAGS_F1,
-    KEYS_ALL,
     NOTATION_TAGS_F1,
     TIMBRE_TAGS_F1,
 )
@@ -58,9 +57,9 @@ class StateGenerator:
         bpm_min, bpm_max = self.CLUSTER_BPM_RANGES[cluster]
         bpm = self._rng.randint(bpm_min, bpm_max)
         # Snap to nearest valid BPM
-        bpm = min(BPMS_ALL, key=lambda x: abs(x - bpm))
+        bpm = min(ALL_BPMS, key=lambda x: abs(x - bpm))
 
-        key = self._rng.choice(KEYS_ALL)
+        key = self._rng.choice(ALL_KEYS)
 
         stem_count = max(1, min(7, int(self._rng.gauss(4, 1.5))))
 
@@ -106,7 +105,7 @@ class StateGenerator:
         timbre_tags = self._rng.sample(TIMBRE_TAGS_F1, min(3, len(TIMBRE_TAGS_F1)))
         notation_tag = self._rng.choice(NOTATION_TAGS_F1)
         fx_tag = self._rng.choice(FX_TAGS_F1)
-        bars = self._rng.choice(BARS_ALL)
+        bars = self._rng.choice(ALL_BARS)
 
         prompt = (
             f"{sub_family}, {', '.join(timbre_tags)}, {notation_tag}, "

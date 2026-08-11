@@ -37,10 +37,10 @@ def test_bpm_in_valid_range():
 
 def test_key_is_valid():
     """Key is always one of the valid keys."""
-    from slop_harness.models import KEYS_ALL
+    from slop_harness.models import ALL_KEYS
     for i in range(200):
         state = StateGenerator(batch_id=0, interaction_id=i).build()
-        assert state["key"] in KEYS_ALL
+        assert state["key"] in ALL_KEYS
 
 
 def test_history_depth_bounded():

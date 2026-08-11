@@ -12,7 +12,7 @@ from typing import Any
 
 from app.framework.framework_main_async import process_actions
 from app.framework.framework_state import DEFAULT_INSTRUMENTS
-from slop_harness.models import BPMS_ALL, KEYS_ALL
+from slop_harness.models import ALL_BPMS, ALL_KEYS
 
 
 MAX_HISTORY = 8
@@ -89,9 +89,9 @@ class SessionState:
         self._rng = random.Random(taste_seed)
 
         # Randomized starting BPM (not always 128)
-        self.bpm = self._rng.choice(BPMS_ALL)
+        self.bpm = self._rng.choice(ALL_BPMS)
         # Randomized starting key (not always C major)
-        self.key = self._rng.choice(KEYS_ALL)
+        self.key = self._rng.choice(ALL_KEYS)
 
         # Randomized instrument selection (75% full, 25% restricted)
         self.available_instruments = _select_instruments_for_jockey(self._rng)

@@ -8,7 +8,7 @@ notation_tags, fx_tags, keys, bpms, and bars.
 """
 
 # All 24 musical keys (all sharp notation)
-KEYS_ALL = [
+ALL_KEYS: list[str] = [
     "A# major", "A# minor", "B major", "B minor",
     "C major", "C minor", "C# major", "C# minor",
     "D major", "D minor", "D# major", "D# minor",
@@ -19,10 +19,10 @@ KEYS_ALL = [
 ]
 
 # Standard BPM values
-BPMS_ALL = [100, 110, 120, 128, 130, 140, 150]
+ALL_BPMS: list[int] = [100, 110, 120, 128, 130, 140, 150]
 
 # Standard bar lengths
-BARS_ALL = [4, 8]
+ALL_BARS: list[int] = [4, 8]
 
 # Foundation-1 model definition
 FOUNDATION_1_MODEL = {
@@ -91,9 +91,9 @@ FOUNDATION_1_MODEL = {
         "Phaser", "Low Phaser", "Medium Phaser", "High Phaser",
         "Bitcrush", "High Bitcrush"
     ],
-    "keys": KEYS_ALL,
-    "bpms": BPMS_ALL,
-    "bars": BARS_ALL,
+    "keys": ALL_KEYS,
+    "bpms": ALL_BPMS,
+    "bars": ALL_BARS,
 }
 
 # Infinite Pianos model definition
@@ -128,8 +128,8 @@ INFINITE_PIANOS_MODEL = {
         "D major", "D# major", "D# minor", "F major", "F# major", "F# minor",
         "G major", "G# major", "G# minor"
     ],
-    "bpms": BPMS_ALL,
-    "bars": BARS_ALL,
+    "bpms": ALL_BPMS,
+    "bars": ALL_BARS,
 }
 
 # Vocal Textures model definition
@@ -140,15 +140,19 @@ VOCAL_TEXTURES_MODEL = {
     "major_families": ["Vocal", "Choir", "Pad", "Atmosphere"],
     "sub_families": ["Male Vocal Texture", "Female Vocal Texture", "Ensemble Vocal Texture"],
     "notation_tags": ["chord progression"],
-    "keys": KEYS_ALL,
-    "bpms": BPMS_ALL,
-    "bars": BARS_ALL,
+    "keys": ALL_KEYS,
+    "bpms": ALL_BPMS,
+    "bars": ALL_BARS,
 }
 
 # All models list
 ALL_MODELS = [FOUNDATION_1_MODEL, INFINITE_PIANOS_MODEL, VOCAL_TEXTURES_MODEL]
 
 # Exported constants for convenience
+# ALL_INSTRUMENTS is the canonical instrument (sub_family) universe backed by
+# Foundation-1's sub_families. quality_validator uses it as the denominator for
+# instrument-coverage metrics (it counts sub_family values from `add` actions).
+ALL_INSTRUMENTS: list[str] = FOUNDATION_1_MODEL["sub_families"]
 TIMBRE_TAGS_F1 = FOUNDATION_1_MODEL["timbre_tags"]
 FX_TAGS_F1 = FOUNDATION_1_MODEL["fx_tags"]
 NOTATION_TAGS_F1 = FOUNDATION_1_MODEL["notation_tags"]

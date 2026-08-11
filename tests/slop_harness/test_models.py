@@ -4,9 +4,10 @@ from slop_harness.models import (
     ALL_MODELS,
     TIMBRE_TAGS_F1,
     FX_TAGS_F1,
-    KEYS_ALL,
-    BPMS_ALL,
-    BARS_ALL,
+    ALL_KEYS,
+    ALL_BPMS,
+    ALL_BARS,
+    ALL_INSTRUMENTS,
 )
 
 
@@ -77,18 +78,24 @@ def test_fx_tags_f1_match_hf_docs():
 
 
 def test_keys_all_has_24_keys():
-    assert len(KEYS_ALL) == 24
-    majors = [k for k in KEYS_ALL if "major" in k]
-    minors = [k for k in KEYS_ALL if "minor" in k]
+    assert len(ALL_KEYS) == 24
+    majors = [k for k in ALL_KEYS if "major" in k]
+    minors = [k for k in ALL_KEYS if "minor" in k]
     assert len(majors) == 12
     assert len(minors) == 12
-    assert "G# major" in KEYS_ALL
-    assert "G# minor" in KEYS_ALL
+    assert "G# major" in ALL_KEYS
+    assert "G# minor" in ALL_KEYS
 
 
 def test_bpms_all_standard_values():
-    assert set(BPMS_ALL) == {100, 110, 120, 128, 130, 140, 150}
+    assert set(ALL_BPMS) == {100, 110, 120, 128, 130, 140, 150}
 
 
 def test_bars_all_standard_values():
-    assert set(BARS_ALL) == {4, 8}
+    assert set(ALL_BARS) == {4, 8}
+
+
+def test_all_instruments_matches_foundation_1_sub_families():
+    """ALL_INSTRUMENTS is the canonical instrument (sub_family) universe used by quality_validator."""
+    assert ALL_INSTRUMENTS == FOUNDATION_1_MODEL["sub_families"]
+    assert len(ALL_INSTRUMENTS) == 71
