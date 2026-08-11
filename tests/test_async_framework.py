@@ -23,7 +23,6 @@ def test_app_uses_async_framework_not_sync():
 
     # The sync import should NOT exist after the fix
     # Check if sync framework is imported
-    sync_import_path = "app.framework.framework_main"
 
     # Check if the sync run_framework_loop is being used
     # We can't directly check the lifespan function, but we can verify
@@ -115,8 +114,8 @@ class TestPreGeneration:
 
         with (
             patch.object(loop, "conductor") as mock_conductor,
-            patch.object(loop, "_submit_job", new_callable=AsyncMock) as mock_submit,
-            patch.object(loop, "_fetch_audio", new_callable=AsyncMock) as mock_fetch,
+            patch.object(loop, "_submit_job", new_callable=AsyncMock),
+            patch.object(loop, "_fetch_audio", new_callable=AsyncMock),
         ):
             mock_conductor.get_next_state_async = AsyncMock(return_value=mock_response)
 
@@ -379,7 +378,7 @@ class TestNextLoopPreGeneration:
 
         with (
             patch.object(loop, "conductor") as mock_conductor,
-            patch.object(loop, "_submit_job", new_callable=AsyncMock) as mock_submit,
+            patch.object(loop, "_submit_job", new_callable=AsyncMock),
         ):
             mock_conductor.get_next_state_async = AsyncMock(return_value=mock_response)
 

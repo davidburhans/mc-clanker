@@ -74,8 +74,9 @@ class TestShowRoutes:
         # But we patch get_current_user_from_request to return our mock user (id=1)
 
         mock_session = MagicMock()
-        mock_session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.offset.return_value.all.return_value = []
-        mock_session.query.return_value.filter.return_value.count.return_value = 0
+        mock_filtered = mock_session.query.return_value.filter.return_value
+        mock_filtered.order_by.return_value.limit.return_value.offset.return_value.all.return_value = []
+        mock_filtered.count.return_value = 0
 
         mock_db_instance = MagicMock()
         mock_db_instance.session.return_value.__enter__ = MagicMock(return_value=mock_session)

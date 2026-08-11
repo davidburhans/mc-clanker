@@ -46,7 +46,10 @@ def _eq_filter(query, name: str, value):
 @router.get(
     "/reasoning-logs",
     summary="Search reasoning logs",
-    description="Search and filter Conductor LLM reasoning with full-text search, action type, BPM range, key, instrument, and pagination.",
+    description=(
+        "Search and filter Conductor LLM reasoning with full-text search, "
+        "action type, BPM range, key, instrument, and pagination."
+    ),
     responses={
         200: {"description": "Paginated reasoning log entries"},
         401: {"description": "Not authenticated"},
@@ -244,7 +247,10 @@ async def get_reasoning_timeline(
 @router.get(
     "/reasoning-logs/stats",
     summary="Get reasoning statistics",
-    description="Returns aggregate statistics for a show Conductor decisions: action counts, BPM range, instruments, fallback rate.",
+    description=(
+        "Returns aggregate statistics for a show Conductor decisions: "
+        "action counts, BPM range, instruments, fallback rate."
+    ),
     responses={200: {"description": "Aggregate statistics"}, 401: {"description": "Not authenticated"}},
 )
 async def get_reasoning_stats(

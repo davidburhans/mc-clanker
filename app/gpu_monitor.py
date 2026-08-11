@@ -295,7 +295,6 @@ class GPUMonitor:
         try:
             props = torch.cuda.get_device_properties(0)
             total_mb = props.total_mem / (1024 * 1024)
-            allocated_mb = torch.cuda.memory_allocated() / (1024 * 1024)
             reserved_mb = torch.cuda.memory_reserved() / (1024 * 1024)
 
             usage_pct = (reserved_mb / total_mb) * 100 if total_mb > 0 else 0

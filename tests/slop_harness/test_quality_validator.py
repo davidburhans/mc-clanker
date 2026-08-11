@@ -779,7 +779,6 @@ class TestThresholdChecking:
                     ),
                 }
             )
-        dup = dict(records[0])
         for _ in range(5):
             records.append(
                 {

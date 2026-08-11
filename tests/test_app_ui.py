@@ -152,7 +152,7 @@ class TestAudioStreamGenerator:
         with (
             patch("app.app_ui.queue.Queue") as mock_queue_class,
             patch("app.app_ui.state") as mock_state,
-            patch("app.app_ui.subprocess") as mock_subprocess,
+            patch("app.app_ui.subprocess"),
         ):
             mock_queue = MagicMock()
             mock_queue_class.return_value = mock_queue
@@ -178,7 +178,7 @@ class TestAudioStreamGenerator:
         with (
             patch("app.app_ui.queue.Queue") as mock_queue_class,
             patch("app.app_ui.state") as mock_state,
-            patch("app.app_ui.subprocess") as mock_subprocess,
+            patch("app.app_ui.subprocess"),
         ):
             mock_queue = MagicMock()
             mock_queue_class.return_value = mock_queue

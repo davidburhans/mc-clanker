@@ -83,7 +83,7 @@ class TestAuditFixes:
         playback.is_playing = True
 
         try:
-            with patch("app.playback.state") as mock_state:
+            with patch("app.playback.state"):
                 # Verify audio_queue no longer exists (it was the source of the bug)
                 assert not hasattr(playback, "audio_queue"), "audio_queue should be removed — it blocked when full"
 

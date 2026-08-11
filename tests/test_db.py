@@ -33,7 +33,7 @@ class TestDatabaseManager:
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://user:pass@localhost/db"}):
             with patch("app.db.create_engine") as mock_engine:
                 with patch("app.db.sessionmaker"):
-                    db = DatabaseManager.get_instance()
+                    DatabaseManager.get_instance()
                     mock_engine.assert_called_once()
                     call_args = mock_engine.call_args[0][0]
                     assert call_args == "postgresql://user:pass@localhost/db"
@@ -55,7 +55,7 @@ class TestDatabaseManager:
                 with patch("app.db.sessionmaker"):
                     with patch("os.makedirs"):
                         with patch("os.path.dirname", return_value="/tmp"):
-                            db = DatabaseManager.get_instance()
+                            DatabaseManager.get_instance()
                             call_args = mock_engine.call_args[0][0]
                             assert "sqlite" in call_args
 
@@ -103,7 +103,7 @@ class TestDatabaseManager:
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("app.db.create_engine") as mock_engine:
+            with patch("app.db.create_engine"):
                 mock_session = MagicMock()
                 mock_session_maker = MagicMock(return_value=mock_session)
                 with patch("app.db.sessionmaker", return_value=mock_session_maker):
@@ -125,7 +125,7 @@ class TestDatabaseManager:
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("app.db.create_engine") as mock_engine:
+            with patch("app.db.create_engine"):
                 mock_session = MagicMock()
                 mock_session_maker = MagicMock(return_value=mock_session)
                 with patch("app.db.sessionmaker", return_value=mock_session_maker):
@@ -155,7 +155,7 @@ class TestDatabaseManager:
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("app.db.create_engine") as mock_engine:
+            with patch("app.db.create_engine"):
                 mock_session = MagicMock()
                 mock_session_maker = MagicMock(return_value=mock_session)
                 with patch("app.db.sessionmaker", return_value=mock_session_maker):

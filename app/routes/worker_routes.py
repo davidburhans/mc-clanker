@@ -16,7 +16,9 @@ router = APIRouter()
     "/health",
     response_model=WorkerHealthResponse,
     summary="Worker health check",
-    description="Returns the health status of the worker including DB connectivity, Garage connectivity, and job counts.",
+    description=(
+        "Returns the health status of the worker including DB connectivity, Garage connectivity, and job counts."
+    ),
     responses={200: {"description": "Health status"}},
 )
 async def health_check():

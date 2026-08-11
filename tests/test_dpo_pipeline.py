@@ -137,7 +137,6 @@ class TestPreferencePairGenerator:
         assert validate_conductor_schema(chosen_data) is True
 
         # Rejected should be corrupted version (still parseable but schema invalid)
-        rejected_data = json.loads(rejected)
         # Rejected is intentionally corrupted, so validation may fail or it has schema issues
 
     def test_preserves_bpm_and_key_in_chosen(self):
@@ -201,7 +200,11 @@ class TestRewardFunctions:
 
     def test_composite_reward_with_validity_weight(self):
         """Composite reward correctly weights validity vs quality."""
-        valid_response = '{"master_bpm": 130, "master_key": "F minor", "actions": [{"action_type": "retain", "stem_index": 0}], "reasoning": "Keeping bass", "name": "DJ Loop Decision"}'
+        valid_response = (
+            '{"master_bpm": 130, "master_key": "F minor", '
+            '"actions": [{"action_type": "retain", "stem_index": 0}], '
+            '"reasoning": "Keeping bass", "name": "DJ Loop Decision"}'
+        )
         reward = compute_schema_reward(valid_response, validity_weight=1.0, quality_weight=0.0)
         assert reward > 0
 

@@ -95,35 +95,6 @@ class TestAuthRoutes:
         return TestClient(app)
 
 
-class TestGetCurrentUserFromRequest:
-    """Tests for get_current_user_from_request function."""
-
-    def test_decode_token_returns_none_for_expired(self):
-        """Test that decode_token returns None for expired tokens."""
-        import jwt
-        from datetime import datetime, timedelta, timezone
-        from app.auth import JWT_SECRET, JWT_ALGORITHM
-
-        # Create an expired token
-        expire = datetime.now(timezone.utc) - timedelta(hours=1)
-        payload = {"sub": "1", "exp": expire}
-        expired_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-        from app.auth import decode_token
-
-        result = decode_token(expired_token)
-
-        assert result is None
-
-    def test_decode_token_returns_none_for_invalid(self):
-        """Test that decode_token returns None for invalid tokens."""
-        from app.auth import decode_token
-
-        result = decode_token("not.a.valid.token")
-
-        assert result is None
-
-
 class TestRequireAuth:
     """Tests for require_auth decorator."""
 

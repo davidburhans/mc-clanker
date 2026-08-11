@@ -690,7 +690,8 @@ class _LoopSteps:
                 current_ahead = (live_end - live_pos) / self.mixer.sample_rate
                 if self._loop_idx > 1:
                     print(
-                        f"[AsyncLoop-{self._loop_idx}] DEBUG: current_ahead={current_ahead:.2f}s, waiting for pre-gen..."
+                        f"[AsyncLoop-{self._loop_idx}] DEBUG: "
+                        f"current_ahead={current_ahead:.2f}s, waiting for pre-gen..."
                     )
                 if current_ahead < 0.5:
                     # Still waiting for pre-gen, but we need to break to avoid missing the loop transition

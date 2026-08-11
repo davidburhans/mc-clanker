@@ -89,7 +89,7 @@ DJ ACTION RULES:
 - For 'retain' or 'remove' actions: You only need to provide the `stem_index`. Other instrument fields should be `null`.
 
 Output a valid JSON object matching the requested schema EXACTLY. Do not output any thinking or extra text outside the JSON.
-"""
+"""  # noqa: E501 — LLM DJ system prompt; reflow alters model input
 
         self.user_message_template = """Current State:
 Master BPM: {bpm}
@@ -119,7 +119,7 @@ DENSITY RULE: There are currently {stem_count} active stems. {density_directive}
 STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Prefer removing older stems to keep the mix fresh.
 
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
-"""
+"""  # noqa: E501 — LLM DJ user-prompt template; reflow alters model input
 
     def _get_async_client(self, config: dict[str, str] | None = None) -> AsyncOpenAI:
         """Get or create async client based on config."""
@@ -347,7 +347,8 @@ CRITICAL: If the music needs rhythm, ensure you explicitly `add` a 'Drums' stem 
 DENSITY RULE: There are currently {stem_count} active stems. {density_directive}
 STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Prefer removing older stems to keep the mix fresh.
  
-Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now."""
+Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
+"""  # noqa: E501 — LLM DJ prompt; reflow alters model input
 
         from app.lib.harmonic import HarmonicHelper
 

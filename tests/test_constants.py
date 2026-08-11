@@ -1,7 +1,8 @@
 """Tests for app.lib.constants — single source of truth for schema enums."""
 
 import pytest
-import sys, os
+import sys
+import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
@@ -99,7 +100,8 @@ class TestDynamicFamilyExtension:
     def test_schema_includes_custom_family(self):
         add_custom_major_family("TestBrass")
         schema = get_response_format_schema()
-        # Path: top-level key "json_schema" -> inner dict's "schema" key -> actions.items.anyOf[1].properties.major_family.enum
+        # Path: top-level key "json_schema" -> inner dict's "schema" key ->
+        # actions.items.anyOf[1].properties.major_family.enum
         major_family_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"][
             "major_family"
         ]["enum"]

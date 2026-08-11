@@ -186,7 +186,9 @@ def check_jwt_secret() -> CheckResult:
             category="recommended",
             name="jwt_secret",
             message="JWT_SECRET is using the default value",
-            hint='Set JWT_SECRET to a strong random string: python -c "import secrets; print(secrets.token_urlsafe(32))"',
+            hint=(
+                'Set JWT_SECRET to a strong random string: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            ),
         )
     return CheckResult(
         passed=True,

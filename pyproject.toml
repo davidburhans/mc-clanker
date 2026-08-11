@@ -71,11 +71,12 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-# Phase 10 (E6): enforce the typing-modernization rules so the List/Dict/Optional
-# -> builtin/PEP-604 conversion (Phase 9) cannot regress. E (pycodestyle, 81),
-# F (unused, 20), and I (import sorting, 105) carry pre-existing debt and are
-# staged as separate follow-up cleanup — enabling them now would fail on it.
-select = ["UP006", "UP007", "UP045"]
+# Enforce E (pycodestyle) + F (pyflakes) plus the UP006/UP007/UP045 typing
+# rules (E6 modernization, Phase 9). E + F debt was paid down in the E10-EF
+# sweep (E501 wraps, F841 dead vars with side-effects preserved, E402
+# intentional-import noqas, E401 split, F811 dedup). `I` (import sorting) still
+# carries pre-existing debt and is deferred to its own commit.
+select = ["E", "F", "UP006", "UP007", "UP045"]
 
 [tool.pyright]
 # Point Pyright (the LSP pi-lens uses) at the venv site-packages so third-party

@@ -81,7 +81,8 @@ class StableAudioEngine:
             except RuntimeError as e:
                 if "Cannot send a request, as the client has been closed" in str(e) and attempt < max_retries - 1:
                     print(
-                        f"Warning: httpx client closed during model loading (attempt {attempt + 1}/{max_retries}). Retrying..."
+                        "Warning: httpx client closed during model loading "
+                        f"(attempt {attempt + 1}/{max_retries}). Retrying..."
                     )
                     time.sleep(2)
                 else:
@@ -225,7 +226,8 @@ class GeneratorRegistry:
             if model_id not in self.models:
                 if model_id:
                     print(
-                        f"Warning: Requested model '{model_id}' not loaded. Falling back to default '{self.default_model_id}'."
+                        f"Warning: Requested model '{model_id}' not loaded. "
+                        f"Falling back to default '{self.default_model_id}'."
                     )
                 model_id = self.default_model_id
 

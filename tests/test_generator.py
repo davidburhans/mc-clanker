@@ -50,7 +50,7 @@ def test_plugin_registry_loads_multiple_engines():
     }
 
     with patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps(mock_config))):
-        with patch.object(StableAudioEngine, "load") as mock_load_sa:
+        with patch.object(StableAudioEngine, "load"):
             registry = GeneratorRegistry()
             registry.load()
 

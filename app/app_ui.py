@@ -1,7 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 import asyncio
+import base64
+import re
 import threading
 import queue
 import uvicorn
@@ -113,11 +116,6 @@ def cleanup():
 
 
 atexit.register(cleanup)
-
-from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import Request, Response
-import base64
-import re
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

@@ -79,7 +79,7 @@ class TestFetchAudio:
 
         loop_run = asyncio.new_event_loop()
         try:
-            result = loop_run.run_until_complete(run_test())
+            loop_run.run_until_complete(run_test())
             # If we get here without exception, Garage was called
             mock_garage.get_object.assert_called_once()
         except Exception as e:
