@@ -1,13 +1,13 @@
 # tests/slop_harness/test_models.py
 from slop_harness.models import (
-    FOUNDATION_1_MODEL,
-    ALL_MODELS,
-    TIMBRE_TAGS_F1,
-    FX_TAGS_F1,
-    ALL_KEYS,
-    ALL_BPMS,
     ALL_BARS,
+    ALL_BPMS,
     ALL_INSTRUMENTS,
+    ALL_KEYS,
+    ALL_MODELS,
+    FOUNDATION_1_MODEL,
+    FX_TAGS_F1,
+    TIMBRE_TAGS_F1,
 )
 
 

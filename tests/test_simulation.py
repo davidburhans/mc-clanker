@@ -10,11 +10,11 @@ These tests verify the fixes for issues found during code review:
 6. Response format schemas are aligned between old harness and production
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 import inspect
 import threading
+from unittest.mock import MagicMock, patch
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Issue #1: extra_body parameter must flow through call_async → get_next_state_async
@@ -371,8 +371,8 @@ class TestResponseFormatSchema:
         harness's in-use schema (``slop_harness.llm_client``) and the production
         schema (``app.lib.constants``) — so real drift is guarded.
         """
-        from app.lib.constants import get_response_format_schema
         import slop_harness.llm_client as llm_module
+        from app.lib.constants import get_response_format_schema
 
         production_schema = get_response_format_schema()
         # The harness's actually-used schema: the shared builder when importable,
@@ -407,10 +407,9 @@ def test_harness_fallback_schema_matches_production():
     without app/lib/, silently producing training data with a different JSON
     structure than the production path.
     """
-    from app.lib.constants import get_response_format_schema
-
     # Check what the harness module actually exposes
     import slop_harness.llm_client as llm_module
+    from app.lib.constants import get_response_format_schema
 
     production_schema = get_response_format_schema()
 

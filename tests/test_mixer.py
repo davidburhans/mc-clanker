@@ -1,5 +1,6 @@
-import pytest
 import numpy as np
+import pytest
+
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_state import state
 

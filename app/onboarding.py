@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import asyncio
 import logging
+import os
 from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,9 @@ async def check_database() -> CheckResult:
 
     # Try to connect and run SELECT 1
     try:
-        import asyncpg
         from urllib.parse import urlparse
+
+        import asyncpg
 
         # Parse the URL properly to extract connection params
         # Expected format: postgresql://user:pass@host:port/db

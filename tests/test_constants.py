@@ -1,23 +1,24 @@
 """Tests for app.lib.constants — single source of truth for schema enums."""
 
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 from app.lib.constants import (
+    FX_TAGS,
+    NOTATION_TAGS,
+    TIMBRE_TAGS,
+    VALID_BARS,
     VALID_BPMS,
     VALID_KEYS,
-    VALID_BARS,
-    VALID_MODEL_IDS,
     VALID_MAJOR_FAMILIES,
+    VALID_MODEL_IDS,
     VALID_SUB_FAMILIES,
-    TIMBRE_TAGS,
-    NOTATION_TAGS,
-    FX_TAGS,
-    get_all_major_families,
     add_custom_major_family,
+    get_all_major_families,
     get_response_format_schema,
 )
 

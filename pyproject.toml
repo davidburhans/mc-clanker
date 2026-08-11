@@ -71,12 +71,14 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-# Enforce E (pycodestyle) + F (pyflakes) plus the UP006/UP007/UP045 typing
-# rules (E6 modernization, Phase 9). E + F debt was paid down in the E10-EF
-# sweep (E501 wraps, F841 dead vars with side-effects preserved, E402
-# intentional-import noqas, E401 split, F811 dedup). `I` (import sorting) still
-# carries pre-existing debt and is deferred to its own commit.
-select = ["E", "F", "UP006", "UP007", "UP045"]
+# Enforce E (pycodestyle) + F (pyflakes), the UP006/UP007/UP045 typing rules
+# (E6 modernization, Phase 9), and `I` (import sorting). E + F debt was paid
+# down in the E10-EF sweep (E501 wraps, F841 dead vars with side-effects
+# preserved, E402 intentional-import noqas, E401 split, F811 dedup). `I`
+# (import sorting) debt was paid down in the E10-I sweep
+# (stdlib/third-party/first-party grouping + intra-group sort). Completes
+# Phase 10: full E,F,I,UP006,UP007,UP045 enforcement.
+select = ["E", "F", "I", "UP006", "UP007", "UP045"]
 
 [tool.pyright]
 # Point Pyright (the LSP pi-lens uses) at the venv site-packages so third-party

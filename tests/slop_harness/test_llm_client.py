@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from slop_harness.llm_client import LLMClient
 
 
@@ -35,7 +36,7 @@ def test_client_default_values():
 @pytest.mark.asyncio
 async def test_call_returns_content():
     """call() returns the assistant message content string."""
-    from unittest.mock import AsyncMock, patch, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=MagicMock(content='{"actions": [], "reasoning": "test"}'))]
@@ -55,7 +56,7 @@ async def test_call_returns_content():
 @pytest.mark.asyncio
 async def test_call_retry_on_429():
     """call() retries on 429 status with backoff."""
-    from unittest.mock import AsyncMock, patch, MagicMock
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     call_count = 0
 

@@ -1,7 +1,9 @@
-import pytest
-from unittest.mock import MagicMock, patch
 import os
+from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
+
 from app.app_ui import app
 from app.framework.framework_state import state
 
@@ -146,8 +148,9 @@ class TestRequireShowOwner:
 
     def test_require_show_owner_unauthenticated(self):
         """Test that unauthenticated request raises 401."""
-        from app.routes.utils import require_show_owner
         from fastapi import HTTPException
+
+        from app.routes.utils import require_show_owner
 
         mock_request = MagicMock()
         mock_db_session = MagicMock()

@@ -5,10 +5,11 @@ This test will FAIL because _fetch_audio() in framework_main_async.py
 is a stub that returns None instead of downloading and decoding audio.
 """
 
-import pytest
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
+
 import numpy as np
+import pytest
 
 
 class TestFetchAudio:
@@ -21,7 +22,7 @@ class TestFetchAudio:
         This test verifies the implementation is not the stub that returns None.
         """
         import asyncio
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
 
         # Import the async framework
         from app.framework.framework_main_async import AsyncFrameworkLoop
@@ -97,9 +98,10 @@ class TestFetchAudio:
         when ffmpeg is genuinely absent.
         """
         import shutil
+
         import numpy as np
 
-        from app.aac_encoder import encode_aac, decode_aac
+        from app.aac_encoder import decode_aac, encode_aac
 
         if shutil.which("ffmpeg") is None:
             pytest.skip("ffmpeg not installed; cannot round-trip AAC")

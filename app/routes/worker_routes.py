@@ -7,7 +7,8 @@ to verify worker health and gather statistics.
 from fastapi import APIRouter, HTTPException
 
 from app.worker import get_worker_instance
-from .schemas import WorkerHealthResponse, WorkerStatsResponse, WorkerQueueDepthResponse
+
+from .schemas import WorkerHealthResponse, WorkerQueueDepthResponse, WorkerStatsResponse
 
 router = APIRouter()
 

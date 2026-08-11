@@ -9,9 +9,10 @@ available in all environments. They are designed to run in the Docker
 container where the worker runs.
 """
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock
 import uuid
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 # Skip entire module if framework_generator can't be imported (torch/torchaudio issues)
 # This happens at module load time, before any tests can run

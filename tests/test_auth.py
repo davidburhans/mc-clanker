@@ -1,6 +1,7 @@
-import pytest
-from unittest.mock import MagicMock, patch
 import os
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Set test environment before importing modules
 os.environ["DATABASE_URL"] = ""  # Force SQLite for tests
@@ -56,9 +57,11 @@ class TestAuthModule:
         assert result is None
 
     def test_decode_expired_token(self):
-        import jwt
         from datetime import datetime, timedelta, timezone
-        from app.auth import JWT_SECRET, JWT_ALGORITHM
+
+        import jwt
+
+        from app.auth import JWT_ALGORITHM, JWT_SECRET
 
         # Create an expired token
         expire = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -86,9 +89,9 @@ class TestAuthRoutes:
 
     @pytest.fixture
     def app_client(self):
+        from api_routes import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from api_routes import router
 
         app = FastAPI()
         app.include_router(router)
@@ -111,8 +114,9 @@ class TestRequireAuth:
 
     def test_require_auth_without_user(self):
         """Test require_auth raises 401 without user."""
-        from app.auth import require_auth
         from fastapi import HTTPException
+
+        from app.auth import require_auth
 
         with pytest.raises(HTTPException) as exc_info:
             require_auth(None)
@@ -126,6 +130,7 @@ class TestUserModel:
 
     def test_user_to_dict(self):
         from datetime import datetime
+
         from app.models.user import User
 
         user = User(
@@ -167,8 +172,9 @@ class TestGetCurrentUserFromRequest:
 
     def test_bearer_token_invalid(self):
         """Test that invalid bearer token raises 401."""
-        from app.auth import get_current_user_from_request
         from fastapi import HTTPException
+
+        from app.auth import get_current_user_from_request
 
         mock_request = MagicMock()
         mock_request.headers.get.return_value = "Bearer invalid.token.here"
@@ -180,8 +186,9 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_valid_dj_password(self):
         """Test that valid DJ Basic auth returns CompatUser."""
-        from app.auth import get_current_user_from_request
         import base64
+
+        from app.auth import get_current_user_from_request
 
         mock_request = MagicMock()
         # "secret" is the DJ password
@@ -199,8 +206,9 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_valid_audience_password(self):
         """Test that valid audience Basic auth returns CompatAudUser."""
-        from app.auth import get_current_user_from_request
         import base64
+
+        from app.auth import get_current_user_from_request
 
         mock_request = MagicMock()
         # "audience_secret" is the audience password
@@ -218,8 +226,9 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_wrong_password_returns_none(self):
         """Test that wrong password returns None (allows anonymous)."""
-        from app.auth import get_current_user_from_request
         import base64
+
+        from app.auth import get_current_user_from_request
 
         mock_request = MagicMock()
         creds = base64.b64encode(b"user:wrong_password").decode("utf-8")
@@ -251,8 +260,9 @@ class TestGetCurrentUserFromRequest:
 
     def test_basic_auth_without_colon_returns_none(self):
         """Test that Basic auth without colon returns None."""
-        from app.auth import get_current_user_from_request
         import base64
+
+        from app.auth import get_current_user_from_request
 
         mock_request = MagicMock()
         # No colon in credentials
@@ -319,7 +329,8 @@ class TestCreateAccessToken:
     def test_token_has_expiration(self):
         """Test that token has expiration claim."""
         import jwt
-        from app.auth import create_access_token, JWT_SECRET, JWT_ALGORITHM
+
+        from app.auth import JWT_ALGORITHM, JWT_SECRET, create_access_token
 
         token = create_access_token(1)
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])

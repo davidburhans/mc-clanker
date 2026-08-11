@@ -1,15 +1,15 @@
 from fastapi import APIRouter
 
 from .auth import router as auth_router
-from .shows import router as shows_router
+from .config import router as config_router
 from .jobs import router as jobs_router
 from .models import router as models_router
-from .config import router as config_router
-from .stems import router as stems_router
 from .reasoning_logs import router as reasoning_logs_router
+from .shows import router as shows_router
+from .stems import router as stems_router
 
 # Export utilities for tests
-from .utils import require_show_owner, generate_audience_password  # noqa: F401  re-exported route utilities
+from .utils import generate_audience_password, require_show_owner  # noqa: F401  re-exported route utilities
 
 api_router = APIRouter(prefix="/api")
 

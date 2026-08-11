@@ -1,7 +1,8 @@
-from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
-import queue
 import base64
+import queue
+from unittest.mock import MagicMock, patch
+
+from fastapi.testclient import TestClient
 
 
 class TestAuthMiddleware:
@@ -205,11 +206,12 @@ class TestRedirects:
 
     def test_dj_redirect(self):
         """Test /dj redirects to /dj/ (handled by StaticFiles)."""
-        from fastapi.testclient import TestClient
-        from fastapi.staticfiles import StaticFiles
-        from fastapi import FastAPI
-        import tempfile
         import os
+        import tempfile
+
+        from fastapi import FastAPI
+        from fastapi.staticfiles import StaticFiles
+        from fastapi.testclient import TestClient
 
         # Create a minimal static dir with index.html
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -236,6 +238,7 @@ class TestStreamMp3:
     def test_stream_response_headers(self):
         """Test streaming response has correct headers."""
         from fastapi import FastAPI
+
         from app.app_ui import stream_mp3
 
         app = FastAPI()

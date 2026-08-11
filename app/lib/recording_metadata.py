@@ -9,11 +9,11 @@ Provides:
 - build_chapter_markers(): Build chapter metadata from loop transitions and actions
 """
 
+import json
 import os
 import struct
-import wave
-import json
 import time
+import wave
 from typing import Any
 
 

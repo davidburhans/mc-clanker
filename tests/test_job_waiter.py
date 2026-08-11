@@ -16,8 +16,9 @@ def test_db_engine_url_is_sqlalchemy_url_object():
     This demonstrates the bug: when this URL object is passed to
     asyncpg.create_pool(), it fails because asyncpg expects a string.
     """
-    from app.db import DatabaseManager
     import sqlalchemy
+
+    from app.db import DatabaseManager
 
     # This test shows the problem exists
     db_manager = DatabaseManager.get_instance()

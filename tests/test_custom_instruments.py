@@ -13,8 +13,9 @@ def client():
 
 @pytest.fixture(autouse=True)
 def reset_state():
-    from app.framework.framework_state import state
     import os
+
+    from app.framework.framework_state import state
 
     orig_file = state.instruments_file
     state.instruments_file = "instruments_test.json"

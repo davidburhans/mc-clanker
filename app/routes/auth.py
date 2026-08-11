@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, Request, status
-from app.auth import hash_password, verify_password, create_access_token, get_current_user_from_request
+
+from app.auth import create_access_token, get_current_user_from_request, hash_password, verify_password
 from app.db import DatabaseManager
 from app.models import User
-from .schemas import UserRegister, UserLogin
+
+from .schemas import UserLogin, UserRegister
 
 router = APIRouter()
 

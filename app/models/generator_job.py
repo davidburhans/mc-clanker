@@ -18,21 +18,21 @@ intended production schema:
   the existing plain INSERT submit paths keep working; see migrations/002.
 """
 
+import enum
 import os
 import uuid
-import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    JSON,
+    CheckConstraint,
     Column,
-    Integer,
-    String,
     DateTime,
     Float,
-    Text,
-    JSON,
     Index,
-    CheckConstraint,
+    Integer,
+    String,
+    Text,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB

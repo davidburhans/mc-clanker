@@ -1,5 +1,6 @@
 import os
 from unittest.mock import MagicMock, patch
+
 from app.framework.framework_state import GlobalState
 
 
@@ -371,8 +372,8 @@ def test_broadcast_audio_drops_slow_client():
 def test_add_custom_instrument_with_existing():
     """Test adding instrument that already exists in Custom category."""
     state = GlobalState()
-    import tempfile
     import os
+    import tempfile
 
     test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
     test_file.write('{"Custom": ["Theremin"]}')
@@ -392,8 +393,8 @@ def test_add_custom_instrument_with_existing():
 
 def test_add_custom_instrument_empty_name():
     """Test adding instrument with empty name is ignored."""
-    import tempfile
     import os
+    import tempfile
 
     state = GlobalState()
     test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
@@ -413,8 +414,8 @@ def test_add_custom_instrument_empty_name():
 
 def test_save_instruments_creates_file():
     """Test save_instruments creates the file."""
-    import tempfile
     import os
+    import tempfile
 
     state = GlobalState()
     test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
@@ -430,8 +431,8 @@ def test_save_instruments_creates_file():
 
 def test_load_instruments_with_invalid_json():
     """Test _load_instruments returns defaults on invalid JSON."""
-    import tempfile
     import os
+    import tempfile
 
     state = GlobalState()
     test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)

@@ -4,12 +4,13 @@ for Conductor LLM decisions.
 
 import json
 from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
+from app.auth import get_current_user_from_request
 from app.db import DatabaseManager
 from app.models import LLMInteraction, Show
-from app.auth import get_current_user_from_request
 
 router = APIRouter(prefix="/llm-config")
 

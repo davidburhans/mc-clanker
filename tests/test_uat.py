@@ -12,10 +12,11 @@ import os
 
 os.environ["DATABASE_URL"] = ""  # Force SQLite
 
-import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.app_ui import app
@@ -308,9 +309,11 @@ class TestUATAdversarialFixes:
 
     def test_input_validation_bounds(self):
         """UAT-5.2: Input validation has reasonable bounds (SEC-1)."""
-        from app.routes.schemas import GenerationConfig, JobSubmission
-        from pydantic import ValidationError
         from uuid import UUID
+
+        from pydantic import ValidationError
+
+        from app.routes.schemas import GenerationConfig, JobSubmission
 
         # GenerationConfig.cfg_scale has le=20.0
         try:
@@ -341,8 +344,9 @@ class TestUATAdversarialFixes:
 
     def test_runaway_increment_bounds(self):
         """UAT-5.4: Concurrent requests bounded to prevent runaway increment (BUG-2)."""
-        from app.routes.schemas import GenerationConfig
         from pydantic import ValidationError
+
+        from app.routes.schemas import GenerationConfig
 
         # cfg_scale maximum bound prevents runaway audio quality degradation
         try:

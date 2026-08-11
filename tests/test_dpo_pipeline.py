@@ -4,15 +4,16 @@ Tests for DPO/RL pipeline for Conductor schema enforcement.
 Following TDD: RED first (tests fail), GREEN (implement), REFACTOR.
 """
 
-import pytest
 import json
 import random
 
+import pytest
+
 # Import from the real implementation
 from training.dpo_pipeline import (
-    validate_conductor_schema,
-    generate_preference_pairs,
     compute_schema_reward,
+    generate_preference_pairs,
+    validate_conductor_schema,
 )
 
 # Set seed for reproducibility in tests

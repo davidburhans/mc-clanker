@@ -1,6 +1,7 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
 import uuid
 from datetime import datetime
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.lib.constants import VALID_BPMS, VALID_KEYS
 

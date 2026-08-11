@@ -34,7 +34,6 @@ from app.framework.framework_main_async import (
 )
 from app.framework.framework_state import state
 
-
 # --------------------------------------------------------------------------- #
 # State-singleton save/restore — broader than test_loop_fixes._reset_audit_state
 # (covers the ~15 attrs a real loop mutates) so _run_loop tests don't leak.

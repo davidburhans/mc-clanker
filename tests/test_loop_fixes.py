@@ -17,10 +17,10 @@ import pytest
 
 from app.framework.framework_main_async import (
     AsyncFrameworkLoop,
-    calc_duration,
-    flush_recording_buffers,
     _flush_lock,
     _to_two_channel,
+    calc_duration,
+    flush_recording_buffers,
 )
 from app.framework.framework_state import state
 

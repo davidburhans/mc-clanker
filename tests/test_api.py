@@ -1,9 +1,11 @@
-import pytest
-from fastapi.testclient import TestClient
-from app.framework.framework_state import state
-import numpy as np
 import time
 from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from app.framework.framework_state import state
 
 
 @pytest.fixture

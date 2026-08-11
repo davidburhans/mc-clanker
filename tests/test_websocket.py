@@ -4,14 +4,15 @@ These tests avoid importing app.app_ui (which triggers a slow openai import chai
 by constructing a minimal FastAPI app with just the ws_router mounted.
 """
 
-import pytest
 import asyncio
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 
-from app.routes.ws import ws_manager, _state_snapshot, _stems_snapshot, ws_router
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from app.framework.framework_state import state
+from app.routes.ws import _state_snapshot, _stems_snapshot, ws_manager, ws_router
 
 
 @pytest.fixture(autouse=True)

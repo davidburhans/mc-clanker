@@ -1,4 +1,4 @@
-from slop_harness.prompt_builder import PromptBuilder, SYSTEM_INSTRUCTION, AVAILABLE_INSTRUMENTS
+from slop_harness.prompt_builder import AVAILABLE_INSTRUMENTS, SYSTEM_INSTRUCTION, PromptBuilder
 
 
 def test_system_instruction_is_not_empty():

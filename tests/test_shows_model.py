@@ -1,5 +1,5 @@
-from datetime import datetime
 import os
+from datetime import datetime
 
 # Set test environment before importing modules
 os.environ["DATABASE_URL"] = ""  # Force SQLite for tests
@@ -156,6 +156,7 @@ class TestShowModelEdgeCases:
 
     def test_show_to_dict_with_all_fields(self):
         from datetime import datetime
+
         from app.models.show import Show
 
         show = Show(
@@ -183,6 +184,7 @@ class TestShowModelEdgeCases:
 
     def test_show_to_dict_includes_timestamps(self):
         from datetime import datetime
+
         from app.models.show import Show
 
         show = Show(
@@ -205,6 +207,7 @@ class TestShowActionModelEdgeCases:
 
     def test_show_action_with_none_stem_details(self):
         from datetime import datetime
+
         from app.models.show_action import ShowAction
 
         action = ShowAction(
@@ -230,6 +233,7 @@ class TestLLMInteractionModelEdgeCases:
 
     def test_llm_interaction_with_error(self):
         from datetime import datetime
+
         from app.models.llm_interaction import LLMInteraction
 
         interaction = LLMInteraction(

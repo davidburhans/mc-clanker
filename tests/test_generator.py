@@ -1,8 +1,8 @@
 import json
-import pytest
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 
 # Lazy import - defer until after pytest collection so we can handle torch failures gracefully
 # This allows test collection to succeed even when torchaudio can't load
@@ -16,7 +16,7 @@ try:
     import torch
 
     _ = torch.tensor([1.0])  # Verify basic torch works
-    from app.framework.framework_generator import GeneratorRegistry, StableAudioEngine, ModelState
+    from app.framework.framework_generator import GeneratorRegistry, ModelState, StableAudioEngine
 
     _generator_imported = True
 except Exception as e:

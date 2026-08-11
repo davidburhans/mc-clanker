@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException, Response
 import io
 import wave
 
+from fastapi import APIRouter, HTTPException, Response
+
 from app.framework.framework_state import state
-from .schemas import StemVolumeUpdate, CustomStemCreate
+
+from .schemas import CustomStemCreate, StemVolumeUpdate
 
 router = APIRouter()
 

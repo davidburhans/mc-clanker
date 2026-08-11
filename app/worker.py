@@ -40,10 +40,10 @@ from app.cleanup import (
     JobExpirationCleanup,
     create_cleanup_config_from_env,
 )
-from app.garage_client import GarageClient, GarageConfig, create_garage_client_from_env
 
 # Import generator - same as used by main app
 from app.framework.framework_generator import GeneratorRegistry
+from app.garage_client import GarageClient, GarageConfig, create_garage_client_from_env
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

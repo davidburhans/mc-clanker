@@ -5,14 +5,13 @@ _stream_loop, auto-tile safety net, and edge cases.
 
 import threading
 import time
-
-import pytest
-import numpy as np
 from unittest.mock import patch
+
+import numpy as np
+import pytest
 
 from app.framework.framework_mixer import Mixer, Track
 from app.framework.framework_state import state
-
 
 # ---------------------------------------------------------------------------
 # Fixture — reset state between every test

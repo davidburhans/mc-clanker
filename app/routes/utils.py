@@ -1,5 +1,7 @@
 import secrets
-from fastapi import Request, HTTPException, status
+
+from fastapi import HTTPException, Request, status
+
 from app.auth import get_current_user_from_request
 from app.models import Show
 

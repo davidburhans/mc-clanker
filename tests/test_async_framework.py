@@ -5,10 +5,11 @@ This test will FAIL because app_ui.py currently starts the sync framework
 in a daemon thread, not the async framework.
 """
 
-import pytest
-from unittest.mock import patch, AsyncMock
 import asyncio
 import uuid
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 
 def test_app_uses_async_framework_not_sync():
@@ -339,9 +340,10 @@ class TestNextLoopPreGeneration:
     @pytest.mark.asyncio
     async def test_pregen_task_stores_results_correctly(self):
         """Test that _pre_generate_next_loop stores results with correct loop_idx."""
+        import uuid
+
         from app.framework.framework_main_async import AsyncFrameworkLoop
         from app.framework.framework_state import state
-        import uuid
 
         session_id = uuid.uuid4()
         loop = AsyncFrameworkLoop(session_id)
@@ -396,9 +398,10 @@ class TestNextLoopPreGeneration:
     @pytest.mark.asyncio
     async def test_pregen_handles_conductor_failure(self):
         """Test that pre-gen gracefully handles LLM failures."""
+        import uuid
+
         from app.framework.framework_main_async import AsyncFrameworkLoop
         from app.framework.framework_state import state
-        import uuid
 
         session_id = uuid.uuid4()
         loop = AsyncFrameworkLoop(session_id)

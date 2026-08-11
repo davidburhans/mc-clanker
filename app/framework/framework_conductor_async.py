@@ -11,6 +11,7 @@ import json
 import os
 import re
 from typing import Any
+
 from openai import AsyncOpenAI
 
 from app.lib.constants import get_response_format_schema

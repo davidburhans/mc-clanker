@@ -3,11 +3,12 @@ tests/test_recording_postprocess.py — Tests for recording postprocessing,
 chapter markers, CUE sheets, WAV metadata embedding, and export routes.
 """
 
-import os
 import json
+import os
 import wave
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 # Set test environment before importing app modules

@@ -1,11 +1,13 @@
-import pytest
+import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
-import os
+
+import pytest
 
 os.environ["DATABASE_URL"] = ""  # Force SQLite for tests
 
 from fastapi.testclient import TestClient
+
 from app.app_ui import app
 from app.framework.framework_state import state
 

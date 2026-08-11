@@ -1,23 +1,24 @@
+import asyncio
+import atexit
+import base64
+import os
+import queue
+import re
+import socket
+import subprocess
+import threading
+import uuid
+from contextlib import asynccontextmanager, suppress
+
+import uvicorn
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
-import asyncio
-import base64
-import re
-import threading
-import queue
-import uvicorn
-import os
-import subprocess
-import socket
-import uuid
 
-from app.framework.framework_state import state
 from app.framework.framework_main_async import run_framework_loop_async
+from app.framework.framework_state import state
 from app.routes import api_router
-from contextlib import asynccontextmanager, suppress
-import atexit
 
 
 # =============================================================================
@@ -308,8 +309,9 @@ class SessionAffinityMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Look up which server handles this session
-        from app.db import DatabaseManager
         from sqlalchemy import text
+
+        from app.db import DatabaseManager
 
         db_manager = DatabaseManager.get_instance()
 
@@ -382,8 +384,9 @@ def serve_setup():
 @app.get("/api/onboarding")
 async def onboarding_check():
     """Proxy to onboarding module — checks config and returns status."""
-    from app.onboarding import run_onboarding_checks
     from fastapi.responses import JSONResponse
+
+    from app.onboarding import run_onboarding_checks
 
     results = await run_onboarding_checks()
     required_failed = [r for r in results if not r.passed and r.category == "required"]
@@ -398,8 +401,9 @@ async def onboarding_check():
 @app.post("/api/setup/config")
 async def save_setup_config(request: Request):
     """Persist config to /app/.env and restart services."""
-    from app.onboarding import write_env_file, restart_services
     from fastapi.responses import JSONResponse
+
+    from app.onboarding import restart_services, write_env_file
 
     body = await request.json()
     # Filter out empty strings

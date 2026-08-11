@@ -1,8 +1,9 @@
-import wave
-import tempfile
 import os
+import tempfile
 import threading
+import wave
 from unittest.mock import patch
+
 from app.playback import ShowPlayback
 
 

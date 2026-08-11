@@ -9,17 +9,17 @@ Called after a show stops to:
 5. Optionally split into per-chapter WAV segments and export MP3/FLAC with ID3 tags
 """
 
-import os
 import logging
+import os
 from typing import Any
 
 from app.lib.recording_metadata import (
     build_chapter_markers,
-    write_cue_sheet,
     embed_wav_metadata,
-    split_wav_by_chapters,
-    write_metadata_json,
     generate_export_filename,
+    split_wav_by_chapters,
+    write_cue_sheet,
+    write_metadata_json,
 )
 
 log = logging.getLogger(__name__)
@@ -265,21 +265,21 @@ def export_show_format(
     Requires mutagen for tagging. Returns path to exported file, or None on failure.
     """
     try:
+        from mutagen.flac import FLAC  # noqa: F401  availability probe
         from mutagen.id3 import (  # noqa: F401  availability probe (optional mutagen)
-            ID3,
-            TIT2,
-            TPE1,
-            TALB,
-            TCON,
-            TXXX,
+            CHAP,
             COMM,
             CTOC,
-            CHAP,
-            WXXX,
+            ID3,
+            TALB,
+            TCON,
+            TIT2,
+            TPE1,
+            TXXX,
             TYER,
+            WXXX,
         )
         from mutagen.mp3 import MP3  # noqa: F401  availability probe
-        from mutagen.flac import FLAC  # noqa: F401  availability probe
     except ImportError:
         log.error("mutagen not installed, cannot export %s with tags", fmt)
         return None
@@ -385,8 +385,8 @@ def _tag_mp3(
     chapters: list[dict],
 ):
     """Add ID3v2 tags with chapters to an MP3 file."""
+    from mutagen.id3 import CHAP, COMM, CTOC, TALB, TCON, TIT2, TPE1, TXXX
     from mutagen.mp3 import MP3
-    from mutagen.id3 import TIT2, TPE1, TALB, COMM, TCON, TXXX, CTOC, CHAP
 
     try:
         audio = MP3(mp3_path)

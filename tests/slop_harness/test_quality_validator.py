@@ -10,8 +10,6 @@ Covers all 5 validation checks:
 
 import json
 
-import pytest
-
 # The production module `slop_harness/quality_validator.py` imports
 # `ALL_BPMS, ALL_INSTRUMENTS, ALL_KEYS` from `slop_harness/models.py`, but that
 # module only exports `ALL_MODELS` — so the import itself raises ImportError.
@@ -20,6 +18,8 @@ import pytest
 # single broken import aborting pytest collection for every file.
 # See synthesis D-section (collection error).
 from typing import Any
+
+import pytest
 
 QualityValidator: Any
 QualityThresholdError: Any

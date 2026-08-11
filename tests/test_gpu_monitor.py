@@ -8,10 +8,9 @@ environments (CI, local dev) without requiring an actual GPU.
 import sys
 import types
 from typing import Any
-
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 # Create a mock 'torch' module so tests can run without torch installed
 # (e.g. on CPU-only dev machines). The mock provides the torch.cuda.* calls

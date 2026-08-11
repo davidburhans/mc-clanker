@@ -19,11 +19,11 @@ The real implementation lives in ``app.framework.loop_orchestrator`` (the
 from __future__ import annotations
 
 from app.aac_encoder import decode_aac  # noqa: F401  string-patch target (brief-02 ssD)
-from app.garage_client import create_garage_client_from_env  # noqa: F401  string-patch target
 from app.framework.audit_recording import _flush_lock, flush_recording_buffers  # noqa: F401
 from app.framework.conductor_interaction import process_actions  # noqa: F401
 from app.framework.domain_audio import _to_two_channel, calc_duration  # noqa: F401
 from app.framework.loop_orchestrator import AsyncFrameworkLoop, run_framework_loop_async
+from app.garage_client import create_garage_client_from_env  # noqa: F401  string-patch target
 
 __all__ = [
     "AsyncFrameworkLoop",

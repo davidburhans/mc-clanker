@@ -1,7 +1,8 @@
 # conftest.py — ensure slop_harness package is importable for tests
 import sys
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Add slop_harness/ package directory to path (slop_harness/ is a subdirectory of worktree root)
 _root = Path(__file__).resolve().parent.parent

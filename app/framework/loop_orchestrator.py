@@ -31,9 +31,9 @@ from typing import Any
 import numpy as np
 
 from app.framework.audio_fetch import GarageAudioAdapter
-from app.framework.audit_recording import append_loop_audit
 from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (routes/shows.py, tests import these from here)
     _flush_lock,
+    append_loop_audit,
     flush_recording_buffers,
 )
 from app.framework.conductor_interaction import (
@@ -43,7 +43,6 @@ from app.framework.conductor_interaction import (
 from app.framework.framework_conductor_async import ConductorLLMAsync
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_state import state
-from app.garage_client import GarageClient
 from app.framework.job_queue import submit_generator_job
 from app.framework.loop_steps import (
     LOOP_RETRY_BACKOFF_SECONDS,
@@ -52,6 +51,7 @@ from app.framework.loop_steps import (
 )
 from app.framework.ports import ConductorPort
 from app.framework.pregeneration import run_pregeneration
+from app.garage_client import GarageClient
 
 
 class AsyncFrameworkLoop(_LoopSteps):
