@@ -18,6 +18,7 @@ from app.framework.framework_state import state
 # Fixture — reset state between every test
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def reset_state():
     state.reset()
@@ -31,6 +32,7 @@ def reset_state():
 # ===========================================================================
 # Track class
 # ===========================================================================
+
 
 class TestTrack:
     def test_track_stores_attributes(self):
@@ -50,6 +52,7 @@ class TestTrack:
 # ===========================================================================
 # _ensure_stereo
 # ===========================================================================
+
 
 class TestEnsureStereo:
     def test_mono_1d_to_stereo(self):
@@ -85,6 +88,7 @@ class TestEnsureStereo:
 # ===========================================================================
 # Mixer init / add_track / clear
 # ===========================================================================
+
 
 class TestMixerInit:
     def test_default_params(self):
@@ -149,6 +153,7 @@ class TestClear:
 # _callback when not generating
 # ===========================================================================
 
+
 class TestCallbackNotGenerating:
     def test_callback_no_generate_outputs_silence(self):
         """When is_generating=False, callback should output zeros and advance sample."""
@@ -168,7 +173,7 @@ class TestCallbackNotGenerating:
         state.is_generating = False
 
         # Mock broadcast to verify it's called
-        with patch.object(state, 'broadcast_audio') as mock_bc:
+        with patch.object(state, "broadcast_audio") as mock_bc:
             outdata = np.zeros((50, 1), dtype=np.float32)
             m._callback(outdata, 50, None, None)
             assert mock_bc.called
@@ -192,6 +197,7 @@ class TestCallbackNotGenerating:
 # ===========================================================================
 # _callback — mixing edge cases
 # ===========================================================================
+
 
 class TestCallbackMixing:
     def test_empty_mixer_produces_silence(self):
@@ -250,6 +256,7 @@ class TestCallbackMixing:
 # ===========================================================================
 # Loop transition fallback paths
 # ===========================================================================
+
 
 class TestLoopTransitionFallback:
     def test_transition_with_zero_duration_and_future_tracks(self):
@@ -422,6 +429,7 @@ class TestLoopTransitionFallback:
 # Extension path: next loop not ready
 # ===========================================================================
 
+
 class TestExtensionPath:
     def test_transition_with_no_future_tracks_at_all(self):
         """When next_loop_audio is empty, the extension path fires instead of transition.
@@ -453,6 +461,7 @@ class TestExtensionPath:
 # ===========================================================================
 # Auto-tile safety net (lines 234-250)
 # ===========================================================================
+
 
 class TestAutoTileSafetyNet:
     def test_short_track_gets_tiled_to_fill_loop(self):
@@ -505,6 +514,7 @@ class TestAutoTileSafetyNet:
 # ===========================================================================
 # start() / stop() / _stream_loop
 # ===========================================================================
+
 
 class TestStartStopLifecycle:
     def test_start_creates_thread(self):
@@ -565,6 +575,7 @@ class TestStartStopLifecycle:
 # _extend_tracks_at_position edge cases
 # ===========================================================================
 
+
 class TestExtendTracksAtPosition:
     def test_extend_when_track_fully_consumed(self):
         """When start_sample is past the track end, tile the full track."""
@@ -602,6 +613,7 @@ class TestExtendTracksAtPosition:
 # pop_transition_event edge cases
 # ===========================================================================
 
+
 class TestPopTransitionEvent:
     def test_double_pop_returns_none_second(self):
         """After one pop, the flag is cleared so second pop returns None."""
@@ -621,6 +633,7 @@ class TestPopTransitionEvent:
 # ===========================================================================
 # _extend_tracks_for_loop edge cases
 # ===========================================================================
+
 
 class TestExtendTracksForLoop:
     def test_extend_expired_track_not_included(self):
@@ -654,6 +667,7 @@ class TestExtendTracksForLoop:
 # Callback: behind-schedule gap filling
 # ===========================================================================
 
+
 class TestBehindScheduleGapFilling:
     def test_negative_samples_until_fills_gap(self):
         """When current_sample > current_loop_end_sample, gap filling kicks in."""
@@ -681,6 +695,7 @@ class TestBehindScheduleGapFilling:
 # ===========================================================================
 # Mute/solo: edge cases
 # ===========================================================================
+
 
 class TestMuteSoloEdgeCases:
     def test_all_muted_produces_silence(self):
@@ -731,6 +746,7 @@ class TestMuteSoloEdgeCases:
 # Debug logging
 # ===========================================================================
 
+
 class TestDebugLogging:
     def test_debug_count_increments(self):
         """_debug_count should increment on each callback."""
@@ -762,6 +778,7 @@ class TestDebugLogging:
 # _stream_loop: late-tick catch-up path
 # ===========================================================================
 
+
 class TestStreamLoopCatchUp:
     def test_stream_loop_catchup_path(self):
         """When the stream loop runs late, it resets its deadline to catch up.
@@ -785,7 +802,7 @@ class TestStreamLoopCatchUp:
                 slow_done.set()
             original_callback(outdata, frames, _time, _status)
 
-        with patch.object(m, '_callback', slow_callback):
+        with patch.object(m, "_callback", slow_callback):
             m.start()
             slow_done.wait(timeout=5)
             m.stop()

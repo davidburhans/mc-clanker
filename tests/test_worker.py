@@ -41,16 +41,18 @@ class TestWorkerJobClaiming:
 
         # Mock the connection pool
         mock_conn = AsyncMock()
-        mock_conn.fetchrow = AsyncMock(return_value={
-            'id': uuid.uuid4(),
-            'instrument': 'Synth Pad',
-            'prompt': 'atmospheric pad',
-            'status': 'pending',
-            'model_id': 'foundation-1',
-            'key': 'C minor',
-            'bpm': 128,
-            'bars': 4,
-        })
+        mock_conn.fetchrow = AsyncMock(
+            return_value={
+                "id": uuid.uuid4(),
+                "instrument": "Synth Pad",
+                "prompt": "atmospheric pad",
+                "status": "pending",
+                "model_id": "foundation-1",
+                "key": "C minor",
+                "bpm": 128,
+                "bars": 4,
+            }
+        )
         mock_conn.execute = AsyncMock()
 
         mock_pool = MagicMock()
@@ -61,14 +63,15 @@ class TestWorkerJobClaiming:
 
         # Run the claim
         import asyncio
+
         loop = asyncio.new_event_loop()
         result = loop.run_until_complete(worker._claim_next_job())
         loop.close()
 
         # Should have returned a job
         assert result is not None
-        assert result['instrument'] == 'Synth Pad'
-        assert result['status'] == 'pending'
+        assert result["instrument"] == "Synth Pad"
+        assert result["status"] == "pending"
 
     def test_claim_next_job_returns_none_when_queue_empty(self):
         """Worker returns None when no pending jobs are available."""
@@ -91,6 +94,7 @@ class TestWorkerJobClaiming:
         worker.db = mock_pool
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         result = loop.run_until_complete(worker._claim_next_job())
         loop.close()
@@ -126,6 +130,7 @@ class TestWorkerJobCompletion:
         duration = 4.5
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         loop.run_until_complete(worker._mark_job_complete(job_id, audio_path, duration))
         loop.close()
@@ -133,7 +138,7 @@ class TestWorkerJobCompletion:
         # Verify execute was called with correct SQL
         mock_conn.execute.assert_called_once()
         call_args = mock_conn.execute.call_args[0]
-        assert 'completed' in call_args[0]
+        assert "completed" in call_args[0]
         assert audio_path in call_args
 
     def test_mark_job_failed_sets_error(self):
@@ -160,6 +165,7 @@ class TestWorkerJobCompletion:
         error_msg = "Generation failed: out of memory"
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         loop.run_until_complete(worker._mark_job_failed(job_id, error_msg))
         loop.close()
@@ -167,7 +173,7 @@ class TestWorkerJobCompletion:
         # Verify execute was called with failed status
         mock_conn.execute.assert_called_once()
         call_args = mock_conn.execute.call_args[0]
-        assert 'failed' in call_args[0]
+        assert "failed" in call_args[0]
         assert error_msg in call_args
 
 
@@ -191,6 +197,7 @@ class TestWorkerCleanup:
         cleanup.db = mock_pool
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         deleted = loop.run_until_complete(cleanup._run_cleanup())
         loop.close()
@@ -224,13 +231,14 @@ class TestWorkerHealthCheck:
         worker.garage = MagicMock()
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         result = loop.run_until_complete(worker.health_check())
         loop.close()
 
-        assert result['status'] == 'healthy'
-        assert result['database'] == 'connected'
-        assert result['garage'] == 'connected'
+        assert result["status"] == "healthy"
+        assert result["database"] == "connected"
+        assert result["garage"] == "connected"
 
 
 class TestWorkerStats:
@@ -251,7 +259,7 @@ class TestWorkerStats:
 
         stats = worker.get_stats()
 
-        assert stats['worker_id'] == 'test-worker'
-        assert stats['jobs_processed'] == 10
-        assert stats['jobs_failed'] == 2
-        assert stats['is_running'] is True
+        assert stats["worker_id"] == "test-worker"
+        assert stats["jobs_processed"] == 10
+        assert stats["jobs_failed"] == 2
+        assert stats["is_running"] is True

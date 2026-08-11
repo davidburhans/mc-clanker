@@ -46,6 +46,4 @@ def test_frozen_api_importable():
 
     # The two string-patch targets must remain callable on the module namespace.
     assert callable(getattr(mfa, "decode_aac")), "decode_aac must be callable"
-    assert callable(getattr(mfa, "create_garage_client_from_env")), (
-        "create_garage_client_from_env must be callable"
-    )
+    assert callable(getattr(mfa, "create_garage_client_from_env")), "create_garage_client_from_env must be callable"

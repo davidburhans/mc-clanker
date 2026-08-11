@@ -22,12 +22,13 @@ from typing import List, Tuple, Dict, Any, Optional
 # ============================================================
 
 # Add app/ to path so we can import constants when running from training/
-_srcdir = os.path.join(os.path.dirname(__file__), '..')
+_srcdir = os.path.join(os.path.dirname(__file__), "..")
 if _srcdir not in sys.path:
     sys.path.insert(0, _srcdir)
 
 try:
     from app.lib.constants import VALID_BPMS, VALID_KEYS, VALID_MAJOR_FAMILIES
+
     VALID_BPM_ENUM = VALID_BPMS  # [100, 110, 120, 128, 130, 140, 150]
 except ImportError:
     # Fallback for standalone use
@@ -44,6 +45,7 @@ REQUIRED_RESPONSE_FIELDS = {"master_bpm", "master_key", "actions", "reasoning", 
 # ============================================================
 # Schema Validation
 # ============================================================
+
 
 def validate_conductor_schema(response) -> bool:
     """
@@ -128,7 +130,7 @@ def _validate_action(action: dict) -> bool:
             return False
         if VALID_MAJOR_FAMILIES is not None and major_family not in VALID_MAJOR_FAMILIES:
             return False
-            
+
         if not isinstance(action.get("sub_family"), str):
             return False
         if not isinstance(action.get("timbre_tags"), list):
@@ -147,6 +149,7 @@ def _validate_action(action: dict) -> bool:
 # ============================================================
 # Corruption Functions for Preference Pairs
 # ============================================================
+
 
 def _corrupt_response(response: dict, corruption_type: str) -> dict:
     """Apply a corruption strategy to a response."""
@@ -221,10 +224,9 @@ CORRUPTION_STRATEGIES = {
 # Preference Pair Generation for DPO
 # ============================================================
 
+
 def generate_preference_pairs(
-    samples: list[dict],
-    corruption_types: list[str] | None = None,
-    num_corruptions_per_sample: int = 1
+    samples: list[dict], corruption_types: list[str] | None = None, num_corruptions_per_sample: int = 1
 ) -> list[tuple[str, str]]:
     """
     Generate chosen/rejected pairs for DPO training.
@@ -285,11 +287,8 @@ def _extract_assistant_message(sample: dict) -> str | None:
 # Reward Functions for RL
 # ============================================================
 
-def compute_schema_reward(
-    response: str,
-    validity_weight: float = 1.0,
-    quality_weight: float = 0.0
-) -> float:
+
+def compute_schema_reward(response: str, validity_weight: float = 1.0, quality_weight: float = 0.0) -> float:
     """
     Compute reward for a Conductor response.
 
@@ -364,12 +363,13 @@ def _compute_quality_reward(data: dict) -> float:
 # CLI for generating DPO dataset
 # ============================================================
 
+
 def generate_dpo_dataset_from_sft(
     sft_dataset_path: str,
     output_path: str,
     corruption_types: list[str] | None = None,
     num_corruptions_per_sample: int = 1,
-    max_samples: int | None = None
+    max_samples: int | None = None,
 ) -> int:
     """
     Generate a DPO dataset from an SFT dataset.
@@ -393,18 +393,18 @@ def generate_dpo_dataset_from_sft(
         samples = samples.select(range(min(max_samples, len(samples))))
 
     pairs = generate_preference_pairs(
-        list(samples),
-        corruption_types=corruption_types,
-        num_corruptions_per_sample=num_corruptions_per_sample
+        list(samples), corruption_types=corruption_types, num_corruptions_per_sample=num_corruptions_per_sample
     )
 
     # Convert to DPO format
     dpo_data = []
     for chosen, rejected in pairs:
-        dpo_data.append({
-            "chosen": chosen,
-            "rejected": rejected,
-        })
+        dpo_data.append(
+            {
+                "chosen": chosen,
+                "rejected": rejected,
+            }
+        )
 
     # Save
     dpo_dataset = Dataset.from_list(dpo_data)
@@ -415,6 +415,7 @@ def generate_dpo_dataset_from_sft(
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Generate DPO dataset from SFT data")
     parser.add_argument("--sft-path", required=True, help="Path to SFT dataset")
     parser.add_argument("--output-path", required=True, help="Output path for DPO dataset")
@@ -423,9 +424,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     num_pairs = generate_dpo_dataset_from_sft(
-        args.sft_path,
-        args.output_path,
-        args.corruption_types,
-        max_samples=args.max_samples
+        args.sft_path, args.output_path, args.corruption_types, max_samples=args.max_samples
     )
     print(f"Generated {num_pairs} preference pairs")

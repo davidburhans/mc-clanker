@@ -23,7 +23,7 @@ def test_app_uses_async_framework_not_sync():
 
     # The sync import should NOT exist after the fix
     # Check if sync framework is imported
-    sync_import_path = 'app.framework.framework_main'
+    sync_import_path = "app.framework.framework_main"
 
     # Check if the sync run_framework_loop is being used
     # We can't directly check the lifespan function, but we can verify
@@ -52,9 +52,9 @@ class TestPreGeneration:
         loop = AsyncFrameworkLoop(session_id)
 
         # Check pre-generation attributes exist
-        assert hasattr(loop, '_pregen_task')
-        assert hasattr(loop, '_pregen_done')
-        assert hasattr(loop, '_pregen_loop_idx')
+        assert hasattr(loop, "_pregen_task")
+        assert hasattr(loop, "_pregen_done")
+        assert hasattr(loop, "_pregen_loop_idx")
         assert loop._pregen_task is None
         assert isinstance(loop._pregen_done, asyncio.Event)
         assert loop._pregen_loop_idx == 0
@@ -100,27 +100,24 @@ class TestPreGeneration:
             "master_key": "C minor",
             "actions": [],
             "reasoning": "test",
-            "name": "Test Set"
+            "name": "Test Set",
         }
 
         snapshot = {
-            'current_bpm': 128,
-            'current_key': "C minor",
-            'active_stems': [],
-            'user_override': "",
-            'available_instruments': [],
-            'stem_history': [],
-            'llm_config': {
-                'base_url': 'http://test:1234/v1',
-                'api_key': 'test',
-                'model': 'test-model'
-            }
+            "current_bpm": 128,
+            "current_key": "C minor",
+            "active_stems": [],
+            "user_override": "",
+            "available_instruments": [],
+            "stem_history": [],
+            "llm_config": {"base_url": "http://test:1234/v1", "api_key": "test", "model": "test-model"},
         }
 
-        with patch.object(loop, 'conductor') as mock_conductor, \
-             patch.object(loop, '_submit_job', new_callable=AsyncMock) as mock_submit, \
-             patch.object(loop, '_fetch_audio', new_callable=AsyncMock) as mock_fetch:
-
+        with (
+            patch.object(loop, "conductor") as mock_conductor,
+            patch.object(loop, "_submit_job", new_callable=AsyncMock) as mock_submit,
+            patch.object(loop, "_fetch_audio", new_callable=AsyncMock) as mock_fetch,
+        ):
             mock_conductor.get_next_state_async = AsyncMock(return_value=mock_response)
 
             # Run pre-generation
@@ -128,8 +125,8 @@ class TestPreGeneration:
 
             # Check results were stored
             assert loop._pregen_results is not None
-            assert loop._pregen_results.get('loop_idx') == 2
-            assert loop._pregen_results.get('master_bpm') == 128
+            assert loop._pregen_results.get("loop_idx") == 2
+            assert loop._pregen_results.get("master_bpm") == 128
             assert loop._pregen_done.is_set()
 
     @pytest.mark.asyncio
@@ -153,20 +150,16 @@ class TestPreGeneration:
         state.llm_model = "test-model"
 
         snapshot = {
-            'current_bpm': 128,
-            'current_key': "C minor",
-            'active_stems': [],
-            'user_override': "",
-            'available_instruments': [],
-            'stem_history': [],
-            'llm_config': {
-                'base_url': 'http://test:1234/v1',
-                'api_key': 'test',
-                'model': 'test-model'
-            }
+            "current_bpm": 128,
+            "current_key": "C minor",
+            "active_stems": [],
+            "user_override": "",
+            "available_instruments": [],
+            "stem_history": [],
+            "llm_config": {"base_url": "http://test:1234/v1", "api_key": "test", "model": "test-model"},
         }
 
-        with patch.object(loop, 'conductor') as mock_conductor:
+        with patch.object(loop, "conductor") as mock_conductor:
             # Make LLM call fail
             mock_conductor.get_next_state_async = AsyncMock(side_effect=Exception("LLM failed"))
 
@@ -189,26 +182,22 @@ class TestPreGenResultsUsage:
 
         def check_pregen_ready(loop_idx: int, pregen_results: dict | None) -> bool:
             """Simulates the pregen_ready check from the loop."""
-            return (
-                loop_idx > 1 and
-                pregen_results is not None and
-                pregen_results.get('loop_idx') == loop_idx
-            )
+            return loop_idx > 1 and pregen_results is not None and pregen_results.get("loop_idx") == loop_idx
 
         # Case 1: First loop (loop_idx <= 1) should not use pre-gen
-        assert check_pregen_ready(1, {'loop_idx': 2}) is False
+        assert check_pregen_ready(1, {"loop_idx": 2}) is False
 
         # Case 2: Correct loop_idx and results should use pre-gen
-        assert check_pregen_ready(2, {'loop_idx': 2}) is True
+        assert check_pregen_ready(2, {"loop_idx": 2}) is True
 
         # Case 3: Wrong loop_idx should not use pre-gen
-        assert check_pregen_ready(3, {'loop_idx': 2}) is False
+        assert check_pregen_ready(3, {"loop_idx": 2}) is False
 
         # Case 4: No results should not use pre-gen
         assert check_pregen_ready(2, None) is False
 
         # Case 5: Loop idx 0 should not use pre-gen
-        assert check_pregen_ready(0, {'loop_idx': 0}) is False
+        assert check_pregen_ready(0, {"loop_idx": 0}) is False
 
 
 class TestNextLoopPreGeneration:
@@ -226,9 +215,11 @@ class TestNextLoopPreGeneration:
 
         needs_pregen = loop_idx > 1 and (self._pregen_task is None or self._pregen_task.done())
         """
+
         class MockTask:
             def __init__(self, done=False):
                 self._done = done
+
             def done(self):
                 return self._done
 
@@ -264,49 +255,49 @@ class TestNextLoopPreGeneration:
         """
         # Simulates the skip pregen path from lines 595-606
         loop_idx = 3
-        tracks_to_use = [('audio_data_1', 0), ('audio_data_2', 1)]
+        tracks_to_use = [("audio_data_1", 0), ("audio_data_2", 1)]
         duration_samples = 44100 * 10  # 10 seconds at 44100
-        next_stems = [{'prompt': 'stem1'}, {'prompt': 'stem2'}]
+        next_stems = [{"prompt": "stem1"}, {"prompt": "stem2"}]
 
         # When skipping pre-gen (loop already queued), _pregen_results is set directly
         pregen_results = {
-            'loop_idx': loop_idx + 1,  # next loop
-            'prepared_tracks': tracks_to_use,
-            'loop_duration_samples': duration_samples,
-            'next_stems': list(next_stems),
+            "loop_idx": loop_idx + 1,  # next loop
+            "prepared_tracks": tracks_to_use,
+            "loop_duration_samples": duration_samples,
+            "next_stems": list(next_stems),
         }
 
         # Verify the structure matches what the main loop expects
-        assert pregen_results['loop_idx'] == 4  # loop_idx + 1
-        assert pregen_results['prepared_tracks'] == tracks_to_use
-        assert pregen_results['loop_duration_samples'] == duration_samples
-        assert pregen_results['next_stems'] == next_stems
+        assert pregen_results["loop_idx"] == 4  # loop_idx + 1
+        assert pregen_results["prepared_tracks"] == tracks_to_use
+        assert pregen_results["loop_duration_samples"] == duration_samples
+        assert pregen_results["next_stems"] == next_stems
 
     def test_pregen_results_structure(self):
         """Test that _pregen_results has all required fields."""
         # This mirrors the structure built in _pre_generate_next_loop (lines 902-912)
         required_fields = [
-            'prepared_tracks',
-            'loop_duration_samples',
-            'loop_idx',
-            'next_stems',
-            'master_bpm',
-            'master_key',
-            'set_name',
-            'reasoning',
-            'actions',
+            "prepared_tracks",
+            "loop_duration_samples",
+            "loop_idx",
+            "next_stems",
+            "master_bpm",
+            "master_key",
+            "set_name",
+            "reasoning",
+            "actions",
         ]
 
         pregen_results = {
-            'prepared_tracks': [('audio_data', 0)],
-            'loop_duration_samples': 441000,
-            'loop_idx': 2,
-            'next_stems': [{'prompt': 'test', 'model_id': 'foundation-1'}],
-            'master_bpm': 128,
-            'master_key': 'C minor',
-            'set_name': 'Test Set',
-            'reasoning': 'Test reasoning',
-            'actions': [{'action_type': 'add', 'sub_family': 'Synth Lead'}],
+            "prepared_tracks": [("audio_data", 0)],
+            "loop_duration_samples": 441000,
+            "loop_idx": 2,
+            "next_stems": [{"prompt": "test", "model_id": "foundation-1"}],
+            "master_bpm": 128,
+            "master_key": "C minor",
+            "set_name": "Test Set",
+            "reasoning": "Test reasoning",
+            "actions": [{"action_type": "add", "sub_family": "Synth Lead"}],
         }
 
         for field in required_fields:
@@ -314,26 +305,23 @@ class TestNextLoopPreGeneration:
 
     def test_pregen_ready_check_with_matching_loop_idx(self):
         """Test pregen_ready is True only when loop_idx matches."""
+
         # pregen_ready requires: loop_idx > 1 and results exist and loop_idx matches
         def check_pregen_ready(loop_idx: int, pregen_results: dict | None) -> bool:
-            return (
-                loop_idx > 1 and
-                pregen_results is not None and
-                pregen_results.get('loop_idx') == loop_idx
-            )
+            return loop_idx > 1 and pregen_results is not None and pregen_results.get("loop_idx") == loop_idx
 
         # Should be True when loop_idx matches
-        assert check_pregen_ready(2, {'loop_idx': 2}) is True
-        assert check_pregen_ready(3, {'loop_idx': 3}) is True
-        assert check_pregen_ready(10, {'loop_idx': 10}) is True
+        assert check_pregen_ready(2, {"loop_idx": 2}) is True
+        assert check_pregen_ready(3, {"loop_idx": 3}) is True
+        assert check_pregen_ready(10, {"loop_idx": 10}) is True
 
         # Should be False when loop_idx doesn't match
-        assert check_pregen_ready(3, {'loop_idx': 2}) is False
-        assert check_pregen_ready(2, {'loop_idx': 3}) is False
+        assert check_pregen_ready(3, {"loop_idx": 2}) is False
+        assert check_pregen_ready(2, {"loop_idx": 3}) is False
 
         # Should be False for loop_idx <= 1
-        assert check_pregen_ready(1, {'loop_idx': 1}) is False
-        assert check_pregen_ready(0, {'loop_idx': 0}) is False
+        assert check_pregen_ready(1, {"loop_idx": 1}) is False
+        assert check_pregen_ready(0, {"loop_idx": 0}) is False
 
         # Should be False when results is None
         assert check_pregen_ready(2, None) is False
@@ -371,17 +359,13 @@ class TestNextLoopPreGeneration:
         state.llm_model = "test-model"
 
         snapshot = {
-            'current_bpm': 120,
-            'current_key': "D major",
-            'active_stems': [],
-            'user_override': "",
-            'available_instruments': [],
-            'stem_history': [],
-            'llm_config': {
-                'base_url': 'http://test:1234/v1',
-                'api_key': 'test-key',
-                'model': 'test-model'
-            }
+            "current_bpm": 120,
+            "current_key": "D major",
+            "active_stems": [],
+            "user_override": "",
+            "available_instruments": [],
+            "stem_history": [],
+            "llm_config": {"base_url": "http://test:1234/v1", "api_key": "test-key", "model": "test-model"},
         }
 
         # Mock conductor and job functions
@@ -390,12 +374,13 @@ class TestNextLoopPreGeneration:
             "master_key": "D major",
             "actions": [],
             "reasoning": "test pre-gen",
-            "name": "Pre-gen Test"
+            "name": "Pre-gen Test",
         }
 
-        with patch.object(loop, 'conductor') as mock_conductor, \
-             patch.object(loop, '_submit_job', new_callable=AsyncMock) as mock_submit:
-
+        with (
+            patch.object(loop, "conductor") as mock_conductor,
+            patch.object(loop, "_submit_job", new_callable=AsyncMock) as mock_submit,
+        ):
             mock_conductor.get_next_state_async = AsyncMock(return_value=mock_response)
 
             # Run pre-generation for loop 3
@@ -404,9 +389,9 @@ class TestNextLoopPreGeneration:
 
             # Verify results were stored
             assert loop._pregen_results is not None
-            assert loop._pregen_results['loop_idx'] == target_loop_idx
-            assert loop._pregen_results['master_bpm'] == 120
-            assert loop._pregen_results['master_key'] == "D major"
+            assert loop._pregen_results["loop_idx"] == target_loop_idx
+            assert loop._pregen_results["master_bpm"] == 120
+            assert loop._pregen_results["master_key"] == "D major"
             assert loop._pregen_done.is_set()
 
     @pytest.mark.asyncio
@@ -431,20 +416,16 @@ class TestNextLoopPreGeneration:
         state.llm_model = "test-model"
 
         snapshot = {
-            'current_bpm': 128,
-            'current_key': "A minor",
-            'active_stems': [],
-            'user_override': "",
-            'available_instruments': [],
-            'stem_history': [],
-            'llm_config': {
-                'base_url': 'http://fail:1234/v1',
-                'api_key': 'test',
-                'model': 'test-model'
-            }
+            "current_bpm": 128,
+            "current_key": "A minor",
+            "active_stems": [],
+            "user_override": "",
+            "available_instruments": [],
+            "stem_history": [],
+            "llm_config": {"base_url": "http://fail:1234/v1", "api_key": "test", "model": "test-model"},
         }
 
-        with patch.object(loop, 'conductor') as mock_conductor:
+        with patch.object(loop, "conductor") as mock_conductor:
             # Simulate LLM failure
             mock_conductor.get_next_state_async = AsyncMock(side_effect=Exception("LLM failed"))
 
@@ -455,7 +436,7 @@ class TestNextLoopPreGeneration:
             assert loop._pregen_done.is_set()
             # Should have fallback results
             assert loop._pregen_results is not None
-            assert loop._pregen_results['master_bpm'] == 128  # fallback preserved
+            assert loop._pregen_results["master_bpm"] == 128  # fallback preserved
 
 
 class TestMixerNextLoopIntegration:
@@ -479,22 +460,19 @@ class TestMixerNextLoopIntegration:
                 self.current_loop_end_sample = 0
 
             def set_next_loop(self, tracks, end_sample):
-                self.next_loop_calls.append({
-                    'tracks': tracks,
-                    'end_sample': end_sample
-                })
+                self.next_loop_calls.append({"tracks": tracks, "end_sample": end_sample})
 
         mixer = MockMixer()
         duration_samples = 44100 * 8  # 8 seconds
-        tracks_to_use = [('audio1', 0), ('audio2', 1)]
+        tracks_to_use = [("audio1", 0), ("audio2", 1)]
 
         # Simulate the call
         new_end = mixer.current_sample + duration_samples
         mixer.set_next_loop(tracks_to_use, new_end)
 
         assert len(mixer.next_loop_calls) == 1
-        assert mixer.next_loop_calls[0]['tracks'] == tracks_to_use
-        assert mixer.next_loop_calls[0]['end_sample'] == new_end
+        assert mixer.next_loop_calls[0]["tracks"] == tracks_to_use
+        assert mixer.next_loop_calls[0]["end_sample"] == new_end
 
     def test_next_loop_end_sample_calculation(self):
         """Test that next loop end sample is calculated correctly."""
@@ -517,6 +495,7 @@ class TestNoGapPrevention:
 
     def test_set_next_loop_populates_next_loop_audio(self):
         """Test that set_next_loop correctly stores tracks for next loop."""
+
         class MockMixer:
             def __init__(self):
                 self.next_loop_audio = []
@@ -527,7 +506,7 @@ class TestNoGapPrevention:
                 self.current_loop_end_sample = loop_end_sample
 
         mixer = MockMixer()
-        tracks = [('audio_data_1', 0), ('audio_data_2', 1)]
+        tracks = [("audio_data_1", 0), ("audio_data_2", 1)]
         end_sample = 500000
 
         mixer.set_next_loop(tracks, end_sample)
@@ -558,7 +537,7 @@ class TestNoGapPrevention:
                 self.next_loop_audio = [(np.zeros((44100, 2), dtype=np.float32), 0)]
 
             def _add_track_internal(self, audio_data, start_sample, stem_index):
-                self.tracks.append({'audio': audio_data, 'start': start_sample, 'idx': stem_index})
+                self.tracks.append({"audio": audio_data, "start": start_sample, "idx": stem_index})
 
         mixer = MockMixer()
         frames = 1024
@@ -568,8 +547,9 @@ class TestNoGapPrevention:
         samples_needed = frames + mixer.loop_switch_deadline_ms * (mixer.sample_rate // 1000)
 
         # Sanity check: we should be within the deadline
-        assert samples_until_loop_end <= samples_needed, \
+        assert samples_until_loop_end <= samples_needed, (
             f"Test setup error: {samples_until_loop_end} should be <= {samples_needed}"
+        )
 
         # The mixer should trigger transition when within deadline
         if samples_until_loop_end <= samples_needed:
@@ -586,6 +566,7 @@ class TestNoGapPrevention:
 
     def test_no_gap_when_next_loop_audio_is_empty(self):
         """Test that when next_loop_audio is empty, tracks are extended to prevent gap."""
+
         class MockMixer:
             def __init__(self):
                 self.tracks = []
@@ -597,7 +578,7 @@ class TestNoGapPrevention:
 
             def _extend_tracks_for_loop(self, end_sample):
                 # Simulate extension
-                self.tracks.append({'extended_to': end_sample})
+                self.tracks.append({"extended_to": end_sample})
                 self.current_loop_end_sample += int(2 * self.sample_rate)  # Add 2 more seconds
 
         mixer = MockMixer()
@@ -616,7 +597,7 @@ class TestNoGapPrevention:
 
         # Verify: we extended the loop, not creating a gap
         assert len(mixer.tracks) == 1
-        assert 'extended_to' in mixer.tracks[0]
+        assert "extended_to" in mixer.tracks[0]
         assert mixer.current_loop_end_sample > 100500  # Extended
 
     def test_loop_switch_deadline_prevents_timing_race(self):
@@ -644,6 +625,7 @@ class TestNoGapPrevention:
 
     def test_next_loop_end_sample_must_be_in_future(self):
         """Test that set_next_loop requires loop_end_sample > current_sample."""
+
         class MockMixer:
             def __init__(self):
                 self.current_sample = 100000
@@ -659,13 +641,14 @@ class TestNoGapPrevention:
         mixer = MockMixer()
 
         # Valid case
-        mixer.set_next_loop([('audio', 0)], 200000)
+        mixer.set_next_loop([("audio", 0)], 200000)
         assert mixer.current_loop_end_sample == 200000
 
         # Invalid case - should raise
         import pytest
+
         with pytest.raises(ValueError):
-            mixer.set_next_loop([('audio', 0)], 50000)  # Less than current_sample
+            mixer.set_next_loop([("audio", 0)], 50000)  # Less than current_sample
 
 
 class TestLastActions:
@@ -675,13 +658,14 @@ class TestLastActions:
         """Test prompt parsing when commas are present or absent."""
         # Test prompt with comma
         s = {"prompt": "Synth, Synth Lead, Warm, melody, Medium Reverb, C minor, 120 BPM, 8 Bars"}
-        prompt = s.get('prompt', '')
-        prompt_part = prompt.split(',')[1].strip() if len(prompt.split(',')) > 1 else prompt
+        prompt = s.get("prompt", "")
+        prompt_part = prompt.split(",")[1].strip() if len(prompt.split(",")) > 1 else prompt
         assert prompt_part == "Synth Lead"
 
         # Test prompt without comma
         s_no_comma = {"prompt": "SynthLead"}
-        prompt_no_comma = s_no_comma.get('prompt', '')
-        prompt_part_no_comma = prompt_no_comma.split(',')[1].strip() if len(prompt_no_comma.split(',')) > 1 else prompt_no_comma
+        prompt_no_comma = s_no_comma.get("prompt", "")
+        prompt_part_no_comma = (
+            prompt_no_comma.split(",")[1].strip() if len(prompt_no_comma.split(",")) > 1 else prompt_no_comma
+        )
         assert prompt_part_no_comma == "SynthLead"
-

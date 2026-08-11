@@ -3,6 +3,7 @@
 These simulate a DJ user changing the vibe/energy mid-session.
 Sampled deterministically using the shared RNG.
 """
+
 import random
 
 

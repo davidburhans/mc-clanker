@@ -40,10 +40,7 @@ async def health_check():
     worker = get_worker_instance()
 
     if worker is None:
-        return {
-            "status": "not_started",
-            "message": "Worker has not been initialized"
-        }
+        return {"status": "not_started", "message": "Worker has not been initialized"}
 
     return await worker.health_check()
 
@@ -62,10 +59,7 @@ async def get_stats():
     worker = get_worker_instance()
 
     if worker is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Worker has not been initialized"
-        )
+        raise HTTPException(status_code=503, detail="Worker has not been initialized")
 
     return worker.get_stats()
 
@@ -84,16 +78,10 @@ async def get_queue_depth():
     worker = get_worker_instance()
 
     if worker is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Worker has not been initialized"
-        )
+        raise HTTPException(status_code=503, detail="Worker has not been initialized")
 
     if worker.db is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Worker database not connected"
-        )
+        raise HTTPException(status_code=503, detail="Worker database not connected")
 
     try:
         async with worker.db.acquire() as conn:
@@ -112,7 +100,4 @@ async def get_queue_depth():
             "total_active": pending_count + processing_count,
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get queue depth: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to get queue depth: {str(e)}")

@@ -20,6 +20,7 @@ Example::
 
     $ .venv/bin/python -m pytest tests/test_slop_models_exports.py -q
 """
+
 from collections.abc import Sequence
 
 from slop_harness.models import (

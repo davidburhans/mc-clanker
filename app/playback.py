@@ -83,7 +83,7 @@ class ShowPlayback:
                         if not data:
                             # End of file — restart from beginning
                             if self.is_playing:
-                                wav_file.rewind() # Audit 4.2 Fix: use rewind instead of close/reopen
+                                wav_file.rewind()  # Audit 4.2 Fix: use rewind instead of close/reopen
                                 data = wav_file.readframes(frames_per_chunk)
                             else:
                                 break
@@ -92,7 +92,7 @@ class ShowPlayback:
                         try:
                             state.broadcast_audio(data)
                         except Exception:
-                            pass 
+                            pass
 
                         # Simulate realtime playback
                         time.sleep(frames_per_chunk / sample_rate)

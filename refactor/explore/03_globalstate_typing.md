@@ -129,31 +129,40 @@ class MusicalParams(_Slice):
     """current_bpm, current_key, current_set_name, previous/active/next_stems,
     stem_history, llm_reasoning."""
 
+
 class GenerationControl(_Slice):
     """is_generating, is_show_started, user_override, target_*_override,
     should_reset, generation_cfg_scale, generation_steps."""
 
+
 class LLMConfig(_Slice):
     """llm_base_url, llm_api_key, llm_model."""
+
 
 class MixerState(_Slice):
     """stem_volumes, muted_stems, soloed_stems."""
 
+
 class LoopCoordination(_Slice):
     """loop_count, last_actions, currently_playing_*, loop_history."""
+
 
 class RecordingState(_Slice):
     """is_recording, recording_*, current_show_*, *_buffer,
     current_show_audio_file (sync_lock-protected)."""
 
+
 class PlaybackState(_Slice):
     """currently_playing_show_id, is_playback_active."""
+
 
 class StemCache(_Slice):
     """last_generated_stems (OrderedDict LRU) + cache_stem()."""
 
+
 class InstrumentCatalog(_Slice):
     """available_instruments, categorized/custom instruments."""
+
 
 class SessionConfig(_Slice):
     """dj/audience passwords, audience_message, icecast_enabled."""
@@ -166,12 +175,18 @@ class SessionConfig(_Slice):
 @property
 def musical(self) -> "MusicalParams":
     return MusicalParams(self)
+
+
 @property
-def mixer(self) -> "MixerState":      # NOTE: name-clash risk with framework Mixer
+def mixer(self) -> "MixerState":  # NOTE: name-clash risk with framework Mixer
     return MixerState(self)
+
+
 @property
 def recording(self) -> "RecordingState":
     return RecordingState(self)
+
+
 # ... etc. Each slice only forwards reads; writes still go through state.X = ...
 ```
 

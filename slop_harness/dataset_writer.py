@@ -2,6 +2,7 @@
 
 Thread-safe via file locking.
 """
+
 import json
 import threading
 from pathlib import Path

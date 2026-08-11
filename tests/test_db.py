@@ -9,6 +9,7 @@ class TestDatabaseManager:
         """Test that DatabaseManager is a singleton."""
         # Reset singleton for testing
         from app.db import DatabaseManager
+
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
@@ -26,6 +27,7 @@ class TestDatabaseManager:
     def test_database_url_postgresql(self):
         """Test PostgreSQL database URL configuration."""
         from app.db import DatabaseManager
+
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://user:pass@localhost/db"}):
@@ -41,6 +43,7 @@ class TestDatabaseManager:
     def test_database_url_sqlite_fallback(self):
         """Test SQLite fallback when no DATABASE_URL."""
         from app.db import DatabaseManager
+
         DatabaseManager._instance = None
 
         # Clear DATABASE_URL
@@ -83,8 +86,12 @@ class TestDatabaseManager:
             DatabaseManager._instance = None
 
         expected = {
-            "users", "shows", "show_actions", "llm_interactions",
-            "generator_jobs", "session_routing",
+            "users",
+            "shows",
+            "show_actions",
+            "llm_interactions",
+            "generator_jobs",
+            "session_routing",
         }
         missing = expected - table_names
         assert not missing, f"create_tables() did not create tables: {missing}"
@@ -92,6 +99,7 @@ class TestDatabaseManager:
     def test_session_context_manager(self):
         """Test session context manager."""
         from app.db import DatabaseManager
+
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
@@ -113,6 +121,7 @@ class TestDatabaseManager:
     def test_session_context_manager_rollback_on_exception(self):
         """Test session rollback when exception occurs in context manager."""
         from app.db import DatabaseManager
+
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):
@@ -142,6 +151,7 @@ class TestDatabaseManager:
     def test_session_context_manager_close_always_called(self):
         """Test that session close is always called even without exception."""
         from app.db import DatabaseManager
+
         DatabaseManager._instance = None
 
         with patch.dict(os.environ, {}, clear=True):

@@ -25,6 +25,7 @@ def app_client():
 @pytest.fixture(autouse=True)
 def init_db():
     from app.db import DatabaseManager
+
     db = DatabaseManager.get_instance()
     db.create_tables()
 
@@ -66,15 +67,18 @@ class TestRecordingMetadata:
 
     def test_format_cue_time_zero(self):
         from app.lib.recording_metadata import format_cue_time
+
         assert format_cue_time(0.0) == "00:00:00"
 
     def test_format_cue_time_65_seconds(self):
         from app.lib.recording_metadata import format_cue_time
+
         result = format_cue_time(65.0)
         assert result.startswith("01:05:")
 
     def test_write_cue_sheet(self, tmp_path):
         from app.lib.recording_metadata import write_cue_sheet
+
         chapters = [
             {"index": 1, "timestamp": 0.0, "title": "Loop 1 — Warm Synth", "reasoning": "Starting with warm pad"},
             {"index": 2, "timestamp": 10.5, "title": "Loop 2 — Add Drums", "reasoning": "Adding rhythm"},
@@ -93,6 +97,7 @@ class TestRecordingMetadata:
 
     def test_embed_wav_metadata(self, tmp_path):
         from app.lib.recording_metadata import embed_wav_metadata
+
         wav_path = str(tmp_path / "test.wav")
         make_test_wav(wav_path, duration_seconds=1)
         metadata = {"title": "Test", "artist": "MC Clanker", "bpm": "120"}
@@ -105,6 +110,7 @@ class TestRecordingMetadata:
 
     def test_split_wav_by_chapters(self, tmp_path):
         from app.lib.recording_metadata import split_wav_by_chapters
+
         wav_path = str(tmp_path / "test.wav")
         make_test_wav(wav_path, duration_seconds=3)
         chapters = [
@@ -121,6 +127,7 @@ class TestRecordingMetadata:
 
     def test_build_chapter_markers(self):
         from app.lib.recording_metadata import build_chapter_markers
+
         loop_history = [
             {"loop_index": 1, "timestamp": 0, "set_name": "Verse", "reasoning": "Start", "stems": []},
             {"loop_index": 2, "timestamp": 1000, "set_name": "Chorus", "reasoning": "Build up", "stems": []},
@@ -134,6 +141,7 @@ class TestRecordingMetadata:
 
     def test_build_chapter_markers_with_bpm_key(self):
         from app.lib.recording_metadata import build_chapter_markers
+
         loop_history = [
             {"loop_index": 1, "timestamp": 0, "set_name": "", "reasoning": "", "stems": []},
         ]
@@ -150,12 +158,14 @@ class TestRecordingMetadata:
 
     def test_generate_export_filename(self):
         from app.lib.recording_metadata import generate_export_filename
+
         name = generate_export_filename(42, "My Show", format="mp3")
         assert "show_42" in name
         assert name.endswith(".mp3")
 
     def test_write_metadata_json(self, tmp_path):
         from app.lib.recording_metadata import write_metadata_json
+
         show_data = {"id": 1, "title": "Test"}
         chapters = [{"index": 1, "timestamp": 0.0, "title": "Ch1"}]
         out_path = str(tmp_path / "meta.json")
@@ -176,6 +186,7 @@ class TestRecordingPostprocess:
 
     def test_compute_loop_timestamps(self):
         from app.lib.recording_postprocess import compute_loop_timestamps
+
         interactions = [
             {"loop_index": 1, "relative_time_ms": 0},
             {"loop_index": 2, "relative_time_ms": 5000},
@@ -186,6 +197,7 @@ class TestRecordingPostprocess:
 
     def test_compute_loop_timestamps_normalizes(self):
         from app.lib.recording_postprocess import compute_loop_timestamps
+
         interactions = [
             {"loop_index": 1, "relative_time_ms": 2000},
             {"loop_index": 2, "relative_time_ms": 7000},
@@ -197,6 +209,7 @@ class TestRecordingPostprocess:
 
     def test_build_loop_history_from_db(self):
         from app.lib.recording_postprocess import build_loop_history_from_db
+
         interactions = [
             {
                 "loop_index": 1,
@@ -221,16 +234,44 @@ class TestRecordingPostprocess:
     @pytest.mark.asyncio
     async def test_postprocess_show_recording(self, tmp_path):
         from app.lib.recording_postprocess import postprocess_show_recording
+
         wav_path = str(tmp_path / "audio.wav")
         make_test_wav(wav_path, duration_seconds=2)
-        show_data = {"id": 1, "title": "Test Show", "description": "A test", "config_snapshot": {"bpm": 120, "key": "C minor"}}
+        show_data = {
+            "id": 1,
+            "title": "Test Show",
+            "description": "A test",
+            "config_snapshot": {"bpm": 120, "key": "C minor"},
+        }
         actions = [
-            {"loop_index": 1, "relative_time_ms": 0, "action_type": "add", "stem_details": {"sub_family": "Bass", "major_family": ""}},
-            {"loop_index": 2, "relative_time_ms": 5000, "action_type": "add", "stem_details": {"sub_family": "Drums", "major_family": ""}},
+            {
+                "loop_index": 1,
+                "relative_time_ms": 0,
+                "action_type": "add",
+                "stem_details": {"sub_family": "Bass", "major_family": ""},
+            },
+            {
+                "loop_index": 2,
+                "relative_time_ms": 5000,
+                "action_type": "add",
+                "stem_details": {"sub_family": "Drums", "major_family": ""},
+            },
         ]
         interactions = [
-            {"loop_index": 1, "relative_time_ms": 0, "set_name": "Verse", "reasoning": "Start", "instruments": ["Bass"]},
-            {"loop_index": 2, "relative_time_ms": 5000, "set_name": "Chorus", "reasoning": "Energy up", "instruments": ["Drums"]},
+            {
+                "loop_index": 1,
+                "relative_time_ms": 0,
+                "set_name": "Verse",
+                "reasoning": "Start",
+                "instruments": ["Bass"],
+            },
+            {
+                "loop_index": 2,
+                "relative_time_ms": 5000,
+                "set_name": "Chorus",
+                "reasoning": "Energy up",
+                "instruments": ["Drums"],
+            },
         ]
         result = await postprocess_show_recording(
             show_id=1,
@@ -247,6 +288,7 @@ class TestRecordingPostprocess:
     @pytest.mark.asyncio
     async def test_postprocess_missing_file(self, tmp_path):
         from app.lib.recording_postprocess import postprocess_show_recording
+
         result = await postprocess_show_recording(
             show_id=1,
             audio_file_path=str(tmp_path / "nonexistent.wav"),
@@ -258,6 +300,7 @@ class TestRecordingPostprocess:
 
     def test_split_show_chapters(self, tmp_path):
         from app.lib.recording_postprocess import split_show_chapters
+
         wav_path = str(tmp_path / "audio.wav")
         make_test_wav(wav_path, duration_seconds=3)
         chapters = [

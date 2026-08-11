@@ -1,14 +1,22 @@
 """Tests for app.lib.constants — single source of truth for schema enums."""
+
 import pytest
 import sys, os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'app'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 from app.lib.constants import (
-    VALID_BPMS, VALID_KEYS, VALID_BARS, VALID_MODEL_IDS,
-    VALID_MAJOR_FAMILIES, VALID_SUB_FAMILIES,
-    TIMBRE_TAGS, NOTATION_TAGS, FX_TAGS,
-    get_all_major_families, add_custom_major_family,
+    VALID_BPMS,
+    VALID_KEYS,
+    VALID_BARS,
+    VALID_MODEL_IDS,
+    VALID_MAJOR_FAMILIES,
+    VALID_SUB_FAMILIES,
+    TIMBRE_TAGS,
+    NOTATION_TAGS,
+    FX_TAGS,
+    get_all_major_families,
+    add_custom_major_family,
     get_response_format_schema,
 )
 
@@ -74,6 +82,7 @@ class TestDynamicFamilyExtension:
 
         # Monkey-patch during test
         import app.lib.constants as const_module
+
         const_module.add_custom_major_family = tracked_add
         yield
         const_module.add_custom_major_family = original_add
@@ -91,30 +100,42 @@ class TestDynamicFamilyExtension:
         add_custom_major_family("TestBrass")
         schema = get_response_format_schema()
         # Path: top-level key "json_schema" -> inner dict's "schema" key -> actions.items.anyOf[1].properties.major_family.enum
-        major_family_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["major_family"]["enum"]
+        major_family_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"][
+            "major_family"
+        ]["enum"]
         assert "TestBrass" in major_family_enum
 
     def test_schema_constrains_model_id(self):
         schema = get_response_format_schema()
-        model_id_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["model_id"]["enum"]
+        model_id_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"][
+            "model_id"
+        ]["enum"]
         assert model_id_enum == VALID_MODEL_IDS
 
     def test_schema_constrains_bars(self):
         schema = get_response_format_schema()
-        bars_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["bars"]["enum"]
+        bars_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["bars"][
+            "enum"
+        ]
         assert bars_enum == VALID_BARS
 
     def test_schema_constrains_timbre_tags(self):
         schema = get_response_format_schema()
-        timbre_items_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["timbre_tags"]["items"]["enum"]
+        timbre_items_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"][
+            "timbre_tags"
+        ]["items"]["enum"]
         assert timbre_items_enum == TIMBRE_TAGS
 
     def test_schema_constrains_notation_tag(self):
         schema = get_response_format_schema()
-        notation_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["notation_tag"]["enum"]
+        notation_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"][
+            "notation_tag"
+        ]["enum"]
         assert notation_enum == NOTATION_TAGS
 
     def test_schema_constrains_fx_tag(self):
         schema = get_response_format_schema()
-        fx_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["fx_tag"]["enum"]
+        fx_enum = schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"][1]["properties"]["fx_tag"][
+            "enum"
+        ]
         assert fx_enum == FX_TAGS

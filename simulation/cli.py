@@ -3,6 +3,7 @@
 Mirrors slop_harness/harness.py CLI interface. Each jockey reuses
 production ConductorLLMAsync. No DB, no audio generation.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,8 +28,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Simulate stateful Slop Jockey sessions "
-                    "(reuses production ConductorLLMAsync)"
+        description="Simulate stateful Slop Jockey sessions (reuses production ConductorLLMAsync)"
     )
     parser.add_argument(
         "--base-url",
@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Seed for loop count per jockey. If omitted, a random seed is "
-             "generated and logged so the run can be reproduced exactly.",
+        "generated and logged so the run can be reproduced exactly.",
     )
     parser.add_argument(
         "--min-loops",
@@ -225,10 +225,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
     # Process completions — dynamic reaping keeps 128 running until all done
     while pending_tasks:
-        done, still_pending = await asyncio.wait(
-            list(pending_tasks.keys()),
-            return_when=asyncio.FIRST_COMPLETED
-        )
+        done, still_pending = await asyncio.wait(list(pending_tasks.keys()), return_when=asyncio.FIRST_COMPLETED)
         # Save metadata for done tasks BEFORE rebuilding pending_tasks
         done_metadata = {task: pending_tasks[task] for task in done}
         # Rebuild pending_tasks dict from still_pending set

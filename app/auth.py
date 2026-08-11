@@ -61,6 +61,7 @@ JWT_EXPIRATION_HOURS = 24
 # Password helpers
 # ---------------------------------------------------------------------------
 
+
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt."""
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -77,6 +78,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 # JWT helpers
 # ---------------------------------------------------------------------------
+
 
 def create_access_token(user_id: int) -> str:
     """Generate a JWT token for a user."""
@@ -102,8 +104,10 @@ def decode_token(token: str) -> dict | None:
 # Compat pseudo-users for env-var password auth (backwards compatibility)
 # ---------------------------------------------------------------------------
 
+
 class CompatUser:
     """Pseudo-user for backwards-compatible DJ Basic-auth sessions."""
+
     id = 0
     username = "djCompat"
     email = "compat@local"
@@ -115,6 +119,7 @@ class CompatUser:
 
 class CompatAudUser:
     """Pseudo-user for backwards-compatible audience Basic-auth sessions."""
+
     id = -1
     username = "audienceCompat"
     email = "audience@local"
@@ -127,6 +132,7 @@ class CompatAudUser:
 # ---------------------------------------------------------------------------
 # Request-level auth extraction
 # ---------------------------------------------------------------------------
+
 
 def get_current_user_from_request(request) -> object | None:
     """Extract and validate user from request.
@@ -170,6 +176,7 @@ def get_current_user_from_request(request) -> object | None:
     provided_pass: str | None = None
     if auth_header and auth_header.startswith("Basic "):
         import base64
+
         try:
             decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
             if ":" in decoded:
@@ -194,9 +201,8 @@ def get_current_user_from_request(request) -> object | None:
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
 
-def get_current_user(
-    credentials: HTTPBasicCredentials | None = Depends(HTTPBasic(auto_error=False))
-) -> User | None:
+
+def get_current_user(credentials: HTTPBasicCredentials | None = Depends(HTTPBasic(auto_error=False))) -> User | None:
     """FastAPI dependency — exists for route signature compatibility.
     Actual auth is handled by get_current_user_from_request in middleware.
     """

@@ -12,6 +12,7 @@ This produces:
   - history: up to 5 previous stem sets
   - available_models: which models are "available" to the Conductor
 """
+
 import hashlib
 from random import Random
 from typing import Any
@@ -68,9 +69,7 @@ class StateGenerator:
         history = []
         for _ in range(min(5, song_age)):
             hist_age = self._rng.randint(0, song_age - 1) if song_age > 0 else 0
-            hist_stems = self._generate_stems(
-                self._rng.randint(1, 7), hist_age, key, bpm
-            )
+            hist_stems = self._generate_stems(self._rng.randint(1, 7), hist_age, key, bpm)
             history.append({"stems": hist_stems, "age": hist_age})
 
         available_models = self._select_available_models()
@@ -85,9 +84,7 @@ class StateGenerator:
             "available_models": available_models,
         }
 
-    def _generate_stems(
-        self, count: int, base_age: int, key: str, bpm: int
-    ) -> list[dict[str, Any]]:
+    def _generate_stems(self, count: int, base_age: int, key: str, bpm: int) -> list[dict[str, Any]]:
         """Generate 'count' stems with ages based on base_age."""
         stems = []
         for i in range(count):
@@ -99,18 +96,13 @@ class StateGenerator:
     def _random_stem(self, age: int, key: str, bpm: int) -> dict[str, Any]:
         """Generate a single random stem."""
         major_family = self._rng.choice(FOUNDATION_1_MODEL["major_families"])
-        sub_family = self._rng.choice(
-            self._sub_families_for_major(major_family)
-        )
+        sub_family = self._rng.choice(self._sub_families_for_major(major_family))
         timbre_tags = self._rng.sample(TIMBRE_TAGS_F1, min(3, len(TIMBRE_TAGS_F1)))
         notation_tag = self._rng.choice(NOTATION_TAGS_F1)
         fx_tag = self._rng.choice(FX_TAGS_F1)
         bars = self._rng.choice(ALL_BARS)
 
-        prompt = (
-            f"{sub_family}, {', '.join(timbre_tags)}, {notation_tag}, "
-            f"{fx_tag}, {key}, {bpm} BPM, {bars} Bars"
-        )
+        prompt = f"{sub_family}, {', '.join(timbre_tags)}, {notation_tag}, {fx_tag}, {key}, {bpm} BPM, {bars} Bars"
 
         return {
             "instrument": sub_family,

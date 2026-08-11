@@ -228,16 +228,22 @@ async def cleanup_expired_jobs():
 @router.post("/api/jobs")
 async def submit_job(job: JobSubmission):
     """Submit a stem generation job to the queue."""
-    job_id = await db.fetch_one("""
+    job_id = await db.fetch_one(
+        """
         INSERT INTO generator_jobs (session_id, instrument, prompt, major_family,
                                      model_id, key, bpm, timbre_tags, bars, expires_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW() + INTERVAL '24 hours')
         RETURNING id
-    """, session_id, job.instrument, ...)
+    """,
+        session_id,
+        job.instrument,
+        ...,
+    )
 
     # Notify workers (optional, can poll)
     await db.execute("NOTIFY job_available")
     return {"job_id": job_id}
+
 
 # Poll for job completion (event-driven alternative to blocking)
 @router.get("/api/jobs/{job_id}")
@@ -250,8 +256,9 @@ async def get_job(job_id: UUID):
         "id": job["id"],
         "status": job["status"],
         "audio_path": job["audio_path"] if job["status"] == "completed" else None,
-        "error": job["error_message"]
+        "error": job["error_message"],
     }
+
 
 # Audio streaming endpoint (framework fetches from Garage)
 @router.get("/api/audio/{job_id}")
@@ -262,14 +269,12 @@ async def get_audio(job_id: UUID):
         raise HTTPException(404, "Audio not found")
 
     # Refresh expiration on access
-    await db.execute(
-        "UPDATE generator_jobs SET expires_at = NOW() + INTERVAL '1 hour' WHERE id = $1",
-        job_id
-    )
+    await db.execute("UPDATE generator_jobs SET expires_at = NOW() + INTERVAL '1 hour' WHERE id = $1", job_id)
 
     # Stream from Garage using presigned URL or direct access
     audio_url = garage.get_presigned_url(job["audio_path"])
     return RedirectResponse(audio_url)
+
 
 # Worker health + job claim (workers only)
 @router.post("/api/worker/jobs/claim")
@@ -284,22 +289,31 @@ async def claim_job(worker_id: str):
             FOR UPDATE SKIP LOCKED
         """)
         if job:
-            await db.execute("""
+            await db.execute(
+                """
                 UPDATE generator_jobs
                 SET status = 'processing', started_at = NOW(), worker_id = $1
                 WHERE id = $2
-            """, worker_id, job["id"])
+            """,
+                worker_id,
+                job["id"],
+            )
     return job
+
 
 # Session affinity (for load balancer)
 @router.post("/api/sessions/{session_id}/heartbeat")
 async def session_heartbeat(session_id: UUID, server_id: str):
     """Update session routing heartbeat."""
-    await db.execute("""
+    await db.execute(
+        """
         INSERT INTO session_routing (session_id, server_id, last_heartbeat)
         VALUES ($1, $2, NOW())
         ON CONFLICT (session_id) DO UPDATE SET last_heartbeat = NOW()
-    """, session_id, server_id)
+    """,
+        session_id,
+        server_id,
+    )
 ```
 
 ### Modified Endpoints
@@ -355,6 +369,7 @@ logger = logging.getLogger(__name__)
 
 # AAC encoding via ffmpeg-python or subprocess
 
+
 @dataclass
 class WorkerConfig:
     worker_id: str
@@ -364,6 +379,7 @@ class WorkerConfig:
     garage_secret_key: str
     garage_bucket: str
     garage_bucket_region: str
+
 
 class GeneratorWorker:
     def __init__(self, config: WorkerConfig):
@@ -378,7 +394,7 @@ class GeneratorWorker:
 
         # Listen for job notifications (optional optimization)
         conn = await self.db.acquire()
-        await conn.add_listener('job_available', self._on_job_available)
+        await conn.add_listener("job_available", self._on_job_available)
 
         asyncio.create_task(self._cleanup_loop())
 
@@ -403,11 +419,15 @@ class GeneratorWorker:
                     await asyncio.sleep(1)  # No jobs, wait before polling again
                     return
 
-                await conn.execute("""
+                await conn.execute(
+                    """
                     UPDATE generator_jobs
                     SET status = 'processing', started_at = NOW(), worker_id = $1
                     WHERE id = $2
-                """, self.config.worker_id, job['id'])
+                """,
+                    self.config.worker_id,
+                    job["id"],
+                )
 
         # Process outside transaction (I/O heavy)
         try:
@@ -415,20 +435,24 @@ class GeneratorWorker:
         except Exception as e:
             logger.error(f"Job {job['id']} failed: {e}")
             async with self.db.acquire() as conn:
-                await conn.execute("""
+                await conn.execute(
+                    """
                     UPDATE generator_jobs
                     SET status = 'failed', error_message = $1, completed_at = NOW()
                     WHERE id = $2
-                """, str(e), job['id'])
+                """,
+                    str(e),
+                    job["id"],
+                )
 
     async def _generate_and_upload(self, job):
         # 1. Generate audio via stable-audio-tools
         audio_array = await self.generators.generate_stem(
-            model_id=job['model_id'],
-            prompt=job['prompt'],
-            key=job['key'],
-            bpm=job['bpm'],
-            bars=job['bars'],
+            model_id=job["model_id"],
+            prompt=job["prompt"],
+            key=job["key"],
+            bpm=job["bpm"],
+            bars=job["bars"],
         )
 
         # 2. Encode to AAC
@@ -440,7 +464,8 @@ class GeneratorWorker:
 
         # 4. Update DB with result
         async with self.db.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 UPDATE generator_jobs
                 SET status = 'completed',
                     audio_path = $1,
@@ -448,7 +473,11 @@ class GeneratorWorker:
                     completed_at = NOW(),
                     expires_at = NOW() + INTERVAL '24 hours'
                 WHERE id = $3
-            """, audio_path, len(audio_array) / 44100, job['id'])
+            """,
+                audio_path,
+                len(audio_array) / 44100,
+                job["id"],
+            )
 
         # 5. Notify via LISTEN/NOTIFY
         async with self.db.acquire() as conn:
@@ -461,19 +490,27 @@ class GeneratorWorker:
         import numpy as np
         from scipy.io import wavfile
 
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             # Write WAV
             wavfile.write(f.name, sample_rate, audio_array.astype(np.float32))
             wav_path = f.name
 
-        result = subprocess.run([
-            'ffmpeg', '-i', wav_path,
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-y',
-            '-f', 'adts',  # AAC in ADTS container
-            'pipe:1'
-        ], capture_output=True)
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-i",
+                wav_path,
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-y",
+                "-f",
+                "adts",  # AAC in ADTS container
+                "pipe:1",
+            ],
+            capture_output=True,
+        )
 
         return result.stdout
 
@@ -497,15 +534,16 @@ class GeneratorWorker:
     def stop(self):
         self.running = False
 
+
 async def main():
     config = WorkerConfig(
-        worker_id=os.environ['WORKER_ID'],
-        pg_dsn=os.environ['DATABASE_URL'],
-        garage_endpoint=os.environ['GARAGE_ENDPOINT'],
-        garage_access_key=os.environ['GARAGE_ACCESS_KEY'],
-        garage_secret_key=os.environ['GARAGE_SECRET_KEY'],
-        garage_bucket=os.environ['GARAGE_BUCKET'],
-        garage_bucket_region=os.environ['GARAGE_BUCKET_REGION'],
+        worker_id=os.environ["WORKER_ID"],
+        pg_dsn=os.environ["DATABASE_URL"],
+        garage_endpoint=os.environ["GARAGE_ENDPOINT"],
+        garage_access_key=os.environ["GARAGE_ACCESS_KEY"],
+        garage_secret_key=os.environ["GARAGE_SECRET_KEY"],
+        garage_bucket=os.environ["GARAGE_BUCKET"],
+        garage_bucket_region=os.environ["GARAGE_BUCKET_REGION"],
     )
     worker = GeneratorWorker(config)
 
@@ -579,30 +617,30 @@ async def wait_for_job_completion(job_id: UUID, timeout=60.0) -> Optional[str]:
 
     # Register listener
     conn = await db.acquire()
-    await conn.add_listener('job_completed', on_notify)
+    await conn.add_listener("job_completed", on_notify)
 
     try:
         # Check if already completed
         job = await db.fetch_one("SELECT * FROM generator_jobs WHERE id = $1", job_id)
-        if job['status'] == 'completed':
-            return job['audio_path']
+        if job["status"] == "completed":
+            return job["audio_path"]
 
         # Wait with timeout
         if timeout:
             await asyncio.wait_for(event.wait(), timeout)
             job = await db.fetch_one("SELECT * FROM generator_jobs WHERE id = $1", job_id)
-            return job['audio_path'] if job['status'] == 'completed' else None
+            return job["audio_path"] if job["status"] == "completed" else None
         else:
             # Fallback polling
             while True:
                 job = await db.fetch_one("SELECT * FROM generator_jobs WHERE id = $1", job_id)
-                if job['status'] == 'completed':
-                    return job['audio_path']
-                elif job['status'] == 'failed':
+                if job["status"] == "completed":
+                    return job["audio_path"]
+                elif job["status"] == "failed":
                     return None
                 await asyncio.sleep(0.5)
     finally:
-        await conn.remove_listener('job_completed', on_notify)
+        await conn.remove_listener("job_completed", on_notify)
 ```
 
 ### Session Affinity
@@ -610,31 +648,32 @@ async def wait_for_job_completion(job_id: UUID, timeout=60.0) -> Optional[str]:
 ```python
 # app_ui.py or middleware
 
+
 @app.middleware("http")
 async def session_affinity(request: Request, call_next):
-    session_id = request.path_params.get('session_id')
+    session_id = request.path_params.get("session_id")
 
     if session_id:
         # Look up which server handles this session
-        server_info = await db.fetch_one(
-            "SELECT server_id FROM session_routing WHERE session_id = $1",
-            session_id
-        )
+        server_info = await db.fetch_one("SELECT server_id FROM session_routing WHERE session_id = $1", session_id)
 
-        if server_info and server_info['server_id'] != current_server_id:
+        if server_info and server_info["server_id"] != current_server_id:
             # Redirect to correct server
-            return RedirectResponse(
-                f"http://{server_info['server_id']}/sessions/{session_id}/..."
-            )
+            return RedirectResponse(f"http://{server_info['server_id']}/sessions/{session_id}/...")
 
     return await call_next(request)
 
+
 async def register_session(session_id: UUID):
     """Called when a new DJ session starts on this server."""
-    await db.execute("""
+    await db.execute(
+        """
         INSERT INTO session_routing (session_id, server_id, last_heartbeat)
         VALUES ($1, $2, NOW())
-    """, session_id, current_server_id)
+    """,
+        session_id,
+        current_server_id,
+    )
 ```
 
 ---
@@ -649,44 +688,37 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 import httpx
 
+
 class GarageClient:
     """S3-compatible client for Garage object storage."""
 
     def __init__(self, config: WorkerConfig):
         self.bucket = config.garage_bucket
         self.client = boto3.client(
-            's3',
+            "s3",
             endpoint_url=config.garage_endpoint,
             aws_access_key_id=config.garage_access_key,
             aws_secret_access_key=config.garage_secret_key,
             region_name=config.garage_bucket_region,
-            config=Config(signature_version='s3v4'),
+            config=Config(signature_version="s3v4"),
         )
 
     async def put_object(self, key: str, data: bytes):
         """Upload object to Garage."""
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
-        )
+        await loop.run_in_executor(None, lambda: self.client.put_object(Bucket=self.bucket, Key=key, Body=data))
 
     def get_presigned_url(self, key: str, expires_in=3600) -> str:
         """Generate presigned URL for reading."""
         return self.client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': self.bucket, 'Key': key},
-            ExpiresIn=expires_in
+            "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=expires_in
         )
 
     async def get_object(self, key: str) -> bytes:
         """Download object from Garage."""
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: self.client.get_object(Bucket=self.bucket, Key=key)
-        )
-        return response['Body'].read()
+        response = await loop.run_in_executor(None, lambda: self.client.get_object(Bucket=self.bucket, Key=key))
+        return response["Body"].read()
 ```
 
 ---
@@ -971,13 +1003,19 @@ async def test_generator_jobs_table_exists():
     """)
     assert result is not None
 
+
 async def test_generator_jobs_status_enum():
     """Status must be one of: pending, processing, completed, failed, expired"""
     with pytest.raises(psycopg2.CheckConstraintViolation):
-        await db.execute("""
+        await db.execute(
+            """
             INSERT INTO generator_jobs (session_id, instrument, prompt, expires_at)
             VALUES ($1, $2, $3, NOW() + INTERVAL '24 hours')
-        """, uuid.uuid4(), "Synth", "test prompt")
+        """,
+            uuid.uuid4(),
+            "Synth",
+            "test prompt",
+        )
 ```
 
 **GREEN Implementation** (`migrations/001_jobs_and_routing.sql`):
@@ -1047,9 +1085,10 @@ from unittest.mock import MagicMock, patch
 
 # These tests use mocks - no real Garage needed
 
+
 def test_put_object_uploads_to_garage():
     """When put_object is called, data should be uploaded to correct key."""
-    with patch('boto3.client') as mock_boto:
+    with patch("boto3.client") as mock_boto:
         mock_client = MagicMock()
         mock_boto.return_value = mock_client
 
@@ -1057,14 +1096,13 @@ def test_put_object_uploads_to_garage():
         client.put_object("audio/test-job-id.aac", b"fake audio data")
 
         mock_client.put_object.assert_called_once_with(
-            Bucket=TEST_CONFIG.garage_bucket,
-            Key="audio/test-job-id.aac",
-            Body=b"fake audio data"
+            Bucket=TEST_CONFIG.garage_bucket, Key="audio/test-job-id.aac", Body=b"fake audio data"
         )
+
 
 def test_get_presigned_url_generates_valid_url():
     """Presigned URL should contain bucket and key."""
-    with patch('boto3.client') as mock_boto:
+    with patch("boto3.client") as mock_boto:
         mock_client = MagicMock()
         mock_client.generate_presigned_url.return_value = "http://garage:3900/bucket/audio/test.aac?sig=..."
         mock_boto.return_value = mock_client
@@ -1106,6 +1144,7 @@ from botocore.config import Config
 @dataclass
 class GarageConfig:
     """Configuration for Garage S3-compatible storage."""
+
     endpoint: str
     access_key: str
     secret_key: str
@@ -1120,26 +1159,22 @@ class GarageClient:
         self.bucket = config.bucket
         self.config = config
         self._client = boto3.client(
-            's3',
+            "s3",
             endpoint_url=config.endpoint,
             aws_access_key_id=config.access_key,
             aws_secret_access_key=config.secret_key,
             region_name=config.region,
-            config=Config(signature_version='s3v4'),
+            config=Config(signature_version="s3v4"),
         )
 
     def _sync_put_object(self, key: str, data: bytes):
         """Synchronous put - run in thread pool."""
-        self._client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=data
-        )
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data)
 
     def _sync_get_object(self, key: str) -> bytes:
         """Synchronous get - run in thread pool."""
         response = self._client.get_object(Bucket=self.bucket, Key=key)
-        return response['Body'].read()
+        return response["Body"].read()
 
     async def put_object(self, key: str, data: bytes):
         """Upload bytes to Garage. Thread-safe."""
@@ -1163,9 +1198,7 @@ class GarageClient:
             Presigned URL string
         """
         return self._client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': self.bucket, 'Key': key},
-            ExpiresIn=expires_in
+            "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=expires_in
         )
 ```
 
@@ -1175,23 +1208,24 @@ class GarageClient:
 ```python
 import subprocess
 
+
 def test_worker_dockerfile_exists():
     """Worker Dockerfile should exist at project root."""
     assert Path("Dockerfile.worker").exists()
 
+
 def test_worker_dockerfile_builds():
     """Worker image should build without errors."""
     result = subprocess.run(
-        ["docker", "build", "-f", "Dockerfile.worker", "-t", "mcclanker-worker-test", "."],
-        capture_output=True
+        ["docker", "build", "-f", "Dockerfile.worker", "-t", "mcclanker-worker-test", "."], capture_output=True
     )
     assert result.returncode == 0, f"Build failed: {result.stderr.decode()}"
+
 
 def test_worker_image_has_ffmpeg():
     """Worker image must have ffmpeg for AAC encoding."""
     result = subprocess.run(
-        ["docker", "run", "--rm", "mcclanker-worker-test", "ffmpeg", "-version"],
-        capture_output=True
+        ["docker", "run", "--rm", "mcclanker-worker-test", "ffmpeg", "-version"], capture_output=True
     )
     assert result.returncode == 0, "ffmpeg not found in worker image"
 ```
@@ -1237,6 +1271,7 @@ from scipy.io import wavfile
 import tempfile
 import os
 
+
 def test_encode_aac_produces_valid_aac():
     """Given a stereo float32 array, encoder should produce AAC bytes."""
     # 1 second of 44100Hz audio
@@ -1250,6 +1285,7 @@ def test_encode_aac_produces_valid_aac():
     assert len(aac_bytes) < wav_size
     assert len(aac_bytes) > 0
 
+
 def test_encode_aac_with_mono_audio():
     """Mono audio should be encoded correctly."""
     sample_rate = 44100
@@ -1258,6 +1294,7 @@ def test_encode_aac_with_mono_audio():
     aac_bytes = encode_aac(audio, sample_rate)
 
     assert len(aac_bytes) > 0
+
 
 def test_encode_aac_preserves_duration():
     """Encoded audio should be approximately same duration as input."""
@@ -1315,22 +1352,30 @@ def encode_aac(audio: np.ndarray, sample_rate: int = 44100, bitrate: str = "192k
         raise ValueError(f"Expected 1D or 2D array, got {audio.ndim}D")
 
     # Write temporary WAV file
-    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         wav_path = Path(f.name)
         # scipy expects (samples, channels) float32 in [-1, 1]
         wavfile.write(wav_path, sample_rate, audio)
 
     try:
         # Encode to AAC via ffmpeg
-        result = subprocess.run([
-            'ffmpeg',
-            '-i', str(wav_path),
-            '-c:a', 'aac',
-            '-b:a', bitrate,
-            '-y',  # Overwrite output
-            '-f', 'adts',  # ADTS container (raw AAC without Muxer)
-            '-'  # Output to stdout
-        ], capture_output=True, check=True)
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-i",
+                str(wav_path),
+                "-c:a",
+                "aac",
+                "-b:a",
+                bitrate,
+                "-y",  # Overwrite output
+                "-f",
+                "adts",  # ADTS container (raw AAC without Muxer)
+                "-",  # Output to stdout
+            ],
+            capture_output=True,
+            check=True,
+        )
 
         return result.stdout
 
@@ -1353,20 +1398,15 @@ def decode_aac(aac_bytes: bytes, sample_rate: int = 44100) -> np.ndarray:
     Returns:
         numpy array of audio samples, shape (samples, channels)
     """
-    with tempfile.NamedTemporaryFile(suffix='.aac', delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".aac", delete=False) as f:
         aac_path = Path(f.name)
         aac_path.write_bytes(aac_bytes)
 
     try:
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             wav_path = Path(f.name)
 
-            subprocess.run([
-                'ffmpeg',
-                '-i', str(aac_path),
-                '-y',
-                str(wav_path)
-            ], capture_output=True, check=True)
+            subprocess.run(["ffmpeg", "-i", str(aac_path), "-y", str(wav_path)], capture_output=True, check=True)
 
             _, audio = wavfile.read(wav_path)
             return audio.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
@@ -1498,6 +1538,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WorkerConfig:
     """Configuration for a worker instance."""
+
     worker_id: str
     pg_dsn: str
     garage: GarageConfig
@@ -1529,7 +1570,7 @@ class GeneratorWorker:
             self.config.pg_dsn,
             min_size=2,
             max_size=5,
-            command_timeout=300  # 5 minute timeout for queries
+            command_timeout=300,  # 5 minute timeout for queries
         )
 
         logger.info("Connected to PostgreSQL")
@@ -1572,13 +1613,13 @@ class GeneratorWorker:
             audio_path, duration = await self._generate_and_upload(job)
 
             # Mark complete
-            await self._mark_job_complete(job['id'], audio_path, duration)
+            await self._mark_job_complete(job["id"], audio_path, duration)
 
             logger.info(f"Job {job['id']} completed: {audio_path}")
 
         except Exception as e:
             logger.error(f"Job {job['id']} failed: {e}")
-            await self._mark_job_failed(job['id'], str(e))
+            await self._mark_job_failed(job["id"], str(e))
 
     async def _claim_next_job(self) -> Optional[dict]:
         """
@@ -1602,13 +1643,17 @@ class GeneratorWorker:
                     return None
 
                 # Mark as processing (within same transaction)
-                await conn.execute("""
+                await conn.execute(
+                    """
                     UPDATE generator_jobs
                     SET status = 'processing',
                         started_at = NOW(),
                         worker_id = $1
                     WHERE id = $2
-                """, self.config.worker_id, job['id'])
+                """,
+                    self.config.worker_id,
+                    job["id"],
+                )
 
                 return dict(job)
 
@@ -1627,20 +1672,18 @@ class GeneratorWorker:
         audio_array = await loop.run_in_executor(
             None,
             lambda: self.generators.generate_stem(
-                model_id=job['model_id'],
-                prompt=job['prompt'],
-                key=job.get('key'),
-                bpm=job.get('bpm'),
-                bars=job.get('bars', 4),
-            )
+                model_id=job["model_id"],
+                prompt=job["prompt"],
+                key=job.get("key"),
+                bpm=job.get("bpm"),
+                bars=job.get("bars", 4),
+            ),
         )
 
         # Encode to AAC
         from aac_encoder import encode_aac
-        aac_bytes = await loop.run_in_executor(
-            None,
-            lambda: encode_aac(audio_array, sample_rate=44100)
-        )
+
+        aac_bytes = await loop.run_in_executor(None, lambda: encode_aac(audio_array, sample_rate=44100))
 
         # Upload to Garage
         audio_path = f"audio/{job['id']}.aac"
@@ -1654,7 +1697,8 @@ class GeneratorWorker:
     async def _mark_job_complete(self, job_id: uuid.UUID, audio_path: str, duration: float):
         """Mark job as completed with result."""
         async with self.db.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 UPDATE generator_jobs
                 SET status = 'completed',
                     audio_path = $1,
@@ -1662,7 +1706,11 @@ class GeneratorWorker:
                     completed_at = NOW(),
                     expires_at = NOW() + INTERVAL '24 hours'
                 WHERE id = $3
-            """, audio_path, duration, job_id)
+            """,
+                audio_path,
+                duration,
+                job_id,
+            )
 
             # Notify listeners
             await conn.execute(f"NOTIFY job_completed, '{job_id}'")
@@ -1670,14 +1718,18 @@ class GeneratorWorker:
     async def _mark_job_failed(self, job_id: uuid.UUID, error: str):
         """Mark job as failed with error message."""
         async with self.db.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 UPDATE generator_jobs
                 SET status = 'failed',
                     error_message = $1,
                     completed_at = NOW(),
                     expires_at = NOW() + INTERVAL '1 hour'
                 WHERE id = $2
-            """, error, job_id)
+            """,
+                error,
+                job_id,
+            )
 
     async def _cleanup_loop(self):
         """Periodically clean up expired jobs."""
@@ -1753,22 +1805,24 @@ if __name__ == "__main__":
 @pytest.mark.asyncio
 async def test_submit_job_returns_job_id():
     """POST /api/jobs should return job_id and set status to pending."""
-    response = await client.post("/api/jobs", json={
-        "session_id": str(session_id),
-        "instrument": "Synth Pad",
-        "prompt": "atmospheric pad, 128 bpm",
-        "bpm": 128
-    })
+    response = await client.post(
+        "/api/jobs",
+        json={
+            "session_id": str(session_id),
+            "instrument": "Synth Pad",
+            "prompt": "atmospheric pad, 128 bpm",
+            "bpm": 128,
+        },
+    )
     assert response.status_code == 200
     data = response.json()
     assert "job_id" in data
 
     # Verify in DB
-    job = await db.fetch_one(
-        "SELECT * FROM generator_jobs WHERE id = $1", data["job_id"]
-    )
+    job = await db.fetch_one("SELECT * FROM generator_jobs WHERE id = $1", data["job_id"])
     assert job["status"] == "pending"
     assert job["instrument"] == "Synth Pad"
+
 
 @pytest.mark.asyncio
 async def test_submit_job_sets_expiration():
@@ -1787,15 +1841,19 @@ async def test_wait_for_job_completion_returns_audio_path():
     job_id = await create_pending_job()
 
     # Simulate worker completing job
-    await db.execute("""
+    await db.execute(
+        """
         UPDATE generator_jobs
         SET status = 'completed', audio_path = 'audio/test.aac'
         WHERE id = $1
-    """, job_id)
+    """,
+        job_id,
+    )
     await db.execute(f"NOTIFY job_completed, '{job_id}'")
 
     result = await wait_for_job_completion(job_id, timeout=5.0)
     assert result == "audio/test.aac"
+
 
 async def test_wait_for_job_completion_timeout():
     """Should return None on timeout."""
@@ -1819,19 +1877,22 @@ async def test_heartbeat_updates_last_heartbeat():
 
     await client.post(f"/api/sessions/{session_id}/heartbeat", json={"server_id": server_id})
 
-    row = await db.fetch_one(
-        "SELECT * FROM session_routing WHERE session_id = $1", session_id
-    )
+    row = await db.fetch_one("SELECT * FROM session_routing WHERE session_id = $1", session_id)
     assert row["server_id"] == server_id
     assert row["last_heartbeat"] > datetime.now() - timedelta(seconds=5)
+
 
 async def test_get_session_server_returns_correct_server():
     """GET /api/sessions/{id}/server should return registered server."""
     session_id = uuid.uuid4()
-    await db.execute("""
+    await db.execute(
+        """
         INSERT INTO session_routing (session_id, server_id)
         VALUES ($1, $2)
-    """, session_id, "web-2")
+    """,
+        session_id,
+        "web-2",
+    )
 
     response = await client.get(f"/api/sessions/{session_id}/server")
     assert response.json()["server_id"] == "web-2"
@@ -1848,11 +1909,16 @@ async def test_get_session_server_returns_correct_server():
 async def test_cleanup_deletes_expired_jobs():
     """Cleanup should delete jobs past their expires_at."""
     # Create job that's already expired
-    expired_job_id = await db.fetchval("""
+    expired_job_id = await db.fetchval(
+        """
         INSERT INTO generator_jobs (session_id, instrument, prompt, status, expires_at)
         VALUES ($1, $2, $3, 'completed', NOW() - INTERVAL '1 hour')
         RETURNING id
-    """, session_id, "test", "test prompt")
+    """,
+        session_id,
+        "test",
+        "test prompt",
+    )
 
     await cleanup_expired_jobs()
 
@@ -1860,13 +1926,19 @@ async def test_cleanup_deletes_expired_jobs():
     job = await db.fetch_one("SELECT * FROM generator_jobs WHERE id = $1", expired_job_id)
     assert job is None
 
+
 async def test_cleanup_preserves_active_jobs():
     """Jobs still within expiration should not be deleted."""
-    active_job_id = await db.fetchval("""
+    active_job_id = await db.fetchval(
+        """
         INSERT INTO generator_jobs (session_id, instrument, prompt, status, expires_at)
         VALUES ($1, $2, $3, 'pending', NOW() + INTERVAL '1 hour')
         RETURNING id
-    """, session_id, "test", "test prompt")
+    """,
+        session_id,
+        "test",
+        "test prompt",
+    )
 
     await cleanup_expired_jobs()
 

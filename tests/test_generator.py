@@ -14,8 +14,10 @@ _import_error = None
 
 try:
     import torch
+
     _ = torch.tensor([1.0])  # Verify basic torch works
     from app.framework.framework_generator import GeneratorRegistry, StableAudioEngine, ModelState
+
     _generator_imported = True
 except Exception as e:
     _import_error = str(e)
@@ -26,6 +28,7 @@ def _require_generator():
     if not _generator_imported:
         pytest.skip(f"framework_generator import failed: {_import_error}")
 
+
 def test_plugin_registry_loads_multiple_engines():
     _require_generator()
     mock_config = {
@@ -34,24 +37,20 @@ def test_plugin_registry_loads_multiple_engines():
                 "engine": "stable_audio_tools",
                 "repo_id": "RoyalCities/Foundation-1",
                 "filename": "Foundation_1.safetensors",
-                "enabled": True
+                "enabled": True,
             },
             "model_b": {
                 "engine": "stable_audio_tools",
                 "repo_id": "RoyalCities/RC_Infinite_Pianos",
                 "filename": "RC_Infinite_Pianos.ckpt",
-                "enabled": True
+                "enabled": True,
             },
-            "model_c": {
-                "engine": "stable_audio_tools",
-                "enabled": False
-            }
+            "model_c": {"engine": "stable_audio_tools", "enabled": False},
         }
     }
 
-    with patch('builtins.open', unittest.mock.mock_open(read_data=json.dumps(mock_config))):
-        with patch.object(StableAudioEngine, 'load') as mock_load_sa:
-
+    with patch("builtins.open", unittest.mock.mock_open(read_data=json.dumps(mock_config))):
+        with patch.object(StableAudioEngine, "load") as mock_load_sa:
             registry = GeneratorRegistry()
             registry.load()
 
@@ -61,6 +60,7 @@ def test_plugin_registry_loads_multiple_engines():
 
             assert isinstance(registry.models["model_a"], StableAudioEngine)
             assert isinstance(registry.models["model_b"], StableAudioEngine)
+
 
 def test_generator_routes_to_correct_engine():
     _require_generator()
@@ -98,7 +98,7 @@ def test_get_vram_usage_no_gpu():
     registry.model_states = {"model_a": ModelState.IDLE}
     registry.model_errors = {"model_a": None}
 
-    with patch('torch.cuda.is_available', return_value=False):
+    with patch("torch.cuda.is_available", return_value=False):
         vram = registry.get_vram_usage()
 
     assert vram["total_mb"] == 0
@@ -117,9 +117,11 @@ def test_get_vram_usage_with_gpu():
     registry.model_states = {"model_a": ModelState.LOADED}
     registry.model_errors = {"model_a": None}
 
-    with patch('torch.cuda.is_available', return_value=True), \
-         patch('torch.cuda.memory_allocated', return_value=1024 * 1024 * 100), \
-         patch('torch.cuda.memory_reserved', return_value=1024 * 1024 * 200):
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.memory_allocated", return_value=1024 * 1024 * 100),
+        patch("torch.cuda.memory_reserved", return_value=1024 * 1024 * 200),
+    ):
         vram = registry.get_vram_usage()
 
     assert vram["total_mb"] == 100.0
@@ -222,9 +224,11 @@ def test_reload_model():
     mock_engine = MagicMock(spec=StableAudioEngine)
     # Use a real string so it's not a MagicMock
     mock_engine.model = "loaded_model"
+
     # Make unload actually set model to None to simulate real behavior
     def mock_unload():
         mock_engine.model = None
+
     mock_engine.unload.side_effect = mock_unload
     registry.models = {"model_a": mock_engine}
     registry.model_states = {"model_a": ModelState.LOADED}
@@ -253,7 +257,7 @@ def test_default_model_selection():
 
     requests = [{"prompt": "Test", "bars": 4, "duration": 8.0, "model_id": "nonexistent"}]
 
-    with patch.object(registry, 'load_model'):
+    with patch.object(registry, "load_model"):
         results, sr = registry.generate_batch(requests, bpm=120)
 
     # Should fall back to default model

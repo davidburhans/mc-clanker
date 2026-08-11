@@ -55,6 +55,7 @@ print(f"    Eval examples:  {len(eval_ds):,}")
 
 print("\n[3/5] Applying chat template...")
 
+
 def format_conversation(example):
     messages = example["messages"]
     if not messages or messages[0].get("role") != "system":
@@ -65,6 +66,7 @@ def format_conversation(example):
         add_generation_prompt=False,
     )
     return {"text": text}
+
 
 train_ds = train_ds.map(format_conversation, remove_columns=["messages"])
 eval_ds = eval_ds.map(format_conversation, remove_columns=["messages"])
@@ -144,5 +146,5 @@ print(f"""
 Model saved to: {OUTPUT_DIR}/final/
 
 Effective batch size: {PER_DEVICE_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}
-Precision: {'bf16' if use_bf16 else 'fp16'}
+Precision: {"bf16" if use_bf16 else "fp16"}
 """)

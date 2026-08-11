@@ -2,6 +2,7 @@ import os
 from unittest.mock import MagicMock, patch
 from app.framework.framework_state import GlobalState
 
+
 def test_initial_state():
     state = GlobalState()
     assert state.current_bpm == 120
@@ -11,6 +12,7 @@ def test_initial_state():
     assert state.generation_cfg_scale == 7.0
     assert state.generation_steps == 50
 
+
 def test_state_reset():
     state = GlobalState()
     state.current_bpm = 140
@@ -19,15 +21,16 @@ def test_state_reset():
     state.loop_count = 5
     state.stem_volumes[0] = 0.5
     state.muted_stems.add(1)
-    
+
     state.reset()
-    
+
     assert state.current_bpm == 120
     assert state.current_key == "C minor"
     assert state.is_generating is False
     assert state.current_set_name == "System Reset"
     assert state.stem_volumes == {}
     assert state.muted_stems == set()
+
 
 def test_add_custom_instrument(tmp_path):
     # Mocking instruments file path to use temp dir
@@ -75,9 +78,11 @@ def test_get_custom_instruments_returns_empty_when_none(tmp_path):
     state.instruments_file = str(tmp_path / "test_instruments.json")
     assert state.get_custom_instruments() == {}
 
+
 def test_audio_clients():
     state = GlobalState()
     import queue
+
     q = queue.Queue()
 
     state.add_audio_client(q)
@@ -333,6 +338,7 @@ def test_broadcast_audio_with_shutdown():
     state.shutdown_event.set()
 
     import queue
+
     q = queue.Queue()
     state.audio_clients = [q]
 
@@ -368,7 +374,7 @@ def test_add_custom_instrument_with_existing():
     import tempfile
     import os
 
-    test_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
     test_file.write('{"Custom": ["Theremin"]}')
     test_file.close()
     state.instruments_file = test_file.name
@@ -390,7 +396,7 @@ def test_add_custom_instrument_empty_name():
     import os
 
     state = GlobalState()
-    test_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
     test_file.write('{"Custom": []}')
     test_file.close()
     state.instruments_file = test_file.name
@@ -411,7 +417,7 @@ def test_save_instruments_creates_file():
     import os
 
     state = GlobalState()
-    test_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
     test_file.close()
     state.instruments_file = test_file.name
     state.categorized_instruments = {"Custom": ["New Instrument"]}
@@ -428,8 +434,8 @@ def test_load_instruments_with_invalid_json():
     import os
 
     state = GlobalState()
-    test_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-    test_file.write('not valid json {')
+    test_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    test_file.write("not valid json {")
     test_file.close()
     state.instruments_file = test_file.name
 
@@ -499,6 +505,7 @@ def test_trigger_shutdown_with_exception_in_subprocess():
 def test_register_subprocess_thread_safety():
     """Test subprocess registration is thread-safe via lock."""
     import threading
+
     state = GlobalState()
 
     mock_process = MagicMock()
@@ -520,6 +527,7 @@ def test_register_subprocess_thread_safety():
 def test_unregister_subprocess_thread_safety():
     """Test subprocess unregistration is thread-safe."""
     import threading
+
     state = GlobalState()
 
     mock_process = MagicMock()
@@ -541,6 +549,7 @@ def test_unregister_subprocess_thread_safety():
 def test_broadcast_audio_to_multiple_clients_with_full_queue():
     """Test broadcast_audio handles one full queue but continues to others."""
     import queue
+
     state = GlobalState()
 
     q1 = MagicMock()
@@ -597,10 +606,9 @@ class TestStateLockBehavior:
     def test_lock_is_asyncio_lock(self):
         """state.lock must be asyncio.Lock so it doesn't block the event loop."""
         import asyncio
+
         state = GlobalState()
-        assert isinstance(state.lock, asyncio.Lock), (
-            f"state.lock should be asyncio.Lock, got {type(state.lock)}"
-        )
+        assert isinstance(state.lock, asyncio.Lock), f"state.lock should be asyncio.Lock, got {type(state.lock)}"
 
     def test_sync_lock_is_threading_lock(self):
         """state.sync_lock must be threading.Lock for the Mixer and broadcast_audio."""
@@ -682,6 +690,7 @@ class TestLoopSyncState:
     def test_record_loop_transition_thread_safety(self):
         """Test that record_loop_transition uses sync_lock."""
         import threading
+
         state = GlobalState()
 
         results = []

@@ -3,6 +3,7 @@
 Bulk-generates Conductor prompt/response pairs using deterministic seeds
 and async concurrent LLM calls.
 """
+
 import argparse
 import asyncio
 import logging
@@ -27,9 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate Conductor fine-tuning dataset"
-    )
+    parser = argparse.ArgumentParser(description="Generate Conductor fine-tuning dataset")
     parser.add_argument(
         "--base-url",
         default=os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1"),
@@ -214,7 +213,7 @@ async def main_async(args: argparse.Namespace) -> None:
             elapsed = (datetime.now() - batch_start).total_seconds()
             rate = written / elapsed if elapsed > 0 else 0
             logger.info(
-                f"Batch {current_batch-1} done: {written}/{interactions_in_batch} written "
+                f"Batch {current_batch - 1} done: {written}/{interactions_in_batch} written "
                 f"({elapsed:.1f}s, {rate:.1f} int/s)"
             )
 

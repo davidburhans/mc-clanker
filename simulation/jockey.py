@@ -6,6 +6,7 @@ One SlopJockey owns one SessionState and runs N loops:
   3. Parse response → apply_actions to SessionState
   4. Return JSONL record
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,8 +48,7 @@ class SlopJockey:
         self.vibe_prob = vibe_prob
         self.vibe_clear_prob = vibe_clear_prob
         self._extra_body: dict | None = (
-            {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
-            if enable_thinking else None
+            {"chat_template_kwargs": {"enable_thinking": enable_thinking}} if enable_thinking else None
         )
         self._current_vibe: str | None = None  # persisted across loops in this session
 
@@ -74,13 +74,12 @@ class SlopJockey:
         """Execute one loop. Returns record dict or None on failure."""
         # Persistent vibe: 15% chance to set new vibe each loop,
         # 5% chance to clear. Once set, persists until cleared/overridden.
-        rng = random.Random(
-            (self.run_seed << 20) + (self.session_id << 8) + self._loops_completed
-        )
+        rng = random.Random((self.run_seed << 20) + (self.session_id << 8) + self._loops_completed)
         if rng.random() < self.vibe_clear_prob:
             self._current_vibe = None
         elif rng.random() < self.vibe_prob:
             from slop_harness.vibe_prompt_bank import VibePromptBank
+
             self._current_vibe = VibePromptBank().sample(rng)
 
         user_override = self._current_vibe or ""
@@ -121,17 +120,13 @@ class SlopJockey:
                 )
             except Exception as e:
                 logger.warning(
-                    f"Session jockey={self.jockey_id} perf={self.perf_id} "
-                    f"loop {self._loops_completed} LLM error: {e}"
+                    f"Session jockey={self.jockey_id} perf={self.perf_id} loop {self._loops_completed} LLM error: {e}"
                 )
                 llm_failed = True
 
         # Production fallback: on LLM failure or None response, retain all current stems
         if llm_failed or parsed is None:
-            fallback_actions = [
-                {"action_type": "retain", "stem_index": i}
-                for i in range(len(self.state.active_stems))
-            ]
+            fallback_actions = [{"action_type": "retain", "stem_index": i} for i in range(len(self.state.active_stems))]
             parsed = {
                 "master_bpm": self.state.bpm,
                 "master_key": self.state.key,
@@ -150,10 +145,7 @@ class SlopJockey:
                 f"loop {self._loops_completed} failed to serialize response"
             )
             # Return a valid fallback DJ response — don't advance state incorrectly
-            fallback_actions = [
-                {"action_type": "retain", "stem_index": i}
-                for i in range(len(self.state.active_stems))
-            ]
+            fallback_actions = [{"action_type": "retain", "stem_index": i} for i in range(len(self.state.active_stems))]
             fallback = {
                 "master_bpm": self.state.bpm,
                 "master_key": self.state.key,

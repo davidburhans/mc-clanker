@@ -47,7 +47,11 @@ async def get_stats():
     response_model=WorkerQueueDepthResponse,
     summary="Queue depth",
     description="Returns the current number of pending and processing jobs. Useful for autoscaling.",
-    responses={200: {"description": "Queue depth"}, 503: {"description": "Worker/DB not available"}, 500: {"description": "Query failed"}},
+    responses={
+        200: {"description": "Queue depth"},
+        503: {"description": "Worker/DB not available"},
+        500: {"description": "Query failed"},
+    },
 )
 async def get_queue_depth():
     """Get the current job queue depth."""
@@ -60,6 +64,10 @@ async def get_queue_depth():
         async with worker.db.acquire() as conn:
             pending_count = await conn.fetchval("SELECT COUNT(*) FROM generator_jobs WHERE status = 'pending'")
             processing_count = await conn.fetchval("SELECT COUNT(*) FROM generator_jobs WHERE status = 'processing'")
-        return {"pending": pending_count, "processing": processing_count, "total_active": pending_count + processing_count}
+        return {
+            "pending": pending_count,
+            "processing": processing_count,
+            "total_active": pending_count + processing_count,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get queue depth: {str(e)}")

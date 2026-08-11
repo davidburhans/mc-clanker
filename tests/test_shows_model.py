@@ -170,7 +170,7 @@ class TestShowModelEdgeCases:
             created_at=datetime(2024, 1, 1, 12, 0, 0),
             started_at=datetime(2024, 1, 1, 12, 0, 0),
             ended_at=None,
-            duration_seconds=None
+            duration_seconds=None,
         )
 
         result = show.to_dict(include_audience_password=True)
@@ -192,7 +192,7 @@ class TestShowModelEdgeCases:
             status="ended",
             started_at=datetime(2024, 1, 1, 12, 0, 0),
             ended_at=datetime(2024, 1, 1, 13, 0, 0),
-            duration_seconds=3600
+            duration_seconds=3600,
         )
 
         result = show.to_dict(include_audience_password=False)
@@ -216,7 +216,7 @@ class TestShowActionModelEdgeCases:
             action_type="remove",
             stem_index=0,
             stem_details=None,
-            action_description="Removed old synth"
+            action_description="Removed old synth",
         )
 
         result = action.to_dict()
@@ -242,7 +242,7 @@ class TestLLMInteractionModelEdgeCases:
             parsed_response=None,
             reasoning="Test reasoning",
             error="GPU out of memory",
-            was_fallback=True
+            was_fallback=True,
         )
 
         result = interaction.to_dict()
@@ -262,7 +262,7 @@ class TestLLMInteractionModelEdgeCases:
             parsed_response={"answer": 42},
             reasoning="Test",
             error="Some error",
-            was_fallback=False
+            was_fallback=False,
         )
 
         result = interaction.to_llm_dump_dict()

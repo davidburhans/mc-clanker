@@ -5,9 +5,11 @@ import json
 
 router = APIRouter()
 
+
 class ModelConfigUpdate(BaseModel):
     model_id: str
     enabled: bool
+
 
 @router.get("/models")
 async def get_models():
@@ -20,6 +22,7 @@ async def get_models():
         config = json.load(f)
 
     return config
+
 
 @router.post("/models")
 async def update_model_config(update: ModelConfigUpdate):
@@ -39,6 +42,7 @@ async def update_model_config(update: ModelConfigUpdate):
         return {"status": "ok"}
     else:
         raise HTTPException(status_code=404, detail=f"Model {update.model_id} not found")
+
 
 # Note: /api/models/status, /api/models/{id}/load, /api/vram, and /api/download-progress
 # are removed as the models are now managed by the worker service.

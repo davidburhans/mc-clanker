@@ -53,23 +53,27 @@ def get_server_id() -> str:
 current_server_id = get_server_id()
 print(f"SESSION AFFINITY: This server's ID is: {current_server_id}")
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
     print("FASTAPI LIFESPAN: Initializing database...")
     from app.db import DatabaseManager
+
     db_manager = DatabaseManager.get_instance()
     db_manager.create_tables()
 
     # Ensure MinIO bucket exists
     print("FASTAPI LIFESPAN: Ensuring MinIO bucket exists...")
     from app.garage_client import create_garage_client_from_env
+
     garage = create_garage_client_from_env()
     await garage.ensure_bucket_exists()
 
     print("FASTAPI LIFESPAN: Running onboarding checks...")
     try:
         from app.onboarding import run_onboarding_checks
+
         results = await run_onboarding_checks()
         failed_required = [r for r in results if not r.passed and r.category == "required"]
         if failed_required:
@@ -102,9 +106,11 @@ async def lifespan(app: FastAPI):
     with suppress(asyncio.CancelledError):
         await framework_task
 
+
 def cleanup():
     print("Application exiting, cleaning up...")
     state.is_running = False
+
 
 atexit.register(cleanup)
 
@@ -160,16 +166,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             if provided_pass is None:
                 # Check if this route requires auth
-                is_dj_route = path.startswith("/dj") or \
-                              (path.startswith("/api/") and request.method == "POST") or \
-                              path.startswith("/api/llm-config") or \
-                              path.startswith("/api/stems")
-                is_audience_route = path == "/" or \
-                                    path == "/index.html" or \
-                                    path == "/styles.css" or \
-                                    path == "/app.js" or \
-                                    path.startswith("/stream.mp3") or \
-                                    (path.startswith("/api/") and request.method == "GET")
+                is_dj_route = (
+                    path.startswith("/dj")
+                    or (path.startswith("/api/") and request.method == "POST")
+                    or path.startswith("/api/llm-config")
+                    or path.startswith("/api/stems")
+                )
+                is_audience_route = (
+                    path == "/"
+                    or path == "/index.html"
+                    or path == "/styles.css"
+                    or path == "/app.js"
+                    or path.startswith("/stream.mp3")
+                    or (path.startswith("/api/") and request.method == "GET")
+                )
 
                 # If auth is required for this route but no credentials provided, reject
                 if (is_dj_route and dj_pass) or (is_audience_route and aud_pass):
@@ -185,6 +195,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     username = "djCompat"
                     email = "compat@local"
                     is_active = True
+
                     def to_dict(self):
                         return {"id": 0, "username": "djCompat", "email": "compat@local"}
 
@@ -219,6 +230,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
                     if provided_pass:
                         from app.auth import verify_password
+
                         if not verify_password(provided_pass, show.audience_password_hash):
                             return needs_auth(f"Show {show_id}")
                     else:
@@ -310,7 +322,7 @@ class SessionAffinityMiddleware(BaseHTTPMiddleware):
                         SELECT server_id FROM session_routing
                         WHERE session_id = :session_id
                     """),
-                    {"session_id": session_id}
+                    {"session_id": session_id},
                 ).fetchone()
 
                 if result is None:
@@ -359,13 +371,13 @@ if os.path.exists(static_dir):
 @app.get("/setup")
 def serve_setup():
     """Serve the setup/onboarding wizard."""
-    setup_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "static", "mc-clanker", "setup.html"
-    )
+    setup_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "mc-clanker", "setup.html")
     if os.path.exists(setup_path):
         from fastapi.responses import FileResponse
+
         return FileResponse(setup_path, media_type="text/html")
     from fastapi.responses import PlainTextResponse
+
     return PlainTextResponse("Setup page not found", status_code=404)
 
 
@@ -374,12 +386,15 @@ async def onboarding_check():
     """Proxy to onboarding module — checks config and returns status."""
     from app.onboarding import run_onboarding_checks
     from fastapi.responses import JSONResponse
+
     results = await run_onboarding_checks()
     required_failed = [r for r in results if not r.passed and r.category == "required"]
-    return JSONResponse({
-        "ready": len(required_failed) == 0,
-        "checks": [r._asdict() for r in results],
-    })
+    return JSONResponse(
+        {
+            "ready": len(required_failed) == 0,
+            "checks": [r._asdict() for r in results],
+        }
+    )
 
 
 @app.post("/api/setup/config")
@@ -415,13 +430,9 @@ def audio_stream_generator():
 
     # Check if ffmpeg exists and has libmp3lame
     try:
-        check = subprocess.run(
-            [ffmpeg_exe, "-codecs"], capture_output=True, text=True, timeout=5
-        )
+        check = subprocess.run([ffmpeg_exe, "-codecs"], capture_output=True, text=True, timeout=5)
         if "libmp3lame" not in check.stdout:
-            print(
-                "WARNING: ffmpeg does not have libmp3lame encoder. MP3 streaming may not work."
-            )
+            print("WARNING: ffmpeg does not have libmp3lame encoder. MP3 streaming may not work.")
     except Exception as e:
         print(f"WARNING: Could not verify ffmpeg capabilities: {e}")
 
@@ -486,7 +497,7 @@ def audio_stream_generator():
             while state.is_running:
                 try:
                     chunk = client_q.get(timeout=1.0)
-                    if chunk is None: # Poison pill
+                    if chunk is None:  # Poison pill
                         print("DEBUG: Feeder received poison pill")
                         break
                     if process.poll() is not None:
@@ -509,7 +520,7 @@ def audio_stream_generator():
 
     # Register for cleanup
     state.register_subprocess(process)
-    
+
     threading.Thread(target=feeder, daemon=True).start()
 
     try:
@@ -552,7 +563,6 @@ def stream_mp3():
     )
 
 
-
 # Mount static files for Audience UI at /listen (not / to avoid shadowing /dj)
 audience_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "audience")
 if os.path.exists(audience_dir):
@@ -560,6 +570,7 @@ if os.path.exists(audience_dir):
 
 
 if __name__ == "__main__":
+
     class CustomServer(uvicorn.Server):
         def handle_exit(self, sig: int, frame) -> None:
             print(f"CustomServer: Caught signal {sig}. Triggering state shutdown.")

@@ -7,6 +7,7 @@ from .schemas import StemVolumeUpdate, CustomStemCreate
 
 router = APIRouter()
 
+
 @router.get("/stems")
 async def get_stems():
     """Get active stems with volumes and status."""
@@ -21,12 +22,14 @@ async def get_stems():
             for i, s in enumerate(state.active_stems)
         ]
 
+
 @router.post("/stems/{index}/volume")
 async def update_stem_volume(index: int, update: StemVolumeUpdate):
     """Update volume for a specific stem index."""
     async with state.lock:
         state.stem_volumes[index] = update.volume
     return {"status": "ok"}
+
 
 @router.post("/stems/{index}/mute")
 async def toggle_stem_mute(index: int):
@@ -38,6 +41,7 @@ async def toggle_stem_mute(index: int):
             state.muted_stems.add(index)
     return {"status": "ok"}
 
+
 @router.post("/stems/{index}/solo")
 async def toggle_stem_solo(index: int):
     """Toggle solo for a specific stem index."""
@@ -47,6 +51,7 @@ async def toggle_stem_solo(index: int):
         else:
             state.soloed_stems.add(index)
     return {"status": "ok"}
+
 
 @router.get("/stems/{index}/download")
 async def download_stem(index: int, set: str = "active"):
@@ -78,13 +83,14 @@ async def download_stem(index: int, set: str = "active"):
             wf.setsampwidth(2)
             wf.setframerate(44100)
             wf.writeframes(audio_data.tobytes())
-        
+
         buf.seek(0)
         return Response(
             content=buf.getvalue(),
             media_type="audio/wav",
-            headers={"Content-Disposition": f"attachment; filename=stem_{index}.wav"}
+            headers={"Content-Disposition": f"attachment; filename=stem_{index}.wav"},
         )
+
 
 @router.post("/stems/custom")
 async def create_custom_stem(stem_data: CustomStemCreate):
@@ -95,10 +101,11 @@ async def create_custom_stem(stem_data: CustomStemCreate):
             "prompt": stem_data.prompt,
             "model_id": stem_data.model_id,
             "bars": 4,
-            "is_custom": True
+            "is_custom": True,
         }
         state.next_stems.append(new_stem)
         return {"status": "ok", "stem_index": len(state.next_stems) - 1}
+
 
 @router.delete("/stems/next/{index}")
 async def remove_next_stem(index: int):

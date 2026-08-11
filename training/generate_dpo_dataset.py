@@ -13,23 +13,23 @@ import argparse
 from datasets import load_from_disk, Dataset
 
 import sys
+
 sys.path.insert(0, "/training")
 from dpo_pipeline import generate_preference_pairs
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate DPO dataset from SFT data")
-    parser.add_argument("--sft-path", default="/training/data/unsloth_dataset",
-                        help="Path to SFT dataset")
-    parser.add_argument("--output-path", default="/training/data/dpo_dataset",
-                        help="Output path for DPO dataset")
-    parser.add_argument("--corruption-types", nargs="+",
-                        default=["missing_field", "invalid_enum", "invalid_bpm"],
-                        help="Corruption strategies to apply")
-    parser.add_argument("--num-corruptions", type=int, default=1,
-                        help="Number of corruption pairs per sample")
-    parser.add_argument("--max-samples", type=int, default=None,
-                        help="Max samples to process (None = all)")
+    parser.add_argument("--sft-path", default="/training/data/unsloth_dataset", help="Path to SFT dataset")
+    parser.add_argument("--output-path", default="/training/data/dpo_dataset", help="Output path for DPO dataset")
+    parser.add_argument(
+        "--corruption-types",
+        nargs="+",
+        default=["missing_field", "invalid_enum", "invalid_bpm"],
+        help="Corruption strategies to apply",
+    )
+    parser.add_argument("--num-corruptions", type=int, default=1, help="Number of corruption pairs per sample")
+    parser.add_argument("--max-samples", type=int, default=None, help="Max samples to process (None = all)")
     args = parser.parse_args()
 
     print(f"[1/4] Loading SFT dataset from {args.sft_path}...")
@@ -45,17 +45,13 @@ def main():
 
     print(f"\n[2/4] Generating train pairs...")
     train_pairs = generate_preference_pairs(
-        list(train_ds),
-        corruption_types=args.corruption_types,
-        num_corruptions_per_sample=args.num_corruptions
+        list(train_ds), corruption_types=args.corruption_types, num_corruptions_per_sample=args.num_corruptions
     )
     print(f"    Generated {len(train_pairs):,} train pairs")
 
     print(f"\n[3/4] Generating eval pairs...")
     eval_pairs = generate_preference_pairs(
-        list(eval_ds),
-        corruption_types=args.corruption_types,
-        num_corruptions_per_sample=args.num_corruptions
+        list(eval_ds), corruption_types=args.corruption_types, num_corruptions_per_sample=args.num_corruptions
     )
     print(f"    Generated {len(eval_pairs):,} eval pairs")
 
@@ -63,10 +59,7 @@ def main():
 
     # Convert to DPO format (HuggingFace DPO expects 'chosen' and 'rejected' keys)
     def pairs_to_dpo_dataset(pairs):
-        return Dataset.from_list([
-            {"chosen": chosen, "rejected": rejected}
-            for chosen, rejected in pairs
-        ])
+        return Dataset.from_list([{"chosen": chosen, "rejected": rejected} for chosen, rejected in pairs])
 
     train_dpo = pairs_to_dpo_dataset(train_pairs)
     eval_dpo = pairs_to_dpo_dataset(eval_pairs)
@@ -78,6 +71,7 @@ def main():
 
     # Save as Arrow format
     from datasets import DatasetDict
+
     dpo_dict = DatasetDict(dpo_dataset)
     dpo_dict.save_to_disk(args.output_path)
 
@@ -96,4 +90,5 @@ def main():
 
 if __name__ == "__main__":
     import json
+
     main()

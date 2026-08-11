@@ -169,8 +169,8 @@ constraining.
 `tests/test_worker_fetch_audio.py:43,44,74,75` patch by **module-path string**:
 
 ```python
-patch('app.framework.framework_main_async.create_garage_client_from_env', ...)
-patch('app.framework.framework_main_async.decode_aac', ...)
+patch("app.framework.framework_main_async.create_garage_client_from_env", ...)
+patch("app.framework.framework_main_async.decode_aac", ...)
 ```
 
 If the refactor moves these imports into a sub-module (e.g. a new `audio_io.py`),

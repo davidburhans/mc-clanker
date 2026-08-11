@@ -36,7 +36,7 @@ class Mixer:
         self.lock = threading.Lock()  # guards self.tracks et al.
         self.stream = None
         self.current_loop_end_sample = 0
-        self.next_loop_audio = []   # List of (audio_data, stem_index) ready to play
+        self.next_loop_audio = []  # List of (audio_data, stem_index) ready to play
         self._next_loop_duration = 0  # Duration of the queued next loop in samples
         self._current_loop_duration = 0  # Duration of the CURRENT loop in samples (for bar-aligned extension)
         self.loop_switch_deadline_ms = 1000  # 1s lookahead — headroom for multi-stream
@@ -112,9 +112,9 @@ class Mixer:
     def _extend_tracks_for_loop(self, loop_end_sample: int):
         """Extend current tracks to fill another loop iteration."""
         current_tracks = [
-            t for t in self.tracks
-            if (t.start_sample + t.length) > self.current_sample
-            and t.start_sample < loop_end_sample
+            t
+            for t in self.tracks
+            if (t.start_sample + t.length) > self.current_sample and t.start_sample < loop_end_sample
         ]
         for track in current_tracks:
             track_end = track.start_sample + track.length
@@ -134,9 +134,9 @@ class Mixer:
     def _extend_tracks_at_position(self, start_sample: int, gap_samples: int):
         """Add extended tracks starting at start_sample to fill a gap."""
         tracks_to_extend = [
-            t for t in self.tracks
-            if t.start_sample <= start_sample
-            and (t.start_sample + t.length) > self.current_loop_end_sample
+            t
+            for t in self.tracks
+            if t.start_sample <= start_sample and (t.start_sample + t.length) > self.current_loop_end_sample
         ]
         if not tracks_to_extend:
             candidates = [t for t in self.tracks if t.start_sample + t.length <= start_sample]
@@ -171,7 +171,7 @@ class Mixer:
 
         if not is_generating:
             pcm_out = np.clip(outdata, -1.0, 1.0)
-            state.broadcast_audio((pcm_out * 32767).astype('<i2').tobytes())
+            state.broadcast_audio((pcm_out * 32767).astype("<i2").tobytes())
             self.current_sample += frames
             return
 
@@ -187,8 +187,11 @@ class Mixer:
                         # gaps/overlaps regardless of when this callback fires.
                         transition_sample = self.current_loop_end_sample
                         transitioning_loop_idx = self._next_loop_idx
-                        log.debug("Switching to next loop at boundary sample %d (current=%d)",
-                                  transition_sample, self.current_sample)
+                        log.debug(
+                            "Switching to next loop at boundary sample %d (current=%d)",
+                            transition_sample,
+                            self.current_sample,
+                        )
                         for audio_data, stem_index in self.next_loop_audio:
                             self._add_track_internal(audio_data.copy(), transition_sample, stem_index)
                         self.next_loop_audio = []
@@ -200,9 +203,7 @@ class Mixer:
                             # Fallback: derive from the longest newly-added future track
                             future = [t for t in self.tracks if t.start_sample >= transition_sample]
                             if future:
-                                self.current_loop_end_sample = max(
-                                    t.start_sample + t.length for t in future
-                                )
+                                self.current_loop_end_sample = max(t.start_sample + t.length for t in future)
                                 self._current_loop_duration = self.current_loop_end_sample - transition_sample
                             else:
                                 self.current_loop_end_sample = 0
@@ -215,9 +216,16 @@ class Mixer:
                         # Next audio not ready yet — extend current tracks by exactly one
                         # loop duration so the boundary stays bar-aligned at every BPM.
                         # Falling back to 2 * sample_rate would land mid-bar for most BPMs.
-                        extend_by = self._current_loop_duration if self._current_loop_duration > 0 else int(2 * self.sample_rate)
-                        log.debug("Next loop not ready, extending by %d samples (behind by %d)",
-                                  extend_by, samples_until_loop_end)
+                        extend_by = (
+                            self._current_loop_duration
+                            if self._current_loop_duration > 0
+                            else int(2 * self.sample_rate)
+                        )
+                        log.debug(
+                            "Next loop not ready, extending by %d samples (behind by %d)",
+                            extend_by,
+                            samples_until_loop_end,
+                        )
                         self._extend_tracks_for_loop(self.current_loop_end_sample)
                         self.current_loop_end_sample += extend_by
 
@@ -238,15 +246,15 @@ class Mixer:
             #    so next callback it lands in covered_stems immediately and stops.
             if self.current_loop_end_sample > self.current_sample:
                 covered_stems = {
-                    t.stem_index
-                    for t in self.tracks
-                    if (t.start_sample + t.length) >= self.current_loop_end_sample
+                    t.stem_index for t in self.tracks if (t.start_sample + t.length) >= self.current_loop_end_sample
                 }
                 for track in list(self.tracks):
                     track_end = track.start_sample + track.length
-                    if (track.stem_index in covered_stems
-                            or track_end <= self.current_sample
-                            or track_end >= self.current_loop_end_sample):
+                    if (
+                        track.stem_index in covered_stems
+                        or track_end <= self.current_sample
+                        or track_end >= self.current_loop_end_sample
+                    ):
                         continue
                     gap = self.current_loop_end_sample - track_end
                     repeats = (gap // max(1, track.length)) + 2
@@ -262,9 +270,9 @@ class Mixer:
 
             # Build mix list for current window
             tracks_to_mix = [
-                t for t in self.tracks
-                if t.start_sample < (self.current_sample + frames)
-                and (t.start_sample + t.length) > self.current_sample
+                t
+                for t in self.tracks
+                if t.start_sample < (self.current_sample + frames) and (t.start_sample + t.length) > self.current_sample
             ]
 
             # Mute/solo/volume filtering using this tick's snapshot (see top of
@@ -311,12 +319,15 @@ class Mixer:
         if self._debug_count % 200 == 0:
             log.debug(
                 "Mixer: is_generating=%s tracks=%d out=[%.4f, %.4f]",
-                is_generating, len(self.tracks), outdata.min(), outdata.max(),
+                is_generating,
+                len(self.tracks),
+                outdata.min(),
+                outdata.max(),
             )
 
         # Clip, convert, broadcast
         pcm_out = np.clip(outdata, -1.0, 1.0)
-        state.broadcast_audio((pcm_out * 32767).astype('<i2').tobytes())
+        state.broadcast_audio((pcm_out * 32767).astype("<i2").tobytes())
 
     # ------------------------------------------------------------------
     # Start / stop

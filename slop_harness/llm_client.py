@@ -3,6 +3,7 @@
 Targets OpenAI-compatible APIs (LM Studio, Ollama, etc.).
 Uses openai.AsyncOpenAI for identical plumbing to the mc-clanker app.
 """
+
 import asyncio
 import os
 import sys
@@ -14,75 +15,113 @@ from openai import AsyncOpenAI
 # Build RESPONSE_FORMAT using the shared schema builder.
 # Import from app.lib.constants when available (app is on the path).
 # For slop_harness standalone use, add app to the path.
-_srcdir = os.path.join(os.path.dirname(__file__), '..')
-if os.path.exists(os.path.join(_srcdir, 'app', 'lib', 'constants.py')):
+_srcdir = os.path.join(os.path.dirname(__file__), "..")
+if os.path.exists(os.path.join(_srcdir, "app", "lib", "constants.py")):
     sys.path.insert(0, _srcdir)
 
 try:
     from app.lib.constants import get_response_format_schema
+
     _get_schema = get_response_format_schema  # Per-call, not at import time
 except ImportError:
     _get_schema = None
 
 # Fallback: inline the static schema (used when app.lib.constants is unavailable)
 _STATIC_RESPONSE_FORMAT = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "dj_action_state",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "master_bpm": {"type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150]},
-                    "master_key": {"type": "string", "enum": ["C major", "C minor", "C# major", "C# minor", "D major", "D minor", "D# major", "D# minor", "E major", "E minor", "F major", "F minor", "F# major", "F# minor", "G major", "G minor", "G# major", "G# minor", "A major", "A minor", "A# major", "A# minor", "B major", "B minor"]},
-                    "actions": {
-                        "type": "array",
-                        "items": {
-                            "anyOf": [
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "action_type": {"type": "string", "const": "retain"},
-                                        "stem_index": {"type": "integer"}
-                                    },
-                                    "required": ["action_type", "stem_index"],
-                                    "additionalProperties": False
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "action_type": {"type": "string", "const": "add"},
-                                        "model_id": {"type": "string"},
-                                        "major_family": {"type": "string"},
-                                        "sub_family": {"type": "string"},
-                                        "timbre_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
-                                        "notation_tag": {"type": "string"},
-                                        "fx_tag": {"type": "string"},
-                                        "bars": {"type": "integer", "enum": [4, 8]}
-                                    },
-                                    "required": ["action_type", "model_id", "major_family", "sub_family", "timbre_tags", "notation_tag", "fx_tag", "bars"],
-                                    "additionalProperties": False
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "action_type": {"type": "string", "const": "remove"},
-                                        "stem_index": {"type": "integer"}
-                                    },
-                                    "required": ["action_type", "stem_index"],
-                                    "additionalProperties": False
-                                }
-                            ]
-                        }
-                    },
-                    "reasoning": {"type": "string"},
-                    "name": {"type": "string"}
+    "type": "json_schema",
+    "json_schema": {
+        "name": "dj_action_state",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "master_bpm": {"type": "integer", "enum": [100, 110, 120, 128, 130, 140, 150]},
+                "master_key": {
+                    "type": "string",
+                    "enum": [
+                        "C major",
+                        "C minor",
+                        "C# major",
+                        "C# minor",
+                        "D major",
+                        "D minor",
+                        "D# major",
+                        "D# minor",
+                        "E major",
+                        "E minor",
+                        "F major",
+                        "F minor",
+                        "F# major",
+                        "F# minor",
+                        "G major",
+                        "G minor",
+                        "G# major",
+                        "G# minor",
+                        "A major",
+                        "A minor",
+                        "A# major",
+                        "A# minor",
+                        "B major",
+                        "B minor",
+                    ],
                 },
-                "required": ["master_bpm", "master_key", "actions", "reasoning", "name"],
-                "additionalProperties": False
-            }
-        }
-    }
+                "actions": {
+                    "type": "array",
+                    "items": {
+                        "anyOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action_type": {"type": "string", "const": "retain"},
+                                    "stem_index": {"type": "integer"},
+                                },
+                                "required": ["action_type", "stem_index"],
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action_type": {"type": "string", "const": "add"},
+                                    "model_id": {"type": "string"},
+                                    "major_family": {"type": "string"},
+                                    "sub_family": {"type": "string"},
+                                    "timbre_tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+                                    "notation_tag": {"type": "string"},
+                                    "fx_tag": {"type": "string"},
+                                    "bars": {"type": "integer", "enum": [4, 8]},
+                                },
+                                "required": [
+                                    "action_type",
+                                    "model_id",
+                                    "major_family",
+                                    "sub_family",
+                                    "timbre_tags",
+                                    "notation_tag",
+                                    "fx_tag",
+                                    "bars",
+                                ],
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action_type": {"type": "string", "const": "remove"},
+                                    "stem_index": {"type": "integer"},
+                                },
+                                "required": ["action_type", "stem_index"],
+                                "additionalProperties": False,
+                            },
+                        ]
+                    },
+                },
+                "reasoning": {"type": "string"},
+                "name": {"type": "string"},
+            },
+            "required": ["master_bpm", "master_key", "actions", "reasoning", "name"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 class LLMClient:
@@ -93,9 +132,7 @@ class LLMClient:
         base_url: str | None = None,
         model: str | None = None,
     ):
-        self.base_url = (base_url or os.environ.get(
-            "LLM_BASE_URL", "http://localhost:1234/v1"
-        )).rstrip("/")
+        self.base_url = (base_url or os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")).rstrip("/")
         self.model = model or os.environ.get("LLM_MODEL", "local-model")
         self._client: AsyncOpenAI | None = None
 
@@ -162,9 +199,7 @@ class LLMClient:
                 # Other errors: no retry
                 break
 
-        raise Exception(
-            f"LLM call failed after {max_retries} retries: {last_error}"
-        )
+        raise Exception(f"LLM call failed after {max_retries} retries: {last_error}")
 
     async def __aenter__(self) -> "LLMClient":
         return self

@@ -37,11 +37,11 @@ MODEL_NAME = "Qwen/Qwen3.5-0.8B"
 DATASET_PATH = "/training/data/unsloth_dataset"
 OUTPUT_DIR = "/training/outputs/qwen3.5-0.8b-mc-clanker"
 
-MAX_SEQ_LENGTH = 1024           # Reduced from 2048 to lower VRAM usage
+MAX_SEQ_LENGTH = 1024  # Reduced from 2048 to lower VRAM usage
 NUM_EPOCHS = 3
-PER_DEVICE_BATCH_SIZE = 4      # Reduced from 8 to be safer
-GRADIENT_ACCUMULATION_STEPS = 8 # Effective batch = 32
-LEARNING_RATE = 1e-5            # Lower LR for full fine-tune
+PER_DEVICE_BATCH_SIZE = 4  # Reduced from 8 to be safer
+GRADIENT_ACCUMULATION_STEPS = 8  # Effective batch = 32
+LEARNING_RATE = 1e-5  # Lower LR for full fine-tune
 WARMUP_RATIO = 0.1
 LOGGING_STEPS = 10
 SAVE_STEPS = 500
@@ -65,6 +65,7 @@ print(f"    Eval examples:  {len(eval_ds):,}")
 
 print("\n[3/5] Applying chat template...")
 
+
 def format_conversation(example):
     messages = example["messages"]
     if not messages or messages[0].get("role") != "system":
@@ -75,6 +76,7 @@ def format_conversation(example):
         add_generation_prompt=False,
     )
     return {"text": text}
+
 
 train_ds = train_ds.map(format_conversation, remove_columns=["messages"])
 eval_ds = eval_ds.map(format_conversation, remove_columns=["messages"])
@@ -92,8 +94,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     max_seq_length=MAX_SEQ_LENGTH,
     load_in_4bit=False,
     load_in_8bit=False,
-    load_in_16bit=False,      # Use full precision (bf16/fp16)
-    full_finetuning=True,     # Enable full fine-tuning (all params)
+    load_in_16bit=False,  # Use full precision (bf16/fp16)
+    full_finetuning=True,  # Enable full fine-tuning (all params)
     trust_remote_code=True,
     float32_mixed_precision=True,  # Force fp32 to avoid bf16 CUDA issues
 )
@@ -156,6 +158,6 @@ print(f"""
 Model saved to: {OUTPUT_DIR}/final/
 
 Effective batch size: {PER_DEVICE_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}
-Precision: {'bf16' if use_bf16 else 'fp16'}
+Precision: {"bf16" if use_bf16 else "fp16"}
 Full fine-tune: all {total_params:,} parameters updated
 """)

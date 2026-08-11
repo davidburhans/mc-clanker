@@ -14,9 +14,9 @@ Break the ~467-LOC `_run_loop` god-method into ≤50-LOC `_step_*` methods (the 
 
 ```python
 class _StepResult(enum.Enum):
-    PROCEED = auto()       # continue to the next _step_* call
+    PROCEED = auto()  # continue to the next _step_* call
     RESTART_ITER = auto()  # `continue` the outer while-loop (skip remaining steps)
-    EXIT_LOOP = auto()     # `break` the outer while-loop (shutdown)
+    EXIT_LOOP = auto()  # `break` the outer while-loop (shutdown)
 ```
 
 Only 3 call sites emit non-PROCEED (P1 shutdown break → EXIT_LOOP, P1 not-generating → RESTART_ITER, P2 will_call_llm False → RESTART_ITER). All other break/continue are local to their method.
@@ -30,6 +30,7 @@ class StepCtx:
 
     `loop_idx` is NOT here — it promotes to self._loop_idx (the only var
     surviving across iterations). Everything else is per-iteration."""
+
     # P2 pregen-decision outputs
     pregen_ready: bool = False
     conductor_response: dict | None = None
@@ -67,6 +68,7 @@ class StepCtx:
 @dataclass
 class CommitResult:
     """P11 atomic-commit outputs consumed by _step_post_commit (P12)."""
+
     needs_pregen: bool
     needs_initial_record: bool
     rec_stems: list
@@ -119,6 +121,7 @@ async def _run_loop(self):
         except Exception as e:
             print(f"[AsyncFrameworkLoop] Loop iteration error (will retry): {e}")
             import traceback
+
             traceback.print_exc()
             await asyncio.sleep(LOOP_RETRY_BACKOFF_SECONDS)
             continue
@@ -147,8 +150,8 @@ async def test_p3_override_applied_then_cleared(monkeypatch):
     await asyncio.wait_for(loop._run_loop(), timeout=5.0)
     assert state.current_bpm == 140
     assert state.current_key == "F major"
-    assert state.target_bpm_override is None   # cleared
-    assert state.target_key_override is None   # cleared
+    assert state.target_bpm_override is None  # cleared
+    assert state.target_key_override is None  # cleared
 ```
 
 ### D0-2: P4 fallback through _run_loop
@@ -167,6 +170,7 @@ async def test_p4_conductor_failure_uses_fallback(monkeypatch):
     loop._pre_generate_next_loop = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
     import app.framework.loop_orchestrator as orch
+
     monkeypatch.setattr(orch, "wait_for_multiple_jobs", AsyncMock(return_value={}))
     await asyncio.wait_for(loop._run_loop(), timeout=5.0)
     # Fallback retains all active stems → at least 1 track committed
@@ -190,8 +194,10 @@ async def test_p7_cached_stem_skips_job_submission(monkeypatch):
     loop._pre_generate_next_loop = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
     import app.framework.loop_orchestrator as orch
-    monkeypatch.setattr(orch, "wait_for_multiple_jobs",
-                        AsyncMock(return_value={submit_mock.return_value: "audio/x.aac"}))
+
+    monkeypatch.setattr(
+        orch, "wait_for_multiple_jobs", AsyncMock(return_value={submit_mock.return_value: "audio/x.aac"})
+    )
     await asyncio.wait_for(loop._run_loop(), timeout=5.0)
     # First run submitted the job + cached audio. Reset + run again.
     submit_mock.reset_mock()
@@ -216,6 +222,7 @@ async def test_p8_foreground_fetch_routes_through_cache_stem(monkeypatch):
     loop._pre_generate_next_loop = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
     import app.framework.loop_orchestrator as orch
+
     monkeypatch.setattr(orch, "wait_for_multiple_jobs", AsyncMock(return_value={job_id: "audio/x.aac"}))
     with patch.object(state, "cache_stem") as cs_mock:
         await asyncio.wait_for(loop._run_loop(), timeout=5.0)
@@ -235,14 +242,18 @@ async def test_p13_transition_event_recorded_outside_lock(monkeypatch):
     mixer.pop_transition_event = lambda: mixer._transition_calls.pop(0) if mixer._transition_calls else None
     # Stop after the transition fires (flip running in the record spy)
     lock_states = []
+
     def spy(idx, stems, s, r):
         lock_states.append(state.lock.locked())
         loop.running = False  # terminate
+
     monkeypatch.setattr(state, "record_loop_transition", spy)
     _wire_loop_no_io(loop, monkeypatch, response=_conductor_response_with_actions())
+
     # Need pregen_done to NOT fire first — make pregen a no-op that doesn't set done
     async def _no_pregen(_i, _s):
         pass  # don't set _pregen_done → P13 reaches the transition check
+
     loop._pre_generate_next_loop = _no_pregen
     await asyncio.wait_for(loop._run_loop(), timeout=5.0)
     assert any(idx == 2 for idx, _, _, _ in []), "transition should fire"  # spy captures via lock_states

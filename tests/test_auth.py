@@ -66,6 +66,7 @@ class TestAuthModule:
         expired_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
         from app.auth import decode_token
+
         result = decode_token(expired_token)
         assert result is None
 
@@ -109,6 +110,7 @@ class TestGetCurrentUserFromRequest:
         expired_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
         from app.auth import decode_token
+
         result = decode_token(expired_token)
 
         assert result is None
@@ -161,7 +163,7 @@ class TestUserModel:
             email="test@example.com",
             password_hash="$2b$12$hashedpassword",
             created_at=datetime(2024, 1, 1, 12, 0, 0),
-            is_active=True
+            is_active=True,
         )
 
         result = user.to_dict()
@@ -310,6 +312,7 @@ class TestHashPasswordEdgeCases:
         assert hash1 != hash2
         # But both should verify correctly
         from app.auth import verify_password
+
         assert verify_password(password, hash1) is True
         assert verify_password(password, hash2) is True
 

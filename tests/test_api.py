@@ -5,10 +5,13 @@ import numpy as np
 import time
 from unittest.mock import MagicMock, patch
 
+
 @pytest.fixture
 def client():
     from app.app_ui import app
+
     return TestClient(app)
+
 
 @pytest.fixture(autouse=True)
 def reset_state():
@@ -19,12 +22,14 @@ def reset_state():
     state.soloed_stems = set()
     yield
 
+
 def test_get_state(client):
     response = client.get("/api/state")
     assert response.status_code == 200
     data = response.json()
     assert data["current_bpm"] == 120
     assert data["is_generating"] is False
+
 
 def test_update_state(client):
     response = client.post("/api/state", json={"target_bpm_override": 128, "is_generating": True})
@@ -74,22 +79,24 @@ class TestStateSchemaValidation:
         response = client.post("/api/state", json={"target_bpm_override": -10})
         assert response.status_code == 422
 
+
 def test_generation_config(client):
     # Get initial
     response = client.get("/api/generation-config")
     assert response.status_code == 200
     assert response.json()["steps"] == 50
-    
+
     # Update
     response = client.post("/api/generation-config", json={"cfg_scale": 8.5, "steps": 20})
     assert response.status_code == 200
     assert state.generation_cfg_scale == 8.5
     assert state.generation_steps == 20
 
+
 def test_stem_control(client):
     # Setup some fake stems
     state.active_stems = [{"prompt": "drums"}, {"prompt": "bass"}]
-    
+
     # Get stems
     response = client.get("/api/stems")
     assert response.status_code == 200
@@ -97,25 +104,27 @@ def test_stem_control(client):
     assert len(stems) == 2
     assert stems[0]["prompt"] == "drums"
     assert stems[0]["volume"] == 1.0
-    
+
     # Update volume
     response = client.post("/api/stems/0/volume", json={"volume": 1.5})
     assert response.status_code == 200
     assert state.stem_volumes[0] == 1.5
-    
+
     # Toggle mute
     response = client.post("/api/stems/1/mute")
     assert response.status_code == 200
     assert 1 in state.muted_stems
-    
+
     # Toggle solo
     response = client.post("/api/stems/0/solo")
     assert response.status_code == 200
     assert 0 in state.soloed_stems
 
+
 def test_download_stem_not_found(client):
     response = client.get("/api/stems/99/download")
     assert response.status_code == 404
+
 
 def test_download_stem_success(client):
     # Setup stem and fake audio data
@@ -123,17 +132,19 @@ def test_download_stem_success(client):
     state.active_stems = [{"prompt": prompt}]
     audio_data = np.zeros(44100, dtype=np.int16)
     state.last_generated_stems[prompt] = audio_data
-    
+
     response = client.get("/api/stems/0/download")
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
     assert len(response.content) > 0
+
 
 def test_get_models(client):
     response = client.get("/api/models")
     assert response.status_code == 200
     data = response.json()
     assert "models" in data
+
 
 def test_update_models(client):
     # Test with a model that exists in the config
@@ -164,10 +175,7 @@ def test_get_llm_config(client):
 
 def test_update_llm_config(client):
     """Test /api/llm-config POST updates state."""
-    response = client.post("/api/llm-config", json={
-        "base_url": "http://localhost:9999/v1",
-        "model": "test-model"
-    })
+    response = client.post("/api/llm-config", json={"base_url": "http://localhost:9999/v1", "model": "test-model"})
     assert response.status_code == 200
     assert state.llm_base_url == "http://localhost:9999/v1"
     assert state.llm_model == "test-model"
@@ -181,6 +189,7 @@ def test_export_start(client, monkeypatch, tmp_path):
     at close, so the stopped file is a valid, playable WAV.
     """
     import wave
+
     monkeypatch.setenv("EXPORT_DIR", str(tmp_path))
     try:
         response = client.post("/api/export/start", json={"format": "wav"})
@@ -263,11 +272,9 @@ def test_show_stop(client):
 
 def test_custom_stem_create(client):
     """Test /api/stems/custom POST."""
-    response = client.post("/api/stems/custom", json={
-        "instrument": "Synth",
-        "prompt": "Warm pad",
-        "model_id": "test-model"
-    })
+    response = client.post(
+        "/api/stems/custom", json={"instrument": "Synth", "prompt": "Warm pad", "model_id": "test-model"}
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"

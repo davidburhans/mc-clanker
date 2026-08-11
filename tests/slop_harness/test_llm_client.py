@@ -7,6 +7,7 @@ from slop_harness.llm_client import LLMClient
 def test_client_reads_env_vars():
     """Client reads LLM_BASE_URL and LLM_MODEL from env."""
     import os
+
     os.environ["LLM_BASE_URL"] = "http://test:999/v1"
     os.environ["LLM_MODEL"] = "test-model"
     client = LLMClient()
@@ -19,6 +20,7 @@ def test_client_reads_env_vars():
 def test_client_default_values():
     """Client uses defaults when env vars not set."""
     import os
+
     old_base = os.environ.pop("LLM_BASE_URL", None)
     old_model = os.environ.pop("LLM_MODEL", None)
     client = LLMClient()

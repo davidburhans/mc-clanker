@@ -38,6 +38,7 @@ def test_bpm_in_valid_range():
 def test_key_is_valid():
     """Key is always one of the valid keys."""
     from slop_harness.models import ALL_KEYS
+
     for i in range(200):
         state = StateGenerator(batch_id=0, interaction_id=i).build()
         assert state["key"] in ALL_KEYS
@@ -72,8 +73,16 @@ def test_stems_use_valid_major_family():
     """Stem major_family is valid for Foundation-1's supported families."""
     state = StateGenerator(batch_id=0, interaction_id=77).build()
     valid_families = [
-        "Synth", "Keys", "Bass", "Bowed Strings", "Mallet",
-        "Wind", "Guitar", "Brass", "Vocal", "Plucked Strings",
+        "Synth",
+        "Keys",
+        "Bass",
+        "Bowed Strings",
+        "Mallet",
+        "Wind",
+        "Guitar",
+        "Brass",
+        "Vocal",
+        "Plucked Strings",
     ]
     for stem in state["stems"]:
         assert stem["major_family"] in valid_families

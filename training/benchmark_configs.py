@@ -35,6 +35,7 @@ print("[2/3] Loading dataset...")
 dataset = load_from_disk(DATASET_PATH)
 train_ds = dataset["train"]
 
+
 # Format a small subset for benchmarking
 def format_conversation(example):
     messages = example["messages"]
@@ -47,6 +48,7 @@ def format_conversation(example):
     )
     return {"text": text}
 
+
 train_ds = train_ds.map(format_conversation, remove_columns=["messages"])
 # Use only first 500 samples for quick benchmark
 train_ds = train_ds.select(range(500))
@@ -58,16 +60,56 @@ print(f"    Benchmark dataset: {len(train_ds)} samples\n")
 # ============================================================
 configs = [
     # Batch size experiments (baseline - same as current)
-    {"name": "bs=2, grad_acc=16 (baseline)", "per_device_batch_size": 2, "gradient_accumulation_steps": 16, "gradient_checkpointing": False},
+    {
+        "name": "bs=2, grad_acc=16 (baseline)",
+        "per_device_batch_size": 2,
+        "gradient_accumulation_steps": 16,
+        "gradient_checkpointing": False,
+    },
     # Increase batch size, reduce accumulation
-    {"name": "bs=4, grad_acc=8", "per_device_batch_size": 4, "gradient_accumulation_steps": 8, "gradient_checkpointing": False},
-    {"name": "bs=8, grad_acc=4", "per_device_batch_size": 8, "gradient_accumulation_steps": 4, "gradient_checkpointing": False},
-    {"name": "bs=16, grad_acc=2", "per_device_batch_size": 16, "gradient_accumulation_steps": 2, "gradient_checkpointing": False},
-    {"name": "bs=32, grad_acc=1", "per_device_batch_size": 32, "gradient_accumulation_steps": 1, "gradient_checkpointing": False},
+    {
+        "name": "bs=4, grad_acc=8",
+        "per_device_batch_size": 4,
+        "gradient_accumulation_steps": 8,
+        "gradient_checkpointing": False,
+    },
+    {
+        "name": "bs=8, grad_acc=4",
+        "per_device_batch_size": 8,
+        "gradient_accumulation_steps": 4,
+        "gradient_checkpointing": False,
+    },
+    {
+        "name": "bs=16, grad_acc=2",
+        "per_device_batch_size": 16,
+        "gradient_accumulation_steps": 2,
+        "gradient_checkpointing": False,
+    },
+    {
+        "name": "bs=32, grad_acc=1",
+        "per_device_batch_size": 32,
+        "gradient_accumulation_steps": 1,
+        "gradient_checkpointing": False,
+    },
     # With gradient checkpointing
-    {"name": "bs=8, grad_acc=4, gc=True", "per_device_batch_size": 8, "gradient_accumulation_steps": 4, "gradient_checkpointing": True},
-    {"name": "bs=16, grad_acc=2, gc=True", "per_device_batch_size": 16, "gradient_accumulation_steps": 2, "gradient_checkpointing": True},
-    {"name": "bs=32, grad_acc=1, gc=True", "per_device_batch_size": 32, "gradient_accumulation_steps": 1, "gradient_checkpointing": True},
+    {
+        "name": "bs=8, grad_acc=4, gc=True",
+        "per_device_batch_size": 8,
+        "gradient_accumulation_steps": 4,
+        "gradient_checkpointing": True,
+    },
+    {
+        "name": "bs=16, grad_acc=2, gc=True",
+        "per_device_batch_size": 16,
+        "gradient_accumulation_steps": 2,
+        "gradient_checkpointing": True,
+    },
+    {
+        "name": "bs=32, grad_acc=1, gc=True",
+        "per_device_batch_size": 32,
+        "gradient_accumulation_steps": 1,
+        "gradient_checkpointing": True,
+    },
 ]
 
 print("[3/3] Running benchmarks...\n")
@@ -79,7 +121,7 @@ results = []
 
 for i, cfg in enumerate(configs):
     config_name = cfg["name"]
-    print(f"\n[{i+1}/{len(configs)}] Testing: {config_name}")
+    print(f"\n[{i + 1}/{len(configs)}] Testing: {config_name}")
 
     # Clean up previous model
     if "model" in dir():
@@ -143,15 +185,17 @@ for i, cfg in enumerate(configs):
     effective_batch = cfg["per_device_batch_size"] * cfg["gradient_accumulation_steps"]
     print(f"    Results: {time_per_step:.3f}s/step, Peak VRAM: {peak_vram:.1f}GB, Eff Batch: {effective_batch}")
 
-    results.append({
-        "name": config_name,
-        "vram_gb": peak_vram,
-        "time_per_step": time_per_step,
-        "per_device_batch_size": cfg["per_device_batch_size"],
-        "gradient_accumulation_steps": cfg["gradient_accumulation_steps"],
-        "gradient_checkpointing": cfg["gradient_checkpointing"],
-        "effective_batch": effective_batch,
-    })
+    results.append(
+        {
+            "name": config_name,
+            "vram_gb": peak_vram,
+            "time_per_step": time_per_step,
+            "per_device_batch_size": cfg["per_device_batch_size"],
+            "gradient_accumulation_steps": cfg["gradient_accumulation_steps"],
+            "gradient_checkpointing": cfg["gradient_checkpointing"],
+            "effective_batch": effective_batch,
+        }
+    )
 
     print("-" * 85)
 

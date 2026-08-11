@@ -61,9 +61,7 @@ The predicate at `_step_pregen_decision` (L350–355) is exactly:
 
 ```python
 pregen_ready = (
-    self._loop_idx > 1
-    and self._pregen_results is not None
-    and self._pregen_results.get("loop_idx") == self._loop_idx
+    self._loop_idx > 1 and self._pregen_results is not None and self._pregen_results.get("loop_idx") == self._loop_idx
 )
 ```
 
@@ -124,8 +122,8 @@ is still live. I chased this hard:
 `pregeneration.py` L147–148:
 
 ```python
-loop._pregen_results = None   # L147
-loop._pregen_done.set()       # L148
+loop._pregen_results = None  # L147
+loop._pregen_done.set()  # L148
 ```
 
 and the success path L128–129 analogously (dict, then `.set()`). Both pairs are

@@ -14,6 +14,7 @@ from app.framework.framework_state import GlobalState
 # A11 — vestigial next_loop_ready / next_loop_tracks removed
 # ---------------------------------------------------------------------------
 
+
 def test_vestigial_next_loop_ready_event_removed():
     """The dead `next_loop_ready` Event must no longer exist on state.
 
@@ -37,6 +38,7 @@ def test_reset_does_not_reference_removed_event():
 # ---------------------------------------------------------------------------
 # A2 — snapshot_mixer_state returns independent, consistent copies
 # ---------------------------------------------------------------------------
+
 
 def test_snapshot_mixer_state_returns_independent_copies():
     """Mutating the returned sets/dict must not affect live state.
@@ -69,6 +71,7 @@ def test_snapshot_mixer_state_returns_independent_copies():
 # ---------------------------------------------------------------------------
 # A1 / B9 — broadcast_audio snapshots handles + logs each distinct failure once
 # ---------------------------------------------------------------------------
+
 
 def test_broadcast_audio_logs_recording_failure_once_per_handle(caplog):
     """A failing recording sink must be logged (not silently swallowed) and at
@@ -118,6 +121,7 @@ def test_broadcast_audio_snapshots_recording_handle_under_lock():
 # ---------------------------------------------------------------------------
 # B8 / A4 — trigger_shutdown flushes+closes recording handles under lock
 # ---------------------------------------------------------------------------
+
 
 def test_trigger_shutdown_closes_recording_handles():
     """On shutdown, open recording sinks must be flushed+closed and cleared so

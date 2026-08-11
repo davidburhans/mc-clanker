@@ -9,6 +9,7 @@ def test_system_instruction_is_not_empty():
 def test_build_returns_three_messages():
     """build() returns a list of 3 message dicts."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=0).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -21,6 +22,7 @@ def test_build_returns_three_messages():
 def test_system_message_content():
     """System message contains the DJ instructions."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=0).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -31,6 +33,7 @@ def test_system_message_content():
 def test_user_message_contains_bpm():
     """User message contains the BPM."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=42).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -41,6 +44,7 @@ def test_user_message_contains_bpm():
 def test_user_message_contains_key():
     """User message contains the key."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=42).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -51,6 +55,7 @@ def test_user_message_contains_key():
 def test_user_message_contains_stem_count():
     """User message contains the stem count and density directive."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=42).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -61,6 +66,7 @@ def test_user_message_contains_stem_count():
 def test_user_message_contains_available_models():
     """User message lists available models."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=42).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -71,6 +77,7 @@ def test_user_message_contains_available_models():
 def test_user_message_contains_instruments():
     """User message lists available instrument types."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=42).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -81,6 +88,7 @@ def test_user_message_contains_instruments():
 def test_override_appended_when_present():
     """When override is provided, it appears in user message."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=0).build()
     pb = PromptBuilder()
     messages = pb.build(state, override="Let's go harder!")
@@ -91,6 +99,7 @@ def test_override_appended_when_present():
 def test_no_override_no_override_line():
     """When override is None, no OVERRIDE line appears."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=0).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -100,6 +109,7 @@ def test_no_override_no_override_line():
 def test_assistant_message_is_empty():
     """Assistant message is empty string placeholder (LLM fills it)."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=0).build()
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -110,6 +120,7 @@ def test_assistant_message_is_empty():
 def test_history_shown_in_user_message():
     """History entries appear in user message."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=50).build()  # song_age=50 so history is populated
     pb = PromptBuilder()
     messages = pb.build(state, override=None)
@@ -120,6 +131,7 @@ def test_history_shown_in_user_message():
 def test_density_directive_add_when_sparse():
     """When stem_count < 4, density directive says to add more."""
     from slop_harness.state_generator import StateGenerator
+
     # Force sparse state
     state = StateGenerator(batch_id=0, interaction_id=0).build()
     state["stem_count"] = 2
@@ -132,6 +144,7 @@ def test_density_directive_add_when_sparse():
 def test_density_directive_remove_when_too_many():
     """When stem_count > 6, density directive says to remove some."""
     from slop_harness.state_generator import StateGenerator
+
     state = StateGenerator(batch_id=0, interaction_id=0).build()
     state["stem_count"] = 7
     pb = PromptBuilder()

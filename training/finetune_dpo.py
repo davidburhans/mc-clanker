@@ -15,6 +15,7 @@ import torch
 from datasets import load_from_disk
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from trl import DPOTrainer, DPOConfig
+
 # Check GPU
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA GPU required for DPO training!")

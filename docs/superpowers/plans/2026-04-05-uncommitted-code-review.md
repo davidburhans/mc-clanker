@@ -114,7 +114,7 @@ Actually wait — I need to double-check this. Let me look at what the Conductor
 
 In the pre-gen path at line 561:
 ```python
-state.active_stems = list(self._pregen_results['next_stems'])
+state.active_stems = list(self._pregen_results["next_stems"])
 ```
 `next_stems` from pre-gen (lines 889-902) includes `_original_details` nested dict. So this should be fine.
 
@@ -122,21 +122,23 @@ BUT — the issue is that `next_stems` from pre-gen has bars calculated from `t.
 
 Actually let me look more carefully. In the pre-gen task (lines 889-902):
 ```python
-next_stems.append({
-    "prompt": prompt,
-    "model_id": m_id,
-    "bpm": current_bpm,
-    "key": current_key,
-    "bars": t.get("bars", 8),
-    "_original_details": t,
-    "_age": t.get("_age", 0)
-})
+next_stems.append(
+    {
+        "prompt": prompt,
+        "model_id": m_id,
+        "bpm": current_bpm,
+        "key": current_key,
+        "bars": t.get("bars", 8),
+        "_original_details": t,
+        "_age": t.get("_age", 0),
+    }
+)
 ```
 So `next_stems` items have BOTH the flat fields AND `_original_details`. When this becomes `active_stems`, the `_age` is at the top level (`active_stems[i]['_age']`), and `_original_details` is nested. The next `process_actions` at line 110 does:
 ```python
 s = active_stems[idx]
-orig = s.get('_original_details', {})
-orig['_age'] = s.get('_age', 0) + 1
+orig = s.get("_original_details", {})
+orig["_age"] = s.get("_age", 0) + 1
 new_tracks.append(orig)
 ```
 This gets `_age` from the top-level stem dict, updates it, and appends `_original_details`. This seems correct.
@@ -205,10 +207,7 @@ At line 673-678:
 if transitioned_loop_idx is not None and transitioned_loop_idx > 0:
     with state.lock:
         state.record_loop_transition(
-            transitioned_loop_idx,
-            state.active_stems,
-            state.current_set_name,
-            state.llm_reasoning
+            transitioned_loop_idx, state.active_stems, state.current_set_name, state.llm_reasoning
         )
 ```
 

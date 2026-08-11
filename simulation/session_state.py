@@ -3,6 +3,7 @@
 Mirrors the state fields used by framework_main_async.py:_run_loop().
 Each jockey owns one SessionState; no shared state, no locks needed.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -101,22 +102,36 @@ class SessionState:
             {
                 "id": "foundation-1",
                 "description": "General purpose electronic sounds. Excellent for driving drums, thick bass, and sharp leads.",
-                "supported_families": ["Synth", "Keys", "Bass", "Bowed Strings", "Mallet", "Wind",
-                                        "Guitar", "Brass", "Vocal", "Plucked Strings"],
+                "supported_families": [
+                    "Synth",
+                    "Keys",
+                    "Bass",
+                    "Bowed Strings",
+                    "Mallet",
+                    "Wind",
+                    "Guitar",
+                    "Brass",
+                    "Vocal",
+                    "Plucked Strings",
+                ],
             }
         ]
         if self._rng.random() < 0.5:
-            self.available_models.append({
-                "id": "infinite-pianos",
-                "description": "Specialized piano model.",
-                "supported_families": ["Keys", "Piano", "Mallet"],
-            })
+            self.available_models.append(
+                {
+                    "id": "infinite-pianos",
+                    "description": "Specialized piano model.",
+                    "supported_families": ["Keys", "Piano", "Mallet"],
+                }
+            )
         if self._rng.random() < 0.2:
-            self.available_models.append({
-                "id": "vocal-textures",
-                "description": "Specialized vocal textures.",
-                "supported_families": ["Vocal", "Choir", "Pad", "Atmosphere"],
-            })
+            self.available_models.append(
+                {
+                    "id": "vocal-textures",
+                    "description": "Specialized vocal textures.",
+                    "supported_families": ["Vocal", "Choir", "Pad", "Atmosphere"],
+                }
+            )
 
 
 def apply_actions(state: SessionState, actions: list[dict]) -> None:
@@ -131,16 +146,18 @@ def apply_actions(state: SessionState, actions: list[dict]) -> None:
     # Build next_stems (mirrors _run_loop step 5)
     next_stems: list[dict] = []
     for t in deduped_tracks:
-        next_stems.append({
-            "prompt": _build_prompt(t, state.key, state.bpm),
-            "model_id": t.get("model_id", "foundation-1"),
-            "bpm": state.bpm,
-            "key": state.key,
-            "bars": t.get("bars", 4),
-            "_original_details": t,
-            "_age": t.get("_age", 0),
-            **t,
-        })
+        next_stems.append(
+            {
+                "prompt": _build_prompt(t, state.key, state.bpm),
+                "model_id": t.get("model_id", "foundation-1"),
+                "bpm": state.bpm,
+                "key": state.key,
+                "bars": t.get("bars", 4),
+                "_original_details": t,
+                "_age": t.get("_age", 0),
+                **t,
+            }
+        )
 
     # Snapshot to history (max MAX_HISTORY)
     state.stem_history.append(list(state.active_stems))
@@ -163,7 +180,4 @@ def _build_prompt(track: dict, key: str, bpm: int) -> str:
     notation = track.get("notation_tag", "melody")
     fx = track.get("fx_tag", "Medium Reverb")
     bars = track.get("bars", 4)
-    return (
-        f"{major}, {sub}, {timbres}, {notation}, "
-        f"{fx}, {key}, {bpm} BPM, {bars} Bars"
-    )
+    return f"{major}, {sub}, {timbres}, {notation}, {fx}, {key}, {bpm} BPM, {bars} Bars"

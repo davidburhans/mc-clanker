@@ -23,6 +23,7 @@ random.seed(42)
 # RED Phase: Tests that should FAIL initially
 # ============================================================
 
+
 class TestSchemaValidator:
     """Tests for schema validation logic."""
 
@@ -33,21 +34,25 @@ class TestSchemaValidator:
             "master_key": "F minor",
             "actions": [
                 {"action_type": "retain", "stem_index": 0},
-                {"action_type": "add", "model_id": "foundation-1", "major_family": "Drums", "sub_family": "Electronic Drums", "timbre_tags": ["hard"], "notation_tag": "4/4", "fx_tag": "dry", "bars": 4}
+                {
+                    "action_type": "add",
+                    "model_id": "foundation-1",
+                    "major_family": "Drums",
+                    "sub_family": "Electronic Drums",
+                    "timbre_tags": ["hard"],
+                    "notation_tag": "4/4",
+                    "fx_tag": "dry",
+                    "bars": 4,
+                },
             ],
             "reasoning": "Keeping the bass, adding drums for rhythm",
-            "name": "DJ Loop Decision"
+            "name": "DJ Loop Decision",
         }
         assert validate_conductor_schema(response) is True
 
     def test_missing_required_field_fails(self):
         """Missing master_bpm should fail."""
-        response = {
-            "master_key": "F minor",
-            "actions": [],
-            "reasoning": "test",
-            "name": "test"
-        }
+        response = {"master_key": "F minor", "actions": [], "reasoning": "test", "name": "test"}
         assert validate_conductor_schema(response) is False
 
     def test_invalid_action_type_fails(self):
@@ -57,7 +62,7 @@ class TestSchemaValidator:
             "master_key": "F minor",
             "actions": [{"action_type": "INVALID_ACTION"}],
             "reasoning": "test",
-            "name": "test"
+            "name": "test",
         }
         assert validate_conductor_schema(response) is False
 
@@ -68,7 +73,7 @@ class TestSchemaValidator:
             "master_key": "F minor",
             "actions": [{"action_type": "retain"}],
             "reasoning": "test",
-            "name": "test"
+            "name": "test",
         }
         assert validate_conductor_schema(response) is False
 
@@ -79,7 +84,7 @@ class TestSchemaValidator:
             "master_key": "F minor",
             "actions": [{"action_type": "add", "stem_index": 0}],
             "reasoning": "test",
-            "name": "test"
+            "name": "test",
         }
         assert validate_conductor_schema(response) is False
 
@@ -90,19 +95,13 @@ class TestSchemaValidator:
             "master_key": "F minor",
             "actions": [{"action_type": "remove"}],
             "reasoning": "test",
-            "name": "test"
+            "name": "test",
         }
         assert validate_conductor_schema(response) is False
 
     def test_bpm_out_of_range_fails(self):
         """BPM outside 60-200 range should fail."""
-        response = {
-            "master_bpm": 250,
-            "master_key": "F minor",
-            "actions": [],
-            "reasoning": "test",
-            "name": "test"
-        }
+        response = {"master_bpm": 250, "master_key": "F minor", "actions": [], "reasoning": "test", "name": "test"}
         assert validate_conductor_schema(response) is False
 
     def test_invalid_json_string_fails(self):
@@ -117,7 +116,7 @@ class TestSchemaValidator:
             "master_key": "F minor",
             "actions": [],
             "reasoning": "Clearing the deck",
-            "name": "DJ Loop Decision"
+            "name": "DJ Loop Decision",
         }
         assert validate_conductor_schema(response) is True
 
@@ -153,7 +152,9 @@ class TestPreferencePairGenerator:
     def test_rejected_corrupted_in_specific_ways(self):
         """Rejected samples should be corrupted in known ways for DPO learning."""
         sample = create_valid_sample(bpm=128, key="C minor", num_actions=2)
-        pairs = generate_preference_pairs([sample], corruption_types=["missing_field", "invalid_enum"], num_corruptions_per_sample=2)
+        pairs = generate_preference_pairs(
+            [sample], corruption_types=["missing_field", "invalid_enum"], num_corruptions_per_sample=2
+        )
 
         assert len(pairs) == 2  # Two corruption types = two pairs
 
@@ -180,7 +181,9 @@ class TestRewardFunctions:
 
     def test_valid_json_gets_high_reward(self):
         """Valid JSON matching schema gets positive reward."""
-        valid_response = '{"master_bpm": 130, "master_key": "F minor", "actions": [], "reasoning": "test", "name": "test"}'
+        valid_response = (
+            '{"master_bpm": 130, "master_key": "F minor", "actions": [], "reasoning": "test", "name": "test"}'
+        )
         reward = compute_schema_reward(valid_response)
         assert reward > 0
 
@@ -211,33 +214,41 @@ class TestRewardFunctions:
 # Helper functions for tests
 # ============================================================
 
+
 def create_valid_sample(bpm=128, key="C minor", num_actions=1):
     """Create a valid training sample."""
     actions = []
     for i in range(num_actions):
-        actions.append({
-            "action_type": "retain" if i == 0 else "add",
-            "stem_index": i,
-            "model_id": "foundation-1",
-            "major_family": "Drums",
-            "sub_family": "Electronic Drums",
-            "timbre_tags": ["hard", "punchy"],
-            "notation_tag": "4/4",
-            "fx_tag": "dry",
-            "bars": 4
-        })
+        actions.append(
+            {
+                "action_type": "retain" if i == 0 else "add",
+                "stem_index": i,
+                "model_id": "foundation-1",
+                "major_family": "Drums",
+                "sub_family": "Electronic Drums",
+                "timbre_tags": ["hard", "punchy"],
+                "notation_tag": "4/4",
+                "fx_tag": "dry",
+                "bars": 4,
+            }
+        )
 
     return {
         "messages": [
             {"role": "system", "content": "You are an AI DJ..."},
             {"role": "user", "content": "Current State...\nYOUR TASK..."},
-            {"role": "assistant", "content": json.dumps({
-                "master_bpm": bpm,
-                "master_key": key,
-                "actions": actions,
-                "reasoning": "Test reasoning",
-                "name": "DJ Loop Decision"
-            })}
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "master_bpm": bpm,
+                        "master_key": key,
+                        "actions": actions,
+                        "reasoning": "Test reasoning",
+                        "name": "DJ Loop Decision",
+                    }
+                ),
+            },
         ]
     }
 

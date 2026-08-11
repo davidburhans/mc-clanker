@@ -11,10 +11,10 @@ def test_valid_keys_mapping():
         assert code is not None
         assert isinstance(code, str)
         assert len(code) in (2, 3)
-        assert code[-1] in ('A', 'B')
+        assert code[-1] in ("A", "B")
         assert 1 <= int(code[:-1]) <= 12
         all_codes.add(code)
-    
+
     assert len(all_codes) == 24
 
 
@@ -27,7 +27,7 @@ def test_valid_keys_mapping():
         ("B major", "1B"),
         ("E major", "12B"),
         ("C# minor", "12A"),
-    ]
+    ],
 )
 def test_specific_camelot_codes(key, expected_code):
     """Verify specific known correct Camelot code mappings."""
@@ -69,7 +69,7 @@ def test_invalid_key_raises_error():
     """Verify that passing an invalid key string raises a ValueError."""
     with pytest.raises(ValueError):
         HarmonicHelper.get_camelot_code("H major")
-    
+
     with pytest.raises(ValueError):
         HarmonicHelper.get_camelot_code("C flat")
 

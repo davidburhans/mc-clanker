@@ -11,6 +11,7 @@ def test_vibe_prompt_bank_is_singleton():
 def test_sample_returns_string():
     """sample() returns a non-empty string."""
     import random
+
     rng = random.Random(42)
     bank = VibePromptBank()
     prompt = bank.sample(rng)
@@ -21,6 +22,7 @@ def test_sample_returns_string():
 def test_sample_is_deterministic():
     """Same RNG state produces same prompt."""
     import random
+
     rng1 = random.Random(999)
     rng2 = random.Random(999)
     bank = VibePromptBank()
@@ -36,6 +38,7 @@ def test_bank_has_200_templates():
 def test_sample_uses_rng():
     """sample() consumes from rng (calling twice with same rng gives different results if rng state changes)."""
     import random
+
     rng1 = random.Random(42)
     rng2 = random.Random(42)
     bank = VibePromptBank()

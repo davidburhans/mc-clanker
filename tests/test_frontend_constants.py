@@ -1,4 +1,5 @@
 """Tests for frontend BPM/Key dropdown alignment with schema enums."""
+
 import re
 from pathlib import Path
 
@@ -29,8 +30,7 @@ class TestFrontendBPMAlignment:
         """#bpm-override should not have <option value="">Auto</option>."""
         html_path = Path("static/mc-clanker/index.html")
         html = html_path.read_text()
-        assert '<option value="">Auto</option>' not in html, \
-            "BPM dropdown should not have empty-value Auto option"
+        assert '<option value="">Auto</option>' not in html, "BPM dropdown should not have empty-value Auto option"
 
     def test_key_dropdown_has_no_empty_auto(self):
         """#key-override should not have <option value="">Auto</option>."""
@@ -40,5 +40,6 @@ class TestFrontendBPMAlignment:
         key_select = re.search(r'<select id="key-override"[^>]*>(.*?)</select>', html, re.DOTALL)
         if key_select:
             content = key_select.group(1)
-            assert '<option value="">Auto</option>' not in content, \
+            assert '<option value="">Auto</option>' not in content, (
                 "Key dropdown should not have empty-value Auto option"
+            )

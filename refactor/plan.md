@@ -57,28 +57,53 @@ from typing import Protocol, Any
 from uuid import UUID
 import numpy as np
 
-class ConductorPort(Protocol):                       # adapter: ConductorLLMAsync (existing, satisfies structurally)
-    async def get_next_state_async(self, *, current_bpm: int, current_key: str,
-        active_stems: list[dict], user_override, available_instruments: list,
-        stem_history: list, llm_config: dict, available_models: list[dict]) -> dict[str, Any]: ...
 
-class JobQueuePort(Protocol):                        # adapter: PostgresJobQueueAdapter (new, wraps _submit_job + job_waiter)
-    async def submit(self, *, session_id: UUID, instrument: str, prompt: str,
-        major_family: str, model_id: str, key: str, bpm: int,
-        timbre_tags: list[str], bars: int) -> UUID: ...
+class ConductorPort(Protocol):  # adapter: ConductorLLMAsync (existing, satisfies structurally)
+    async def get_next_state_async(
+        self,
+        *,
+        current_bpm: int,
+        current_key: str,
+        active_stems: list[dict],
+        user_override,
+        available_instruments: list,
+        stem_history: list,
+        llm_config: dict,
+        available_models: list[dict],
+    ) -> dict[str, Any]: ...
+
+
+class JobQueuePort(Protocol):  # adapter: PostgresJobQueueAdapter (new, wraps _submit_job + job_waiter)
+    async def submit(
+        self,
+        *,
+        session_id: UUID,
+        instrument: str,
+        prompt: str,
+        major_family: str,
+        model_id: str,
+        key: str,
+        bpm: int,
+        timbre_tags: list[str],
+        bars: int,
+    ) -> UUID: ...
     async def await_jobs(self, job_ids: list[UUID], timeout: float = 120.0) -> dict[UUID, str | None]: ...
 
-class AudioFetchPort(Protocol):                      # adapter: GarageAudioAdapter (new, wraps _fetch_audio)
+
+class AudioFetchPort(Protocol):  # adapter: GarageAudioAdapter (new, wraps _fetch_audio)
     async def fetch(self, audio_path: str) -> np.ndarray | None: ...
 
-class AuditSinkPort(Protocol):                       # adapter: PostgresAuditAdapter (new, wraps _append_loop_audit + flush)
+
+class AuditSinkPort(Protocol):  # adapter: PostgresAuditAdapter (new, wraps _append_loop_audit + flush)
     async def append_loop(self, conductor_response: dict, active_stems: list[dict], loop_idx: int) -> None: ...
     async def flush(self) -> None: ...
 
-class MixerController(Protocol):                     # concrete Mixer satisfies structurally; PRIVATE-MEMBER
-    sample_rate: int                                  # PROMOTION (Phase 11) DEFAULT-DEFERRED — see risk #5
+
+class MixerController(Protocol):  # concrete Mixer satisfies structurally; PRIVATE-MEMBER
+    sample_rate: int  # PROMOTION (Phase 11) DEFAULT-DEFERRED — see risk #5
     current_sample: int
     current_loop_end_sample: int
+
     def set_next_loop(self, tracks, *, next_loop_duration_samples: int, loop_idx: int) -> None: ...
     def pop_transition_event(self) -> object | None: ...
     def clear(self) -> None: ...
@@ -252,11 +277,21 @@ The 3 dead ModelMgmt attrs (`model_states`, `model_errors`, `download_progress`)
   from app.framework.audit_recording import flush_recording_buffers, _flush_lock
   from app.framework.conductor_interaction import process_actions
   from app.framework.domain_audio import calc_duration, _to_two_channel
-  from app.garage_client import create_garage_client_from_env   # string-patch target (brief-02 §D)
-  from app.aac_encoder import decode_aac                         # string-patch target (brief-02 §D)
-  __all__ = ["AsyncFrameworkLoop","run_framework_loop_async","flush_recording_buffers",
-             "process_actions","calc_duration","_to_two_channel","_flush_lock",
-             "create_garage_client_from_env","decode_aac","main"]
+  from app.garage_client import create_garage_client_from_env  # string-patch target (brief-02 §D)
+  from app.aac_encoder import decode_aac  # string-patch target (brief-02 §D)
+
+  __all__ = [
+      "AsyncFrameworkLoop",
+      "run_framework_loop_async",
+      "flush_recording_buffers",
+      "process_actions",
+      "calc_duration",
+      "_to_two_channel",
+      "_flush_lock",
+      "create_garage_client_from_env",
+      "decode_aac",
+      "main",
+  ]
   ```
 
 - **Risks respected:** frozen-API re-export contract (brief-02 §E); all test-reached private surface intact via the class living in `loop_orchestrator` (patches use `patch.object(loop, …)` = instance-level, unaffected by module move; string patches now target `loop_orchestrator` only where Phase 2 migrated them).

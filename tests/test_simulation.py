@@ -9,6 +9,7 @@ These tests verify the fixes for issues found during code review:
 5. JSON serialization failure returns valid fallback, not "{}", with actions applied
 6. Response format schemas are aligned between old harness and production
 """
+
 import pytest
 from unittest.mock import patch, MagicMock
 import inspect
@@ -18,6 +19,7 @@ import threading
 # ---------------------------------------------------------------------------
 # Issue #1: extra_body parameter must flow through call_async → get_next_state_async
 # ---------------------------------------------------------------------------
+
 
 class TestExtraBodyParameter:
     """Tests for extra_body parameter propagation."""
@@ -51,9 +53,7 @@ class TestExtraBodyParameter:
         sig = inspect.signature(ConductorLLMAsync.get_next_state_async)
         params = list(sig.parameters.keys())
 
-        assert "extra_body" in params, (
-            "get_next_state_async() must have an 'extra_body' parameter"
-        )
+        assert "extra_body" in params, "get_next_state_async() must have an 'extra_body' parameter"
 
     @pytest.mark.asyncio
     async def test_extra_body_passed_to_llm_api(self):
@@ -73,10 +73,14 @@ class TestExtraBodyParameter:
             captured_call_kwargs.update(kwargs)
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
-            mock_response.choices[0].message.content = '{"master_bpm":128,"master_key":"C major","actions":[],"reasoning":"test","name":"test"}'
+            mock_response.choices[
+                0
+            ].message.content = (
+                '{"master_bpm":128,"master_key":"C major","actions":[],"reasoning":"test","name":"test"}'
+            )
             return mock_response
 
-        with patch.object(conductor, '_get_async_client') as mock_get_client:
+        with patch.object(conductor, "_get_async_client") as mock_get_client:
             mock_client = MagicMock()
             mock_client.chat.completions.create = mock_create
             mock_get_client.return_value = mock_client
@@ -93,15 +97,14 @@ class TestExtraBodyParameter:
                 extra_body=extra_body,
             )
 
-        assert "extra_body" in captured_call_kwargs, (
-            "extra_body kwarg must be passed to chat.completions.create()"
-        )
+        assert "extra_body" in captured_call_kwargs, "extra_body kwarg must be passed to chat.completions.create()"
         assert captured_call_kwargs["extra_body"] == extra_body
 
 
 # ---------------------------------------------------------------------------
 # Issue #3: debug print must be removed from ConductorPromptBuilder.build_prompt()
 # ---------------------------------------------------------------------------
+
 
 class TestDebugPrintRemoved:
     """Test that debug print is removed from build_prompt()."""
@@ -119,14 +122,14 @@ class TestDebugPrintRemoved:
         source = inspect.getsource(ConductorLLMAsync.get_next_state_async)
 
         assert "print(" not in source, (
-            "get_next_state_async() must not contain debug print statements. "
-            "DEBUG print found at line 321."
+            "get_next_state_async() must not contain debug print statements. DEBUG print found at line 321."
         )
 
 
 # ---------------------------------------------------------------------------
 # Issue #4: SlopJockey.run_loop() messages must match exactly what was sent
 # ---------------------------------------------------------------------------
+
 
 class TestJockeyMessagesAccuracy:
     """Tests that messages stored in record are exactly what was sent to LLM."""
@@ -158,6 +161,7 @@ class TestJockeyMessagesAccuracy:
 # ---------------------------------------------------------------------------
 # Issue #5: VibePromptBank thread safety
 # ---------------------------------------------------------------------------
+
 
 class TestVibePromptBankThreadSafety:
     """Tests that VibePromptBank is safe under concurrent access."""
@@ -220,6 +224,7 @@ class TestVibePromptBankThreadSafety:
 # Issue #6: JSON serialization failure handling
 # ---------------------------------------------------------------------------
 
+
 class TestSerializationFailure:
     """Tests for proper JSON serialization failure handling."""
 
@@ -268,7 +273,7 @@ class TestSerializationFailure:
             jockey_id=1,
             perf_id=1,
             run_seed=42,
-            vibe_prob=0.0,       # avoid VibePromptBank file access
+            vibe_prob=0.0,  # avoid VibePromptBank file access
             vibe_clear_prob=0.0,
             llm_base_url="http://test-llm:1234/v1",
             llm_model="test-model",
@@ -277,9 +282,13 @@ class TestSerializationFailure:
         jockey.state.active_stems = [{"prompt": "drums"}]
 
         # Non-serializable value forces json.dumps(parsed) to raise.
-        non_serializable = {"master_bpm": 128, "master_key": "C major",
-                            "actions": [{"action_type": "retain", "stem_index": 0}],
-                            "reasoning": object(), "name": "x"}
+        non_serializable = {
+            "master_bpm": 128,
+            "master_key": "C major",
+            "actions": [{"action_type": "retain", "stem_index": 0}],
+            "reasoning": object(),
+            "name": "x",
+        }
 
         async def fake_call_async(prompt, llm_config=None, extra_body=None):
             return non_serializable
@@ -293,20 +302,18 @@ class TestSerializationFailure:
         # Loop advanced AND a valid fallback response was produced & applied.
         assert record is not None, "run_loop should return a record, not None"
         assert record["was_applied"] is True, (
-            "serialization failure must apply the fallback actions (state must "
-            "not be left inconsistent)"
+            "serialization failure must apply the fallback actions (state must not be left inconsistent)"
         )
         parsed_response = _json.loads(record["response"])
         action_types = {a.get("action_type") for a in parsed_response.get("actions", [])}
-        assert "retain" in action_types, (
-            "fallback must retain current stems so the groove continues"
-        )
+        assert "retain" in action_types, "fallback must retain current stems so the groove continues"
         assert jockey._loops_completed == 1
 
 
 # ---------------------------------------------------------------------------
 # Issue #7: enable-thinking CLI arg and threading
 # ---------------------------------------------------------------------------
+
 
 class TestEnableThinkingCLI:
     """Tests for --enable-thinking CLI argument."""
@@ -351,6 +358,7 @@ class TestEnableThinkingCLI:
 # Issue #8: response_format schema alignment
 # ---------------------------------------------------------------------------
 
+
 class TestResponseFormatSchema:
     """Tests that response_format schemas match between old harness and production."""
 
@@ -376,11 +384,7 @@ class TestResponseFormatSchema:
 
         def action_types(schema):
             items = schema["json_schema"]["schema"]["properties"]["actions"]["items"]
-            return {
-                a["properties"]["action_type"]["const"]
-                for a in items.get("anyOf", [])
-                if "properties" in a
-            }
+            return {a["properties"]["action_type"]["const"] for a in items.get("anyOf", []) if "properties" in a}
 
         prod_types = action_types(production_schema)
         harness_types = action_types(harness_schema)
@@ -392,6 +396,7 @@ class TestResponseFormatSchema:
 # ---------------------------------------------------------------------------
 # Schema drift detection for slop_harness fallback
 # ---------------------------------------------------------------------------
+
 
 def test_harness_fallback_schema_matches_production():
     """
@@ -411,9 +416,9 @@ def test_harness_fallback_schema_matches_production():
 
     # The harness should be using get_response_format_schema (not the fallback)
     # Verify the schema it actually uses matches production
-    if hasattr(llm_module, '_get_schema') and llm_module._get_schema is not None:
+    if hasattr(llm_module, "_get_schema") and llm_module._get_schema is not None:
         harness_schema = llm_module._get_schema()
-    elif hasattr(llm_module, 'RESPONSE_FORMAT'):
+    elif hasattr(llm_module, "RESPONSE_FORMAT"):
         # Fallback path — verify it matches production
         harness_schema = getattr(llm_module, "RESPONSE_FORMAT")
     else:
@@ -421,25 +426,12 @@ def test_harness_fallback_schema_matches_production():
         return
 
     # Compare the critical action structure
-    production_actions = (
-        production_schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"]
-    )
-    harness_schema_actions = (
-        harness_schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"]
-    )
+    production_actions = production_schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"]
+    harness_schema_actions = harness_schema["json_schema"]["schema"]["properties"]["actions"]["items"]["anyOf"]
 
-    production_types = {
-        a["properties"]["action_type"]["const"]
-        for a in production_actions
-        if "properties" in a
-    }
-    harness_types = {
-        a["properties"]["action_type"]["const"]
-        for a in harness_schema_actions
-        if "properties" in a
-    }
+    production_types = {a["properties"]["action_type"]["const"] for a in production_actions if "properties" in a}
+    harness_types = {a["properties"]["action_type"]["const"] for a in harness_schema_actions if "properties" in a}
 
     assert production_types == harness_types == {"retain", "add", "remove"}, (
-        f"Harness fallback schema action types {harness_types} must match "
-        f"production {production_types}"
+        f"Harness fallback schema action types {harness_types} must match production {production_types}"
     )

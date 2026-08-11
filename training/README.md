@@ -45,9 +45,9 @@ The SFT dataset at `/training/data/unsloth_dataset` is a HuggingFace `DatasetDic
 ```python
 {
     "messages": [
-        {"role": "system",  "content": "You are a DJ Conductor..."},
-        {"role": "user",    "content": "Start a house music set"},
-        {"role": "assistant", "content": '{"name": "house_set_001", "master_bpm": 124, ...}'}
+        {"role": "system", "content": "You are a DJ Conductor..."},
+        {"role": "user", "content": "Start a house music set"},
+        {"role": "assistant", "content": '{"name": "house_set_001", "master_bpm": 124, ...}'},
     ]
 }
 ```
@@ -66,15 +66,15 @@ python finetune_qwen.py
 Key configuration (at top of file):
 
 ```python
-MODEL_NAME        = "Qwen/Qwen3.5-0.8B"
-DATASET_PATH      = "/training/data/unsloth_dataset"
-OUTPUT_DIR        = "/training/outputs/qwen3.5-0.8b-mc-clanker"
+MODEL_NAME = "Qwen/Qwen3.5-0.8B"
+DATASET_PATH = "/training/data/unsloth_dataset"
+OUTPUT_DIR = "/training/outputs/qwen3.5-0.8b-mc-clanker"
 
-MAX_SEQ_LENGTH    = 1024        # Reduce to 512 if OOM
-NUM_EPOCHS        = 3           # 3 epochs typical for SFT
-PER_DEVICE_BATCH_SIZE = 4       # Reduce to 2 if OOM
+MAX_SEQ_LENGTH = 1024  # Reduce to 512 if OOM
+NUM_EPOCHS = 3  # 3 epochs typical for SFT
+PER_DEVICE_BATCH_SIZE = 4  # Reduce to 2 if OOM
 GRADIENT_ACCUMULATION_STEPS = 8  # Effective batch = 32
-LEARNING_RATE     = 1e-5
+LEARNING_RATE = 1e-5
 ```
 
 Output: `/training/outputs/qwen3.5-0.8b-mc-clanker/final/` containing:
@@ -111,15 +111,17 @@ To fine-tune on your own conversational dataset:
 ```python
 from datasets import DatasetDict, Dataset
 
-dataset = DatasetDict({
-    "train": Dataset.from_list(train_samples),
-    "test":  Dataset.from_list(test_samples),
-})
+dataset = DatasetDict(
+    {
+        "train": Dataset.from_list(train_samples),
+        "test": Dataset.from_list(test_samples),
+    }
+)
 dataset.save_to_disk("/training/data/my_dataset")
 
 # Then edit finetune_qwen.py:
 DATASET_PATH = "/training/data/my_dataset"
-OUTPUT_DIR   = "/training/outputs/my-model"
+OUTPUT_DIR = "/training/outputs/my-model"
 ```
 
 ---
@@ -138,8 +140,8 @@ DPO dataset at `/training/data/dpo_dataset/` containing `train/` and `test/` arr
 
 ```python
 {
-    "chosen":   '{"name": "house_set_001", "master_bpm": 124, ...}',   # valid
-    "rejected": '{"name": "house_set_001", "master_bpm": 500, ...}'   # corrupted
+    "chosen": '{"name": "house_set_001", "master_bpm": 124, ...}',  # valid
+    "rejected": '{"name": "house_set_001", "master_bpm": 500, ...}',  # corrupted
 }
 ```
 
@@ -175,9 +177,9 @@ Each corrupts a valid Conductor JSON response into an invalid one:
 The Conductor schema validation is defined in `dpo_pipeline.py`:
 
 ```python
-VALID_ACTION_TYPES    = {"retain", "add", "remove"}
-VALID_MAJOR_FAMILIES  = {"Drums", "Bass", "Synth", "Keys", ...}
-VALID_BPM_RANGE       = (60, 200)
+VALID_ACTION_TYPES = {"retain", "add", "remove"}
+VALID_MAJOR_FAMILIES = {"Drums", "Bass", "Synth", "Keys", ...}
+VALID_BPM_RANGE = (60, 200)
 REQUIRED_RESPONSE_FIELDS = {"master_bpm", "master_key", "actions", "reasoning", "name"}
 ```
 
@@ -229,17 +231,17 @@ podman run --rm --gpus all -v $(pwd)/training:/training:rw --name mcclanker-dpo 
 Key configuration:
 
 ```python
-SFT_MODEL_PATH   = "/training/outputs/qwen3.5-0.8b-mc-clanker/final"
-DPO_TRAIN_DATA   = "/training/data/dpo_dataset/train"
-DPO_TEST_DATA    = "/training/data/dpo_dataset/test"
-OUTPUT_DIR       = "/training/outputs/qwen3.5-0.8b-mc-clanker-dpo"
+SFT_MODEL_PATH = "/training/outputs/qwen3.5-0.8b-mc-clanker/final"
+DPO_TRAIN_DATA = "/training/data/dpo_dataset/train"
+DPO_TEST_DATA = "/training/data/dpo_dataset/test"
+OUTPUT_DIR = "/training/outputs/qwen3.5-0.8b-mc-clanker-dpo"
 
-MAX_SEQ_LENGTH              = 512    # Reduce if OOM, increase for quality
-PER_DEVICE_BATCH_SIZE       = 2      # Reduce to 1 if OOM
-GRADIENT_ACCUMULATION_STEPS = 16     # Effective batch = 32
-LEARNING_RATE               = 1e-6
-DPO_BETA                    = 0.1    # KL penalty strength (higher = stay close to SFT)
-USE_GRADIENT_CHECKPOINTING  = False  # Enable to save memory, disable for speed
+MAX_SEQ_LENGTH = 512  # Reduce if OOM, increase for quality
+PER_DEVICE_BATCH_SIZE = 2  # Reduce to 1 if OOM
+GRADIENT_ACCUMULATION_STEPS = 16  # Effective batch = 32
+LEARNING_RATE = 1e-6
+DPO_BETA = 0.1  # KL penalty strength (higher = stay close to SFT)
+USE_GRADIENT_CHECKPOINTING = False  # Enable to save memory, disable for speed
 ```
 
 Output: `/training/outputs/qwen3.5-0.8b-mc-clanker-dpo/final/`
@@ -251,14 +253,15 @@ The core DPO loss computation in `finetune_dpo_simple.py`:
 ```python
 def get_seq_logps(logits, input_ids, attention_mask):
     """Sum of log probabilities for each token in the sequence."""
-    shift_logits = logits[:, :-1, :]          # Next-token prediction
+    shift_logits = logits[:, :-1, :]  # Next-token prediction
     shift_labels = input_ids[:, 1:]
     log_probs = torch.log_softmax(shift_logits, dim=-1)
     token_logps = torch.gather(log_probs, 2, shift_labels.unsqueeze(-1)).squeeze(-1)
     return (token_logps * shift_mask).sum(dim=-1)
 
+
 # For each pair:
-chosen_logps   = policy_chosen_logps - ref_chosen_logps
+chosen_logps = policy_chosen_logps - ref_chosen_logps
 rejected_logps = policy_rejected_logps - ref_rejected_logps
 loss = -torch.nn.functional.logsigmoid(DPO_BETA * (chosen_logps - rejected_logps)).mean()
 ```

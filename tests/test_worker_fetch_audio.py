@@ -40,8 +40,8 @@ class TestFetchAudio:
         fake_audio = np.zeros(44100, dtype=np.float32)
 
         async def run_test():
-            with patch('app.framework.audio_fetch.create_garage_client_from_env', return_value=mock_garage):
-                with patch('app.framework.audio_fetch.decode_aac', return_value=fake_audio):
+            with patch("app.framework.audio_fetch.create_garage_client_from_env", return_value=mock_garage):
+                with patch("app.framework.audio_fetch.decode_aac", return_value=fake_audio):
                     audio_path = "audio/test-job-123.aac"
                     result = await loop._fetch_audio(audio_path)
                     return result
@@ -71,8 +71,8 @@ class TestFetchAudio:
         import asyncio
 
         async def run_test():
-            with patch('app.framework.audio_fetch.create_garage_client_from_env', return_value=mock_garage):
-                with patch('app.framework.audio_fetch.decode_aac', return_value=np.zeros(1000)):
+            with patch("app.framework.audio_fetch.create_garage_client_from_env", return_value=mock_garage):
+                with patch("app.framework.audio_fetch.decode_aac", return_value=np.zeros(1000)):
                     audio_path = "audio/test-job-123.aac"
                     result = await loop._fetch_audio(audio_path)
                     return result
@@ -114,9 +114,7 @@ class TestFetchAudio:
         assert isinstance(aac_bytes, bytes) and aac_bytes, "encode_aac must return bytes"
 
         decoded = decode_aac(aac_bytes, sample_rate=sample_rate)
-        assert isinstance(decoded, np.ndarray), (
-            f"decode_aac must return np.ndarray, got {type(decoded)}"
-        )
+        assert isinstance(decoded, np.ndarray), f"decode_aac must return np.ndarray, got {type(decoded)}"
         assert decoded.size > 0, "decoded audio must be non-empty"
         # Mono round-trip: first axis is sample count, ~original length (codec
         # framing may trim/pad a handful of samples).

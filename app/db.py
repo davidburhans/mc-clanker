@@ -21,10 +21,7 @@ class DatabaseManager:
             # SQLite fallback for local development
             db_path = os.path.join(os.path.dirname(__file__), "data", "mc_clanker.db")
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
-            self.engine = create_engine(
-                f"sqlite:///{db_path}",
-                connect_args={"check_same_thread": False}
-            )
+            self.engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
 
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 

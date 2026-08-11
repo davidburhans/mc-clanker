@@ -130,8 +130,9 @@ def embed_wav_metadata(
         pass
 
     # Since wave module doesn't support custom chunks, we write the file manually
-    _write_wav_with_metadata(wav_path, n_channels, sampwidth, framerate, audio_data,
-                             list_chunk, cue_chunk, chapter_list_chunk)
+    _write_wav_with_metadata(
+        wav_path, n_channels, sampwidth, framerate, audio_data, list_chunk, cue_chunk, chapter_list_chunk
+    )
 
     return wav_path
 
@@ -163,19 +164,22 @@ def _build_cue_chunk(chapters: list[dict[str, Any]]) -> bytes:
     """
     cue_points = []
     for i, chapter in enumerate(chapters):
-        cue_points.append({
-            "id": i + 1,
-            "position": 0,  # Play order position
-            "data_chunk_id": b"data",
-            "chunk_start": 0,
-            "block_start": 0,
-            "sample_offset": int(chapter["timestamp"] * 44100),  # assumes 44100 Hz
-        })
+        cue_points.append(
+            {
+                "id": i + 1,
+                "position": 0,  # Play order position
+                "data_chunk_id": b"data",
+                "chunk_start": 0,
+                "block_start": 0,
+                "sample_offset": int(chapter["timestamp"] * 44100),  # assumes 44100 Hz
+            }
+        )
 
     # Build cue chunk data
     data = struct.pack("<I", len(cue_points))
     for cp in cue_points:
-        data += struct.pack("<IIIIII",
+        data += struct.pack(
+            "<IIIIII",
             cp["id"],
             cp["position"],
             int.from_bytes(cp["data_chunk_id"], "little") if isinstance(cp["data_chunk_id"], int) else 0x64617461,
@@ -187,7 +191,8 @@ def _build_cue_chunk(chapters: list[dict[str, Any]]) -> bytes:
     # Fix: data_chunk_id should be 'data' = 0x64617461
     data = struct.pack("<I", len(cue_points))
     for cp in cue_points:
-        data += struct.pack("<IIIIII",
+        data += struct.pack(
+            "<IIIIII",
             cp["id"],
             cp["position"],
             0x64617461,  # 'data'
@@ -204,7 +209,7 @@ def _build_chapter_list_chunk(chapters: list[dict[str, Any]]) -> bytes:
     """Build a LIST/adtl chunk with labels for each cue point."""
     data = b""
     for i, chapter in enumerate(chapters):
-        title = chapter.get("title", f"Chapter {i+1}").encode("utf-8") + b"\x00"
+        title = chapter.get("title", f"Chapter {i + 1}").encode("utf-8") + b"\x00"
         if len(title) % 2 != 0:
             title += b"\x00"
         # ltxt chunk
@@ -248,7 +253,8 @@ def _write_wav_with_metadata(
 
         # fmt chunk
         f.write(b"fmt ")
-        fmt_data = struct.pack("<HHIIHH",
+        fmt_data = struct.pack(
+            "<HHIIHH",
             1,  # PCM format
             n_channels,
             framerate,
@@ -329,10 +335,10 @@ def split_wav_by_chapters(
 
         byte_offset = start_sample * n_channels * sampwidth
         byte_length = (end_sample - start_sample) * n_channels * sampwidth
-        segment_data = audio_data[byte_offset:byte_offset + byte_length]
+        segment_data = audio_data[byte_offset : byte_offset + byte_length]
 
-        safe_title = chapter.get("title", f"chapter_{i+1}").replace(" ", "_").replace("/", "_")[:50]
-        filename = f"show_{show_title}_{i+1:02d}_{safe_title}.wav"
+        safe_title = chapter.get("title", f"chapter_{i + 1}").replace(" ", "_").replace("/", "_")[:50]
+        filename = f"show_{show_title}_{i + 1:02d}_{safe_title}.wav"
         seg_path = os.path.join(output_dir, filename)
 
         with wave.open(seg_path, "wb") as wf:
@@ -341,13 +347,15 @@ def split_wav_by_chapters(
             wf.setframerate(framerate)
             wf.writeframes(segment_data)
 
-        segments.append({
-            "path": seg_path,
-            "index": chapter["index"],
-            "title": chapter.get("title", f"Chapter {i+1}"),
-            "start": start_time,
-            "duration": end_time - start_time,
-        })
+        segments.append(
+            {
+                "path": seg_path,
+                "index": chapter["index"],
+                "title": chapter.get("title", f"Chapter {i + 1}"),
+                "start": start_time,
+                "duration": end_time - start_time,
+            }
+        )
 
     return segments
 

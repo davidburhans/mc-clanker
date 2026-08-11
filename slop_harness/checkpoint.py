@@ -2,6 +2,7 @@
 
 Atomically writes {batch_id, total} using rename-from-temp pattern.
 """
+
 import json
 import os
 from pathlib import Path

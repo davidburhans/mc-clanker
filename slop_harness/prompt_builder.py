@@ -3,6 +3,7 @@
 System instruction is the fixed Conductor string.
 User message is built from state dict + optional override.
 """
+
 from typing import Any
 
 SYSTEM_INSTRUCTION = """You are an AI DJ. The current session has active stems with ages and you must decide what to retain, add, or remove each loop.
@@ -24,8 +25,16 @@ Actions (output JSON only, no text outside JSON):
 Always output valid JSON with "master_bpm", "master_key", "actions" array, "reasoning", and "name"."""
 
 AVAILABLE_INSTRUMENTS = [
-    "Synth", "Keys", "Bass", "Bowed Strings", "Mallet", "Wind",
-    "Guitar", "Brass", "Vocal", "Plucked Strings",
+    "Synth",
+    "Keys",
+    "Bass",
+    "Bowed Strings",
+    "Mallet",
+    "Wind",
+    "Guitar",
+    "Brass",
+    "Vocal",
+    "Plucked Strings",
 ]
 
 # Repo IDs for model display
@@ -113,7 +122,7 @@ class PromptBuilder:
         lines = []
         for i, entry in enumerate(history):
             instruments = [s["instrument"] for s in entry.get("stems", [])]
-            lines.append(f"Loop {i+1}: {', '.join(instruments)}")
+            lines.append(f"Loop {i + 1}: {', '.join(instruments)}")
         return "\n".join(lines)
 
     def _format_models(self, available_models: list[str]) -> str:

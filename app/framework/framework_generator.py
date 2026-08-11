@@ -8,6 +8,7 @@ import json
 import os
 import time
 
+
 class ModelState:
     IDLE = "idle"
     LOADING = "loading"
@@ -16,11 +17,20 @@ class ModelState:
 
 
 class StableAudioEngine:
-    def __init__(self, repo_id, filename="Foundation_1.safetensors", config_filename="model_config.json", prompt_template=None, supported_families=None):
+    def __init__(
+        self,
+        repo_id,
+        filename="Foundation_1.safetensors",
+        config_filename="model_config.json",
+        prompt_template=None,
+        supported_families=None,
+    ):
         self.repo_id = repo_id
         self.filename = filename
         self.config_filename = config_filename
-        self.prompt_template = prompt_template or "{major_family}, {sub_family}, {timbre_tags}, {notation_tag}, {fx_tag}, {key}"
+        self.prompt_template = (
+            prompt_template or "{major_family}, {sub_family}, {timbre_tags}, {notation_tag}, {fx_tag}, {key}"
+        )
         self.supported_families = supported_families or ["Any"]
         self.model = None
         self.device = None
@@ -70,17 +80,19 @@ class StableAudioEngine:
                 break
             except RuntimeError as e:
                 if "Cannot send a request, as the client has been closed" in str(e) and attempt < max_retries - 1:
-                    print(f"Warning: httpx client closed during model loading (attempt {attempt + 1}/{max_retries}). Retrying...")
+                    print(
+                        f"Warning: httpx client closed during model loading (attempt {attempt + 1}/{max_retries}). Retrying..."
+                    )
                     time.sleep(2)
                 else:
                     raise
         try:
-            if model_path.endswith('.safetensors'):
+            if model_path.endswith(".safetensors"):
                 state_dict = load_file(model_path, device=self.device)
             else:
                 state_dict = torch.load(model_path, map_location=self.device)
-                if isinstance(state_dict, dict) and 'state_dict' in state_dict:
-                    state_dict = state_dict['state_dict']
+                if isinstance(state_dict, dict) and "state_dict" in state_dict:
+                    state_dict = state_dict["state_dict"]
 
             self.model.load_state_dict(state_dict)
             self.model = self.model.to(self.device)
@@ -93,22 +105,24 @@ class StableAudioEngine:
     def generate_batch(self, requests, bpm, cfg_scale=7.0, steps=50):
         if self.model is None:
             raise RuntimeError(f"[{self.repo_id}] Model not loaded. Call load() first.")
-            
+
         results = []
         for i, req in enumerate(requests):
-            text_prompt = req['prompt']
-            
-            conditioning = [{
-                "prompt": text_prompt,
-                "seconds_start": 0,
-                "seconds_total": req['duration'],
-                "batch_size": 1,
-                "sample_size": int(req['duration'] * self.sample_rate)
-            }]
-            
+            text_prompt = req["prompt"]
+
+            conditioning = [
+                {
+                    "prompt": text_prompt,
+                    "seconds_start": 0,
+                    "seconds_total": req["duration"],
+                    "batch_size": 1,
+                    "sample_size": int(req["duration"] * self.sample_rate),
+                }
+            ]
+
             seed = np.random.default_rng().integers(0, 2**32, dtype=np.uint32).item()
-            
-            print(f"[{self.repo_id}] Generating stem {i+1}/{len(requests)}: '{text_prompt}'...")
+
+            print(f"[{self.repo_id}] Generating stem {i + 1}/{len(requests)}: '{text_prompt}'...")
             output = generate_diffusion_cond(
                 self.model,
                 steps=steps,
@@ -116,17 +130,17 @@ class StableAudioEngine:
                 conditioning=conditioning,
                 seed=seed,
                 batch_size=1,
-                sample_size=int(req['duration'] * self.sample_rate),
-                device=self.device
+                sample_size=int(req["duration"] * self.sample_rate),
+                device=self.device,
             )
-            
+
             audio_data = output.cpu().numpy()
             if audio_data.ndim == 3:
                 audio_data = audio_data[0]
                 audio_data = audio_data.T
-            
+
             results.append(audio_data)
-            
+
         return results, self.sample_rate
 
     def unload(self):
@@ -149,7 +163,7 @@ class GeneratorRegistry:
         self.models = {}
         self.default_model_id = None
         self.model_states = {}  # model_id -> ModelState
-        self.model_errors = {}   # model_id -> error message
+        self.model_errors = {}  # model_id -> error message
 
     def load(self):
         if not os.path.exists(self.config_path):
@@ -162,7 +176,7 @@ class GeneratorRegistry:
         for model_id, model_info in config.get("models", {}).items():
             if not model_info.get("enabled", False):
                 continue
-                
+
             engine_type = model_info.get("engine")
             if engine_type == "stable_audio_tools":
                 engine = StableAudioEngine(
@@ -170,7 +184,7 @@ class GeneratorRegistry:
                     filename=model_info.get("filename", "Foundation_1.safetensors"),
                     config_filename=model_info.get("config_filename", "model_config.json"),
                     prompt_template=model_info.get("prompt_template"),
-                    supported_families=model_info.get("supported_families")
+                    supported_families=model_info.get("supported_families"),
                 )
             else:
                 print(f"Unknown engine type '{engine_type}' for model '{model_id}'")
@@ -190,7 +204,7 @@ class GeneratorRegistry:
         if self.default_model_id and self.default_model_id in self.models:
             return self.models[self.default_model_id].sample_rate
         return 44100
-        
+
     @property
     def device(self):
         if self.default_model_id and self.default_model_id in self.models:
@@ -210,7 +224,9 @@ class GeneratorRegistry:
             model_id = req.get("model_id")
             if model_id not in self.models:
                 if model_id:
-                    print(f"Warning: Requested model '{model_id}' not loaded. Falling back to default '{self.default_model_id}'.")
+                    print(
+                        f"Warning: Requested model '{model_id}' not loaded. Falling back to default '{self.default_model_id}'."
+                    )
                 model_id = self.default_model_id
 
             # Ensure the model is loaded before generation
@@ -232,7 +248,7 @@ class GeneratorRegistry:
             engine = self.models[model_id]
             # Route to engine
             engine_results, sr = engine.generate_batch(m_requests, bpm, cfg_scale=cfg_scale, steps=steps)
-            
+
             if common_sr is None:
                 common_sr = sr
             elif common_sr != sr:
@@ -264,7 +280,7 @@ class GeneratorRegistry:
         self.model_errors[model_id] = None
 
         try:
-            if progress_callback and hasattr(engine, 'set_progress_callback'):
+            if progress_callback and hasattr(engine, "set_progress_callback"):
                 engine.set_progress_callback(progress_callback)
 
             engine.load()
@@ -319,19 +335,12 @@ class GeneratorRegistry:
                 # Estimate model VRAM by calculating the difference
                 by_model[model_id] = {
                     "state": self.model_states.get(model_id, ModelState.IDLE),
-                    "vram_mb": "unknown"  # Cannot easily attribute memory to specific model
+                    "vram_mb": "unknown",  # Cannot easily attribute memory to specific model
                 }
             else:
-                by_model[model_id] = {
-                    "state": self.model_states.get(model_id, ModelState.IDLE),
-                    "vram_mb": 0
-                }
+                by_model[model_id] = {"state": self.model_states.get(model_id, ModelState.IDLE), "vram_mb": 0}
 
-        return {
-            "total_mb": round(total_allocated, 2),
-            "reserved_mb": round(total_reserved, 2),
-            "by_model": by_model
-        }
+        return {"total_mb": round(total_allocated, 2), "reserved_mb": round(total_reserved, 2), "by_model": by_model}
 
     def ensure_model_loaded(self, model_id, progress_callback=None):
         """Ensure a model is loaded, loading it if necessary."""
@@ -354,7 +363,7 @@ class GeneratorRegistry:
         bpm: int = 120,
         bars: int = 4,
         cfg_scale: float = 7.0,
-        steps: int = 50
+        steps: int = 50,
     ) -> np.ndarray:
         """
         Generate a single audio stem.
@@ -382,19 +391,16 @@ class GeneratorRegistry:
         duration = (bars * 4) / beats_per_second  # bars × 4 beats/bar ÷ beats/s
 
         # Build request dict
-        request = [{
-            'prompt': prompt or '',
-            'duration': duration,
-            'model_id': model_id,
-        }]
+        request = [
+            {
+                "prompt": prompt or "",
+                "duration": duration,
+                "model_id": model_id,
+            }
+        ]
 
         # Call generate_batch and return first result
-        results, sample_rate = self.generate_batch(
-            requests=request,
-            bpm=bpm,
-            cfg_scale=cfg_scale,
-            steps=steps
-        )
+        results, sample_rate = self.generate_batch(requests=request, bpm=bpm, cfg_scale=cfg_scale, steps=steps)
 
         if not results or results[0] is None:
             raise RuntimeError("Generation failed: no audio returned")

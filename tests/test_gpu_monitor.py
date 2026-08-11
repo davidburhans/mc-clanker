@@ -91,6 +91,7 @@ class TestGPUMonitorNoCUDA:
         """When no GPU is available, all metrics should be zero."""
         with patch("torch.cuda.is_available", return_value=False):
             from app.gpu_monitor import GPUMonitor
+
             monitor = GPUMonitor()
             metrics = monitor.get_gpu_metrics()
             assert metrics["cuda_available"] is False
@@ -103,6 +104,7 @@ class TestGPUMonitorNoCUDA:
         """get_vram_usage should return zeros when CUDA unavailable."""
         with patch("torch.cuda.is_available", return_value=False):
             from app.gpu_monitor import GPUMonitor
+
             monitor = GPUMonitor()
             usage = monitor.get_vram_usage()
             assert usage["total_mb"] == 0
@@ -113,6 +115,7 @@ class TestGPUMonitorNoCUDA:
         """Without CUDA, OOM should never be imminent."""
         with patch("torch.cuda.is_available", return_value=False):
             from app.gpu_monitor import GPUMonitor
+
             monitor = GPUMonitor()
             assert monitor.is_oom_imminent(threshold_pct=90.0) is False
 
@@ -120,6 +123,7 @@ class TestGPUMonitorNoCUDA:
         """Without CUDA, VRAM should never be critical."""
         with patch("torch.cuda.is_available", return_value=False):
             from app.gpu_monitor import GPUMonitor
+
             monitor = GPUMonitor()
             assert monitor.is_vram_critical(threshold_pct=90.0) is False
 
@@ -138,6 +142,7 @@ class TestGPUMonitorWithCUDA:
         _MockCuda._allocated = allocated_mb * 1024 * 1024
         _MockCuda._reserved = reserved_mb * 1024 * 1024
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         return monitor
 
@@ -211,6 +216,7 @@ class TestGPUMonitorTracking:
         _MockCuda._total_mem = 16384 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
 
         call_count = [0]
@@ -238,6 +244,7 @@ class TestGPUMonitorTracking:
         _MockCuda._reserved = 5120 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
 
         mock_load = MagicMock(side_effect=RuntimeError("OOM"))
@@ -252,6 +259,7 @@ class TestGPUMonitorTracking:
         _MockCuda._reserved = 13312 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         # Manually record a tracked load
         monitor._model_vram_mb["foundation-1"] = 8192
@@ -277,6 +285,7 @@ class TestGPUMonitorAutoOffload:
         _MockCuda._reserved = 5120 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         assert monitor.should_offload(threshold_pct=90.0) is False
 
@@ -288,6 +297,7 @@ class TestGPUMonitorAutoOffload:
         _MockCuda._reserved = 16384 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         assert monitor.should_offload(threshold_pct=90.0) is True
 
@@ -299,14 +309,14 @@ class TestGPUMonitorAutoOffload:
         _MockCuda._reserved = 13312 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         monitor._model_vram_mb["foundation-1"] = 8192
         monitor._model_vram_mb["ace-step"] = 4096
 
         # foundation-1 is "loaded", ace-step is "idle"
         candidates = monitor.select_offload_candidates(
-            loaded_model_ids=["foundation-1", "ace-step"],
-            active_model_id="foundation-1"
+            loaded_model_ids=["foundation-1", "ace-step"], active_model_id="foundation-1"
         )
         assert "ace-step" in candidates
         assert "foundation-1" not in candidates
@@ -319,12 +329,12 @@ class TestGPUMonitorAutoOffload:
         _MockCuda._reserved = 9216 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         monitor._model_vram_mb["foundation-1"] = 8192
 
         candidates = monitor.select_offload_candidates(
-            loaded_model_ids=["foundation-1"],
-            active_model_id="foundation-1"
+            loaded_model_ids=["foundation-1"], active_model_id="foundation-1"
         )
         assert candidates == []
 
@@ -344,6 +354,7 @@ class TestGPUMonitorDegradation:
         _MockCuda._reserved = 16384 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         actions = monitor.get_degradation_actions()
         assert actions["oom_imminent"] is True
@@ -358,6 +369,7 @@ class TestGPUMonitorDegradation:
         _MockCuda._reserved = 5120 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         actions = monitor.get_degradation_actions()
         assert actions["oom_imminent"] is False
@@ -371,6 +383,7 @@ class TestGPUMonitorDegradation:
         _MockCuda._reserved = 16000 * 1024 * 1024
 
         from app.gpu_monitor import GPUMonitor
+
         monitor = GPUMonitor()
         actions = monitor.get_degradation_actions()
         assert "reduce_batch_size" in actions["recommended_actions"]

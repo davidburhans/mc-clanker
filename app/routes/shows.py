@@ -10,9 +10,7 @@ from datetime import datetime, timezone
 from app.framework.framework_state import state
 from app.db import DatabaseManager
 from app.models import Show, ShowAction, LLMInteraction
-from .schemas import (
-    ShowCreate, ShowUpdate, ExportStartRequest
-)
+from .schemas import ShowCreate, ShowUpdate, ExportStartRequest
 from .utils import require_show_owner, generate_audience_password
 from app.auth import get_current_user_from_request, hash_password
 
@@ -46,10 +44,18 @@ def _write_wav_header(handle) -> None:
     handle.write(struct.pack("<I", 0))
     handle.write(b"WAVE")
     handle.write(b"fmt ")
-    handle.write(struct.pack(
-        "<IHHIIHH", 16, 1, _RECORD_CHANNELS, _RECORD_SAMPLE_RATE,
-        byte_rate, block_align, _RECORD_SAMPLE_WIDTH * 8,
-    ))
+    handle.write(
+        struct.pack(
+            "<IHHIIHH",
+            16,
+            1,
+            _RECORD_CHANNELS,
+            _RECORD_SAMPLE_RATE,
+            byte_rate,
+            block_align,
+            _RECORD_SAMPLE_WIDTH * 8,
+        )
+    )
     handle.write(b"data")
     handle.write(struct.pack("<I", 0))
 
@@ -91,13 +97,16 @@ def _transition_show_to_live(session, show_id, request, audio_file_path, started
     file handles on a double-start.
     """
     require_show_owner(show_id, request, session)
-    updated = session.query(Show).filter(
-        Show.id == show_id,
-        Show.status.in_(("draft", "ended")),
-    ).update(
-        {"status": "live", "started_at": started_at,
-         "audio_file_path": audio_file_path},
-        synchronize_session=False,
+    updated = (
+        session.query(Show)
+        .filter(
+            Show.id == show_id,
+            Show.status.in_(("draft", "ended")),
+        )
+        .update(
+            {"status": "live", "started_at": started_at, "audio_file_path": audio_file_path},
+            synchronize_session=False,
+        )
     )
     session.flush()
     if updated == 0:
@@ -129,16 +138,18 @@ async def list_shows(request: Request, limit: int = 50, offset: int = 0):
     """List current user's shows (paginated)."""
     user = get_current_user_from_request(request)
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
-        shows = session.query(Show).filter(
-            Show.user_id == user.id
-        ).order_by(Show.created_at.desc()).limit(limit).offset(offset).all()
+        shows = (
+            session.query(Show)
+            .filter(Show.user_id == user.id)
+            .order_by(Show.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
 
         total = session.query(Show).filter(Show.user_id == user.id).count()
 
@@ -146,18 +157,16 @@ async def list_shows(request: Request, limit: int = 50, offset: int = 0):
             "shows": [s.to_dict(include_audience_password=True) for s in shows],
             "total": total,
             "limit": limit,
-            "offset": offset
+            "offset": offset,
         }
+
 
 @router.post("/shows", status_code=status.HTTP_201_CREATED)
 async def create_show(show_data: ShowCreate, request: Request):
     """Create a new show (status=draft, auto-generate audience password)."""
     user = get_current_user_from_request(request)
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
     db_manager = DatabaseManager.get_instance()
     # Generate plaintext password BEFORE hashing so we can return it once
@@ -168,7 +177,7 @@ async def create_show(show_data: ShowCreate, request: Request):
             title=show_data.title,
             description=show_data.description,
             status="draft",
-            audience_password_hash=hash_password(plaintext_password)
+            audience_password_hash=hash_password(plaintext_password),
         )
         session.add(show)
         session.flush()
@@ -179,6 +188,7 @@ async def create_show(show_data: ShowCreate, request: Request):
         response["audience_password"] = plaintext_password
         return response
 
+
 @router.get("/shows/{show_id}")
 async def get_show(show_id: int, request: Request):
     """Get show details (includes audience password for owner)."""
@@ -186,6 +196,7 @@ async def get_show(show_id: int, request: Request):
     with db_manager.session() as session:
         show = require_show_owner(show_id, request, session)
         return show.to_dict(include_audience_password=True)
+
 
 @router.patch("/shows/{show_id}")
 async def update_show(show_id: int, update: ShowUpdate, request: Request):
@@ -201,6 +212,7 @@ async def update_show(show_id: int, update: ShowUpdate, request: Request):
 
         return show.to_dict(include_audience_password=True)
 
+
 @router.delete("/shows/{show_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_show(show_id: int, request: Request):
     """Delete show + all related data."""
@@ -208,6 +220,7 @@ async def delete_show(show_id: int, request: Request):
     with db_manager.session() as session:
         show = require_show_owner(show_id, request, session)
         session.delete(show)
+
 
 @router.post("/show/stop")
 async def stop_current_show():
@@ -234,9 +247,7 @@ async def start_show(show_id: int, request: Request):
             "vibe": state.user_override,
         }
 
-    shows_dir = os.environ.get(
-        "SHOWS_DIR", os.path.join(os.path.dirname(__file__), "..", "data", "shows")
-    )
+    shows_dir = os.environ.get("SHOWS_DIR", os.path.join(os.path.dirname(__file__), "..", "data", "shows"))
     show_dir = os.path.join(shows_dir, str(show_id))
     os.makedirs(show_dir, exist_ok=True)
     audio_file_path = os.path.join(show_dir, "audio.wav")
@@ -263,6 +274,7 @@ async def start_show(show_id: int, request: Request):
         state.is_show_started = True
     return response
 
+
 @router.post("/shows/{show_id}/stop")
 async def stop_show(show_id: int, request: Request):
     """Stop show (status→ended, finalize WAV recording).
@@ -274,9 +286,14 @@ async def stop_show(show_id: int, request: Request):
     ended_at = datetime.now(timezone.utc)
     with db_manager.session() as session:
         require_show_owner(show_id, request, session)
-        updated = session.query(Show).filter(
-            Show.id == show_id, Show.status == "live",
-        ).update({"status": "ended", "ended_at": ended_at}, synchronize_session=False)
+        updated = (
+            session.query(Show)
+            .filter(
+                Show.id == show_id,
+                Show.status == "live",
+            )
+            .update({"status": "ended", "ended_at": ended_at}, synchronize_session=False)
+        )
         session.flush()
         if updated == 0:
             current = session.query(Show).filter(Show.id == show_id).first()
@@ -296,8 +313,10 @@ async def stop_show(show_id: int, request: Request):
         state.is_show_started = False
     # Flush any remaining audit buffers now that recording has stopped.
     from app.framework.framework_main_async import flush_recording_buffers
+
     await flush_recording_buffers()
     return response
+
 
 @router.post("/shows/{show_id}/archive")
 async def archive_show(show_id: int, request: Request):
@@ -308,12 +327,12 @@ async def archive_show(show_id: int, request: Request):
 
         if show.status not in ("ended", "live"):
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot archive show with status '{show.status}'"
+                status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot archive show with status '{show.status}'"
             )
 
         show.status = "archived"
         return show.to_dict(include_audience_password=True)
+
 
 @router.post("/shows/{show_id}/regenerate-audience-password")
 async def regenerate_audience_password_route(show_id: int, request: Request):
@@ -327,6 +346,7 @@ async def regenerate_audience_password_route(show_id: int, request: Request):
 
         return {"audience_password": new_password}
 
+
 @router.get("/shows/{show_id}/actions")
 async def get_show_actions(show_id: int, request: Request, limit: int = 1000, offset: int = 0):
     """List all actions for a show."""
@@ -334,18 +354,19 @@ async def get_show_actions(show_id: int, request: Request, limit: int = 1000, of
     with db_manager.session() as session:
         require_show_owner(show_id, request, session)
 
-        actions = session.query(ShowAction).filter(
-            ShowAction.show_id == show_id
-        ).order_by(ShowAction.loop_index).limit(limit).offset(offset).all()
+        actions = (
+            session.query(ShowAction)
+            .filter(ShowAction.show_id == show_id)
+            .order_by(ShowAction.loop_index)
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
 
         total = session.query(ShowAction).filter(ShowAction.show_id == show_id).count()
 
-        return {
-            "actions": [a.to_dict() for a in actions],
-            "total": total,
-            "limit": limit,
-            "offset": offset
-        }
+        return {"actions": [a.to_dict() for a in actions], "total": total, "limit": limit, "offset": offset}
+
 
 @router.get("/shows/{show_id}/llm-interactions")
 async def get_show_llm_interactions(show_id: int, request: Request, limit: int = 1000, offset: int = 0):
@@ -354,18 +375,19 @@ async def get_show_llm_interactions(show_id: int, request: Request, limit: int =
     with db_manager.session() as session:
         require_show_owner(show_id, request, session)
 
-        interactions = session.query(LLMInteraction).filter(
-            LLMInteraction.show_id == show_id
-        ).order_by(LLMInteraction.loop_index).limit(limit).offset(offset).all()
+        interactions = (
+            session.query(LLMInteraction)
+            .filter(LLMInteraction.show_id == show_id)
+            .order_by(LLMInteraction.loop_index)
+            .limit(limit)
+            .offset(offset)
+            .all()
+        )
 
         total = session.query(LLMInteraction).filter(LLMInteraction.show_id == show_id).count()
 
-        return {
-            "interactions": [i.to_dict() for i in interactions],
-            "total": total,
-            "limit": limit,
-            "offset": offset
-        }
+        return {"interactions": [i.to_dict() for i in interactions], "total": total, "limit": limit, "offset": offset}
+
 
 @router.get("/shows/{show_id}/audio")
 async def get_show_audio(show_id: int, request: Request):
@@ -375,21 +397,15 @@ async def get_show_audio(show_id: int, request: Request):
         show = require_show_owner(show_id, request, session)
 
         if not show.audio_file_path or not os.path.exists(show.audio_file_path):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Audio file not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found")
 
-        return FileResponse(
-            show.audio_file_path,
-            media_type="audio/wav",
-            filename=f"show_{show_id}.wav"
-        )
+        return FileResponse(show.audio_file_path, media_type="audio/wav", filename=f"show_{show_id}.wav")
 
 
 # =============================================================================
 # EXPORT ROUTES (Fixed Issue 4.4 - No more RAM accumulation)
 # =============================================================================
+
 
 @router.post("/export/start")
 async def start_export(req: ExportStartRequest):
@@ -426,6 +442,7 @@ async def start_export(req: ExportStartRequest):
 
     return {"status": "started", "file_path": file_path}
 
+
 @router.post("/export/stop")
 async def stop_export():
     """Stop recording, finalize WAV (if wav), return file path."""
@@ -454,6 +471,7 @@ async def stop_export():
                 pass
     return {"file_path": file_path, "duration": duration}
 
+
 @router.get("/shows/{show_id}/export/llm-dump")
 async def export_llm_dump(show_id: int, request: Request):
     """Stream JSONL of prompt+response pairs."""
@@ -461,9 +479,12 @@ async def export_llm_dump(show_id: int, request: Request):
     with db_manager.session() as session:
         require_show_owner(show_id, request, session)
 
-        interactions = session.query(LLMInteraction).filter(
-            LLMInteraction.show_id == show_id
-        ).order_by(LLMInteraction.loop_index).all()
+        interactions = (
+            session.query(LLMInteraction)
+            .filter(LLMInteraction.show_id == show_id)
+            .order_by(LLMInteraction.loop_index)
+            .all()
+        )
 
         async def generate():
             for interaction in interactions:
@@ -473,8 +494,9 @@ async def export_llm_dump(show_id: int, request: Request):
         return StreamingResponse(
             generate(),
             media_type="application/x-ndjson",
-            headers={"Content-Disposition": f"attachment; filename=show_{show_id}_llm_dump.jsonl"}
+            headers={"Content-Disposition": f"attachment; filename=show_{show_id}_llm_dump.jsonl"},
         )
+
 
 @router.get("/shows/{show_id}/export/full")
 async def export_full_show(show_id: int, request: Request):
@@ -492,9 +514,9 @@ async def export_full_show(show_id: int, request: Request):
         }
 
         return JSONResponse(
-            export_data,
-            headers={"Content-Disposition": f"attachment; filename=show_{show_id}_full.json"}
+            export_data, headers={"Content-Disposition": f"attachment; filename=show_{show_id}_full.json"}
         )
+
 
 @router.post("/shows/{show_id}/playback/start")
 async def start_playback(show_id: int, request: Request):
@@ -505,15 +527,11 @@ async def start_playback(show_id: int, request: Request):
 
         if show.status != "ended" and show.status != "archived":
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Show must be ended or archived to playback"
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Show must be ended or archived to playback"
             )
 
         if not show.audio_file_path or not os.path.exists(show.audio_file_path):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Audio file not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found")
 
         # Set playback state
         async with state.lock:
@@ -521,6 +539,7 @@ async def start_playback(show_id: int, request: Request):
             state.is_playback_active = True
 
         return {"status": "ok", "show_id": show_id}
+
 
 @router.post("/shows/{show_id}/playback/stop")
 async def stop_playback_route(show_id: int, request: Request):

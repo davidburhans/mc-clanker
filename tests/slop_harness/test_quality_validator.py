@@ -30,6 +30,7 @@ try:
         QualityValidator,
         ValidationResult,
     )
+
     _QV_IMPORT_ERROR = None
 except Exception as exc:  # noqa: BLE001 — surface the real cause in the skip
     QualityThresholdError = QualityValidator = ValidationResult = None
@@ -47,6 +48,7 @@ pytestmark = pytest.mark.skipif(
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def validator():
     return QualityValidator()
@@ -61,19 +63,22 @@ def valid_record():
             {"role": "user", "content": "Current state: ..."},
             {"role": "assistant", "content": ""},
         ],
-        "response": json.dumps({
-            "master_bpm": 120,
-            "master_key": "C major",
-            "actions": [
-                {"action_type": "retain", "stem_index": 0},
-            ],
-            "reasoning": "Keeping the groove.",
-            "name": "Test",
-        }),
+        "response": json.dumps(
+            {
+                "master_bpm": 120,
+                "master_key": "C major",
+                "actions": [
+                    {"action_type": "retain", "stem_index": 0},
+                ],
+                "reasoning": "Keeping the groove.",
+                "name": "Test",
+            }
+        ),
     }
 
 
 # ── 1) JSON Schema Validation ────────────────────────────────────────────────
+
 
 class TestSchemaValidation:
     def test_valid_record_passes(self, validator, valid_record):
@@ -148,13 +153,15 @@ class TestSchemaValidation:
                 {"role": "user", "content": "u"},
                 {"role": "assistant", "content": ""},
             ],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [],
-                "reasoning": "test",
-                "name": "test",
-            }),
+            "response": json.dumps(
+                {
+                    "master_bpm": 120,
+                    "master_key": "C major",
+                    "actions": [],
+                    "reasoning": "test",
+                    "name": "test",
+                }
+            ),
         }
         result = validator._validate_single(record)
         assert not result.valid
@@ -181,93 +188,154 @@ class TestSchemaValidation:
 
 # ── 2) Diversity Metrics ─────────────────────────────────────────────────────
 
+
 class TestDiversityMetrics:
     def test_all_bpms_present(self, validator):
         records = []
         for i, bpm in enumerate([100, 110, 120, 128, 130, 140, 150]):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": bpm,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": "test",
-                    "name": "test",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": "u"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": bpm,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": "test",
+                            "name": "test",
+                        }
+                    ),
+                }
+            )
         report = validator.validate_batch(records)
         assert report.bpm_coverage_ratio == 1.0
 
     def test_low_bpm_coverage(self, validator):
         records = []
         for i in range(100):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 120,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": "test",
-                    "name": "test",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": "u"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 120,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": "test",
+                            "name": "test",
+                        }
+                    ),
+                }
+            )
         report = validator.validate_batch(records)
         # Only 1 BPM out of 7 = ~14% coverage
         assert report.bpm_coverage_ratio < 0.2
 
     def test_all_keys_present(self, validator):
         records = []
-        keys = ["A# major", "A# minor", "B major", "B minor",
-                "C major", "C minor", "C# major", "C# minor",
-                "D major", "D minor", "D# major", "D# minor",
-                "E major", "E minor", "F major", "F minor",
-                "F# major", "F# minor", "G major", "G minor",
-                "G# major", "G# minor", "A major", "A minor"]
+        keys = [
+            "A# major",
+            "A# minor",
+            "B major",
+            "B minor",
+            "C major",
+            "C minor",
+            "C# major",
+            "C# minor",
+            "D major",
+            "D minor",
+            "D# major",
+            "D# minor",
+            "E major",
+            "E minor",
+            "F major",
+            "F minor",
+            "F# major",
+            "F# minor",
+            "G major",
+            "G minor",
+            "G# major",
+            "G# minor",
+            "A major",
+            "A minor",
+        ]
         for i, key in enumerate(keys):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 120,
-                    "master_key": key,
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": "test",
-                    "name": "test",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": "u"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 120,
+                            "master_key": key,
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": "test",
+                            "name": "test",
+                        }
+                    ),
+                }
+            )
         report = validator.validate_batch(records)
         assert report.key_coverage_ratio == 1.0
 
     def test_instrument_coverage_from_add_actions(self, validator):
         records = [
             {
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 120,
-                    "master_key": "C major",
-                    "actions": [{
-                        "action_type": "add",
-                        "major_family": "Synth",
-                        "sub_family": "Synth Lead",
-                        "model_id": "foundation-1",
-                    }],
-                    "reasoning": "test",
-                    "name": "test",
-                }),
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": ""},
+                ],
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [
+                            {
+                                "action_type": "add",
+                                "major_family": "Synth",
+                                "sub_family": "Synth Lead",
+                                "model_id": "foundation-1",
+                            }
+                        ],
+                        "reasoning": "test",
+                        "name": "test",
+                    }
+                ),
             },
             {
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 120,
-                    "master_key": "C major",
-                    "actions": [{
-                        "action_type": "add",
-                        "major_family": "Keys",
-                        "sub_family": "Grand Piano",
-                        "model_id": "foundation-1",
-                    }],
-                    "reasoning": "test",
-                    "name": "test",
-                }),
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": ""},
+                ],
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [
+                            {
+                                "action_type": "add",
+                                "major_family": "Keys",
+                                "sub_family": "Grand Piano",
+                                "model_id": "foundation-1",
+                            }
+                        ],
+                        "reasoning": "test",
+                        "name": "test",
+                    }
+                ),
             },
         ]
         report = validator.validate_batch(records)
@@ -284,20 +352,29 @@ class TestDiversityMetrics:
 
 # ── 3) Duplicate Detection ────────────────────────────────────────────────────
 
+
 class TestDuplicateDetection:
     def test_no_duplicates(self, validator):
         records = []
         for i in range(10):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": f"prompt {i}"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 120 + i,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": f"reasoning {i}",
-                    "name": f"set {i}",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": f"prompt {i}"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 120 + i,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": f"reasoning {i}",
+                            "name": f"set {i}",
+                        }
+                    ),
+                }
+            )
         report = validator.validate_batch(records)
         assert report.duplicate_count == 0
         assert report.duplicate_ratio == 0.0
@@ -305,14 +382,20 @@ class TestDuplicateDetection:
 
     def test_all_duplicates(self, validator):
         template = {
-            "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "same"}, {"role": "assistant", "content": ""}],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [{"action_type": "retain", "stem_index": 0}],
-                "reasoning": "same",
-                "name": "same",
-            }),
+            "messages": [
+                {"role": "system", "content": "s"},
+                {"role": "user", "content": "same"},
+                {"role": "assistant", "content": ""},
+            ],
+            "response": json.dumps(
+                {
+                    "master_bpm": 120,
+                    "master_key": "C major",
+                    "actions": [{"action_type": "retain", "stem_index": 0}],
+                    "reasoning": "same",
+                    "name": "same",
+                }
+            ),
         }
         records = [dict(template) for _ in range(20)]
         report = validator.validate_batch(records)
@@ -323,28 +406,42 @@ class TestDuplicateDetection:
 
     def test_partial_duplicates(self, validator):
         dup = {
-            "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "dup"}, {"role": "assistant", "content": ""}],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [{"action_type": "retain", "stem_index": 0}],
-                "reasoning": "dup",
-                "name": "dup",
-            }),
+            "messages": [
+                {"role": "system", "content": "s"},
+                {"role": "user", "content": "dup"},
+                {"role": "assistant", "content": ""},
+            ],
+            "response": json.dumps(
+                {
+                    "master_bpm": 120,
+                    "master_key": "C major",
+                    "actions": [{"action_type": "retain", "stem_index": 0}],
+                    "reasoning": "dup",
+                    "name": "dup",
+                }
+            ),
         }
         records = [dict(dup) for _ in range(5)]
         # Add 5 unique records
         for j in range(5):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": f"unique {j}"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 100 + j,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": f"unique {j}",
-                    "name": f"unique {j}",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": f"unique {j}"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 100 + j,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": f"unique {j}",
+                            "name": f"unique {j}",
+                        }
+                    ),
+                }
+            )
 
         report = validator.validate_batch(records)
         # 5 identical → 4 duplicates out of 10 total
@@ -353,6 +450,7 @@ class TestDuplicateDetection:
 
 
 # ── 4) Action Validity ────────────────────────────────────────────────────────
+
 
 class TestActionValidity:
     def test_valid_retain_action(self, validator):
@@ -397,12 +495,14 @@ class TestActionValidity:
         response = {
             "master_bpm": 120,
             "master_key": "C major",
-            "actions": [{
-                "action_type": "add",
-                "major_family": "Synth",
-                "sub_family": "Synth Lead",
-                "model_id": "foundation-1",
-            }],
+            "actions": [
+                {
+                    "action_type": "add",
+                    "major_family": "Synth",
+                    "sub_family": "Synth Lead",
+                    "model_id": "foundation-1",
+                }
+            ],
             "reasoning": "test",
             "name": "test",
         }
@@ -496,63 +596,162 @@ class TestActionValidity:
 
 # ── 5) Threshold checking ────────────────────────────────────────────────────
 
+
 class TestThresholdChecking:
     def test_all_pass_with_good_data(self, validator):
         records = []
         # Use all keys and many instruments to exceed the 60% and 50% thresholds
         all_keys = [
-            "C major", "C# major", "D major", "D# major", "E major", "F major",
-            "F# major", "G major", "G# major", "A major", "A# major", "B major",
-            "C minor", "C# minor", "D minor", "D# minor", "E minor", "F minor",
-            "F# minor", "G minor", "G# minor", "A minor", "A# minor", "B minor",
+            "C major",
+            "C# major",
+            "D major",
+            "D# major",
+            "E major",
+            "F major",
+            "F# major",
+            "G major",
+            "G# major",
+            "A major",
+            "A# major",
+            "B major",
+            "C minor",
+            "C# minor",
+            "D minor",
+            "D# minor",
+            "E minor",
+            "F minor",
+            "F# minor",
+            "G minor",
+            "G# minor",
+            "A minor",
+            "A# minor",
+            "B minor",
         ]
         many_instruments = [
-            "Synth Lead", "Synth Bass", "FM Synth", "Wavetable Synth", "Analog Synth", "Supersaw",
-            "Digital Organ", "Hammond Organ", "Church Organ",
-            "Grand Piano", "Digital Piano", "Rhodes Piano", "Wurlitzer Piano", "CP Piano", "Clavinet", "Celesta", "Harpsichord",
-            "Pad", "Atmosphere", "Texture", "Bell", "Church Bell", "Tubular Bells",
-            "Marimba", "Vibraphone", "Glockenspiel", "Xylophone", "Steel Drums", "Kalimba",
-            "Ocarina", "Pluck", "Music Box", "Tack Piano",
-            "Violin", "Viola", "Cello", "Digital Strings", "Harp", "Celtic Harp", "Concert Harp",
-            "Koto", "Sitar", "Fiddle",
-            "Acoustic Guitar", "Nylon Guitar", "Electric Guitar",
-            "Trumpet", "French Horn", "Flugelhorn", "Bass Trombone", "Tenor Trombone", "Tuba",
-            "Flute", "Piccolo", "Clarinet", "Oboe", "Bassoon", "Irish Flute", "World Winds", "Saxophone",
-            "Choir", "Synthetic Choir", "Synthetic Vox",
-            "Sub Bass", "Reese Bass", "Analog Bass", "Wavetable Bass", "Picked Bass", "Digital Bass", "FM Bass",
+            "Synth Lead",
+            "Synth Bass",
+            "FM Synth",
+            "Wavetable Synth",
+            "Analog Synth",
+            "Supersaw",
+            "Digital Organ",
+            "Hammond Organ",
+            "Church Organ",
+            "Grand Piano",
+            "Digital Piano",
+            "Rhodes Piano",
+            "Wurlitzer Piano",
+            "CP Piano",
+            "Clavinet",
+            "Celesta",
+            "Harpsichord",
+            "Pad",
+            "Atmosphere",
+            "Texture",
+            "Bell",
+            "Church Bell",
+            "Tubular Bells",
+            "Marimba",
+            "Vibraphone",
+            "Glockenspiel",
+            "Xylophone",
+            "Steel Drums",
+            "Kalimba",
+            "Ocarina",
+            "Pluck",
+            "Music Box",
+            "Tack Piano",
+            "Violin",
+            "Viola",
+            "Cello",
+            "Digital Strings",
+            "Harp",
+            "Celtic Harp",
+            "Concert Harp",
+            "Koto",
+            "Sitar",
+            "Fiddle",
+            "Acoustic Guitar",
+            "Nylon Guitar",
+            "Electric Guitar",
+            "Trumpet",
+            "French Horn",
+            "Flugelhorn",
+            "Bass Trombone",
+            "Tenor Trombone",
+            "Tuba",
+            "Flute",
+            "Piccolo",
+            "Clarinet",
+            "Oboe",
+            "Bassoon",
+            "Irish Flute",
+            "World Winds",
+            "Saxophone",
+            "Choir",
+            "Synthetic Choir",
+            "Synthetic Vox",
+            "Sub Bass",
+            "Reese Bass",
+            "Analog Bass",
+            "Wavetable Bass",
+            "Picked Bass",
+            "Digital Bass",
+            "FM Bass",
             "Pan Flute",
         ]
         bpm_options = [100, 110, 120, 128, 130, 140, 150]
         for i in range(500):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": f"u{i}"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": bpm_options[i % len(bpm_options)],
-                    "master_key": all_keys[i % len(all_keys)],
-                    "actions": [
-                        {"action_type": "retain", "stem_index": 0},
-                        {"action_type": "add", "major_family": "Synth", "sub_family": many_instruments[i % len(many_instruments)], "model_id": "foundation-1"},
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": f"u{i}"},
+                        {"role": "assistant", "content": ""},
                     ],
-                    "reasoning": f"r{i}",
-                    "name": f"n{i}",
-                }),
-            })
+                    "response": json.dumps(
+                        {
+                            "master_bpm": bpm_options[i % len(bpm_options)],
+                            "master_key": all_keys[i % len(all_keys)],
+                            "actions": [
+                                {"action_type": "retain", "stem_index": 0},
+                                {
+                                    "action_type": "add",
+                                    "major_family": "Synth",
+                                    "sub_family": many_instruments[i % len(many_instruments)],
+                                    "model_id": "foundation-1",
+                                },
+                            ],
+                            "reasoning": f"r{i}",
+                            "name": f"n{i}",
+                        }
+                    ),
+                }
+            )
         report = validator.validate_batch(records)
         assert report.passed, f"Failed: {report.threshold_failures}"
 
     def test_fails_on_bad_diversity(self, validator):
         records = []
         for i in range(50):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 120,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": "r",
-                    "name": "n",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": "u"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 120,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": "r",
+                            "name": "n",
+                        }
+                    ),
+                }
+            )
         report = validator.validate_batch(records)
         # Should fail BPM coverage, key coverage, instrument coverage, duplicates
         assert not report.passed
@@ -562,68 +761,98 @@ class TestThresholdChecking:
         records = []
         # 5 unique + 5 identical to first = 50% dups
         for i in range(5):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": f"u{i}"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 100 + i,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": f"r{i}",
-                    "name": f"n{i}",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": f"u{i}"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 100 + i,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": f"r{i}",
+                            "name": f"n{i}",
+                        }
+                    ),
+                }
+            )
         dup = dict(records[0])
         for _ in range(5):
-            records.append({
-                "messages": [
-                    {"role": "system", "content": "s"},
-                    {"role": "user", "content": "u0"},
-                    {"role": "assistant", "content": ""},
-                ],
-                "response": json.dumps({
-                    "master_bpm": 100,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": "r0",
-                    "name": "n0",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": "u0"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 100,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": "r0",
+                            "name": "n0",
+                        }
+                    ),
+                }
+            )
         report = validator.validate_batch(records)
         dup_ratio = report.duplicate_ratio
         # 5 duplicates out of 10 = 50% > 5% threshold
         assert dup_ratio > 0.05
 
     def test_assert_thresholds_raises(self, validator):
-        records = [{
-            "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [{"action_type": "retain", "stem_index": 0}],
-                "reasoning": "r",
-                "name": "n",
-            }),
-        }]
+        records = [
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": ""},
+                ],
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [{"action_type": "retain", "stem_index": 0}],
+                        "reasoning": "r",
+                        "name": "n",
+                    }
+                ),
+            }
+        ]
         report = validator.validate_batch(records)
         with pytest.raises(QualityThresholdError):
             report.assert_thresholds()
 
     def test_custom_thresholds(self, validator):
-        strict = QualityValidator(thresholds={
-            "min_bpm_coverage": 1.0,
-            "min_key_coverage": 1.0,
-            "min_instrument_coverage": 1.0,
-        })
-        records = [{
-            "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [{"action_type": "retain", "stem_index": 0}],
-                "reasoning": "r",
-                "name": "n",
-            }),
-        }]
+        strict = QualityValidator(
+            thresholds={
+                "min_bpm_coverage": 1.0,
+                "min_key_coverage": 1.0,
+                "min_instrument_coverage": 1.0,
+            }
+        )
+        records = [
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": ""},
+                ],
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [{"action_type": "retain", "stem_index": 0}],
+                        "reasoning": "r",
+                        "name": "n",
+                    }
+                ),
+            }
+        ]
         report = strict.validate_batch(records)
         assert not report.passed
 
@@ -637,22 +866,27 @@ class TestThresholdChecking:
 
 # ── 6) Vibe Override Persistence ──────────────────────────────────────────────
 
+
 class TestVibePersistence:
     def test_no_vibes_returns_perfect_ratio(self, validator):
-        records = [{
-            "messages": [
-                {"role": "system", "content": "s"},
-                {"role": "user", "content": "no vibe here"},
-                {"role": "assistant", "content": ""},
-            ],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [{"action_type": "retain", "stem_index": 0}],
-                "reasoning": "r",
-                "name": "n",
-            }),
-        }]
+        records = [
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "no vibe here"},
+                    {"role": "assistant", "content": ""},
+                ],
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [{"action_type": "retain", "stem_index": 0}],
+                        "reasoning": "r",
+                        "name": "n",
+                    }
+                ),
+            }
+        ]
         result = validator.validate_vibe_persistence(records)
         assert result["persistence_ratio"] == 1.0
 
@@ -665,13 +899,15 @@ class TestVibePersistence:
                     {"role": "user", "content": f"OVERRIDE: {vibe_text}"},
                     {"role": "assistant", "content": ""},
                 ],
-                "response": json.dumps({
-                    "master_bpm": 120,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": "r",
-                    "name": "n",
-                }),
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [{"action_type": "retain", "stem_index": 0}],
+                        "reasoning": "r",
+                        "name": "n",
+                    }
+                ),
             },
             {
                 "messages": [
@@ -679,13 +915,22 @@ class TestVibePersistence:
                     {"role": "user", "content": f"OVERRIDE: {vibe_text}"},  # persists
                     {"role": "assistant", "content": ""},
                 ],
-                "response": json.dumps({
-                    "master_bpm": 128,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "add", "major_family": "Bass", "sub_family": "Sub Bass", "model_id": "foundation-1"}],
-                    "reasoning": "r",
-                    "name": "n",
-                }),
+                "response": json.dumps(
+                    {
+                        "master_bpm": 128,
+                        "master_key": "C major",
+                        "actions": [
+                            {
+                                "action_type": "add",
+                                "major_family": "Bass",
+                                "sub_family": "Sub Bass",
+                                "model_id": "foundation-1",
+                            }
+                        ],
+                        "reasoning": "r",
+                        "name": "n",
+                    }
+                ),
             },
         ]
         result = validator.validate_vibe_persistence(records)
@@ -695,18 +940,27 @@ class TestVibePersistence:
 
 # ── 7) Integration: validate_batch with active_stems ─────────────────────────
 
+
 class TestBatchWithStems:
     def test_bounds_check_with_stems(self, validator):
-        records = [{
-            "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [{"action_type": "retain", "stem_index": 5}],
-                "reasoning": "r",
-                "name": "n",
-            }),
-        }]
+        records = [
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": ""},
+                ],
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [{"action_type": "retain", "stem_index": 5}],
+                        "reasoning": "r",
+                        "name": "n",
+                    }
+                ),
+            }
+        ]
         stems = [{"prompt": "synth"}, {"prompt": "bass"}]  # 2 stems, index 5 is OOB
         report = validator.validate_batch(records, active_stems_per_record=[stems])
         assert report.invalid_actions >= 1
@@ -714,22 +968,31 @@ class TestBatchWithStems:
 
     def test_bounds_check_without_stems_no_oob(self, validator):
         """Without stems, bounds checking is skipped (can't determine bounds)."""
-        records = [{
-            "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": ""}],
-            "response": json.dumps({
-                "master_bpm": 120,
-                "master_key": "C major",
-                "actions": [{"action_type": "retain", "stem_index": 5}],
-                "reasoning": "r",
-                "name": "n",
-            }),
-        }]
+        records = [
+            {
+                "messages": [
+                    {"role": "system", "content": "s"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": ""},
+                ],
+                "response": json.dumps(
+                    {
+                        "master_bpm": 120,
+                        "master_key": "C major",
+                        "actions": [{"action_type": "retain", "stem_index": 5}],
+                        "reasoning": "r",
+                        "name": "n",
+                    }
+                ),
+            }
+        ]
         report = validator.validate_batch(records)
         # Without stems, no bounds check → no invalid actions from bounds
         assert report.invalid_actions == 0
 
 
 # ── 8) Edge cases ─────────────────────────────────────────────────────────────
+
 
 class TestEdgeCases:
     def test_empty_batch(self, validator):
@@ -765,18 +1028,27 @@ class TestEdgeCases:
     def test_large_batch_performance(self, validator):
         """Ensure 1000 records validate in reasonable time."""
         import time
+
         records = []
         for i in range(1000):
-            records.append({
-                "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": f"u{i}"}, {"role": "assistant", "content": ""}],
-                "response": json.dumps({
-                    "master_bpm": 100 + (i % 7) * 10,
-                    "master_key": "C major",
-                    "actions": [{"action_type": "retain", "stem_index": 0}],
-                    "reasoning": f"r{i}",
-                    "name": f"n{i}",
-                }),
-            })
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "user", "content": f"u{i}"},
+                        {"role": "assistant", "content": ""},
+                    ],
+                    "response": json.dumps(
+                        {
+                            "master_bpm": 100 + (i % 7) * 10,
+                            "master_key": "C major",
+                            "actions": [{"action_type": "retain", "stem_index": 0}],
+                            "reasoning": f"r{i}",
+                            "name": f"n{i}",
+                        }
+                    ),
+                }
+            )
         start = time.time()
         report = validator.validate_batch(records)
         elapsed = time.time() - start

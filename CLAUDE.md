@@ -89,6 +89,7 @@ state.current_bpm = 128  # No lock!
 async def update_state(update: StateUpdate):
     start_generation()  # Don't do this!
 
+
 # ✅ CORRECT — Just update state, let daemon thread pick it up
 @router.post("/api/state")
 async def update_state(update: StateUpdate):
@@ -183,71 +184,71 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 
 ```python
 # Musical parameters
-state.current_bpm           # int — Current tempo (default 120)
-state.current_key          # str — Musical key (e.g., "C minor")
-state.active_stems         # list[Stem] — Stems currently audible
-state.previous_stems        # list[Stem] — Stems from previous loop
-state.next_stems           # list[Stem] — Stems queued for next loop
-state.stem_history         # list[list[Stem]] — Rolling last 8 stem sets
+state.current_bpm  # int — Current tempo (default 120)
+state.current_key  # str — Musical key (e.g., "C minor")
+state.active_stems  # list[Stem] — Stems currently audible
+state.previous_stems  # list[Stem] — Stems from previous loop
+state.next_stems  # list[Stem] — Stems queued for next loop
+state.stem_history  # list[list[Stem]] — Rolling last 8 stem sets
 
 # Generation control
-state.is_generating         # bool — Framework loop running
-state.user_override         # str — Vibe prompt from user
-state.target_bpm_override   # int|None — Manual BPM override
-state.target_key_override   # str|None — Manual key override
-state.should_reset          # bool — Signal to reset framework
+state.is_generating  # bool — Framework loop running
+state.user_override  # str — Vibe prompt from user
+state.target_bpm_override  # int|None — Manual BPM override
+state.target_key_override  # str|None — Manual key override
+state.should_reset  # bool — Signal to reset framework
 
 # LLM configuration
-state.llm_base_url          # str — LLM API endpoint
-state.llm_api_key           # str — API key (default "not-needed")
-state.llm_model             # str — Model name
+state.llm_base_url  # str — LLM API endpoint
+state.llm_api_key  # str — API key (default "not-needed")
+state.llm_model  # str — Model name
 
 # Mixer state (per-stem)
-state.stem_volumes          # dict[int, float] — index → gain (0.0–2.0)
-state.muted_stems           # set[int] — muted stem indices
-state.soloed_stems          # set[int] — soloed stem indices
-state.stem_ages             # dict[int, int] — index → loop count
+state.stem_volumes  # dict[int, float] — index → gain (0.0–2.0)
+state.muted_stems  # set[int] — muted stem indices
+state.soloed_stems  # set[int] — soloed stem indices
+state.stem_ages  # dict[int, int] — index → loop count
 
 # Loop coordination
-state.loop_count            # int — Total loops completed
-state.last_actions          # list[dict] — Recent Conductor actions
-state.llm_reasoning        # str — Conductor's decision text
+state.loop_count  # int — Total loops completed
+state.last_actions  # list[dict] — Recent Conductor actions
+state.llm_reasoning  # str — Conductor's decision text
 
 # Recording
-state.is_recording          # bool — Session recording active
-state.recording_format      # str — "wav" or "mp3"
-state.is_show_recording     # bool — Show recording active
+state.is_recording  # bool — Session recording active
+state.recording_format  # str — "wav" or "mp3"
+state.is_show_recording  # bool — Show recording active
 
 # Show/playback
-state.is_show_started       # bool — Audience can access
+state.is_show_started  # bool — Audience can access
 state.currently_playing_show_id  # int|None
-state.is_playback_active    # bool
+state.is_playback_active  # bool
 
 # Framework internals
-state.next_loop_ready       # threading.Event — signals mixer to crossfade
+state.next_loop_ready  # threading.Event — signals mixer to crossfade
 state.currently_playing_loop_index  # int — authoritative loop count
-state.loop_history          # list — rolling buffer of past loops
+state.loop_history  # list — rolling buffer of past loops
 state.generation_cfg_scale  # float — CFG scale for generation
-state.generation_steps      # int — Steps for generation
+state.generation_steps  # int — Steps for generation
 ```
 
 ### Stem Data Structure
 
 ```python
 {
-    "instrument": "Electronic Drums",      # Display name
-    "prompt": "Electronic Drums, 128 BPM", # Generation prompt sent to model
-    "major_family": "Drums",                 # Category (Drums, Bass, Synth, etc.)
-    "sub_family": "Electronic Drums",       # Sub-category
-    "model_id": "foundation-1",            # Which model to use
-    "timbre_tags": ["hard", "punchy"],      # Descriptors
-    "notation_tag": "4/4",                  # Time signature
-    "fx_tag": "dry",                        # FX descriptor
-    "key": "A minor",                       # Musical key
-    "bpm": 128,                             # Tempo
-    "bars": 4,                              # Loop length in bars
-    "_age": 2,                              # Loop count when added
-    "_custom": False,                       # User-created flag
+    "instrument": "Electronic Drums",  # Display name
+    "prompt": "Electronic Drums, 128 BPM",  # Generation prompt sent to model
+    "major_family": "Drums",  # Category (Drums, Bass, Synth, etc.)
+    "sub_family": "Electronic Drums",  # Sub-category
+    "model_id": "foundation-1",  # Which model to use
+    "timbre_tags": ["hard", "punchy"],  # Descriptors
+    "notation_tag": "4/4",  # Time signature
+    "fx_tag": "dry",  # FX descriptor
+    "key": "A minor",  # Musical key
+    "bpm": 128,  # Tempo
+    "bars": 4,  # Loop length in bars
+    "_age": 2,  # Loop count when added
+    "_custom": False,  # User-created flag
 }
 ```
 
@@ -355,6 +356,7 @@ async def set_stem_volume(index: int, update: VolumeUpdate):
 ```python
 class StemVolumeUpdate(BaseModel):
     volume: float  # 0.0 to 2.0
+
 
 class StateUpdate(BaseModel):
     is_generating: Optional[bool] = None
@@ -479,7 +481,9 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 def mock_conductor(monkeypatch):
     async def fake_call_async(self, prompt):
         return {"actions": [], "reasoning": "test"}
+
     monkeypatch.setattr(ConductorLLMAsync, "call_async", fake_call_async)
+
 
 # Mock sounddevice
 @pytest.fixture
@@ -516,6 +520,7 @@ def mock_sounddevice(monkeypatch):
 
 ```python
 import logging
+
 logger = logging.getLogger(__name__)
 
 logger.debug(f"Active stems: {len(state.active_stems)}")

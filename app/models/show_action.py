@@ -19,9 +19,7 @@ class ShowAction(Base):
 
     show = relationship("Show", back_populates="actions")
 
-    __table_args__ = (
-        Index("ix_show_actions_show_loop", "show_id", "loop_index"),
-    )
+    __table_args__ = (Index("ix_show_actions_show_loop", "show_id", "loop_index"),)
 
     def to_dict(self):
         return {

@@ -25,11 +25,13 @@ LEARNING_RATE = 1e-6
 DPO_BETA = 0.1
 USE_GRADIENT_CHECKPOINTING = False  # Disable for max compute
 
+
 def compute_dpo_loss(policy_logps, ref_logps):
     """Compute DPO loss given log probabilities."""
     logits = policy_logps - ref_logps
     loss = -torch.nn.functional.logsigmoid(DPO_BETA * logits).mean()
     return loss
+
 
 def main():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
@@ -78,13 +80,21 @@ def main():
 
     # Prepare data collator
     def collate_fn(batch):
-        chosen_ids = tokenizer([b['chosen'] for b in batch], return_tensors='pt', padding=True, truncation=True, max_length=MAX_SEQ_LENGTH)['input_ids']
-        rejected_ids = tokenizer([b['rejected'] for b in batch], return_tensors='pt', padding=True, truncation=True, max_length=MAX_SEQ_LENGTH)['input_ids']
+        chosen_ids = tokenizer(
+            [b["chosen"] for b in batch], return_tensors="pt", padding=True, truncation=True, max_length=MAX_SEQ_LENGTH
+        )["input_ids"]
+        rejected_ids = tokenizer(
+            [b["rejected"] for b in batch],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=MAX_SEQ_LENGTH,
+        )["input_ids"]
         return {
-            'chosen_ids': chosen_ids,
-            'rejected_ids': rejected_ids,
-            'chosen_mask': (chosen_ids != tokenizer.pad_token_id).float(),
-            'rejected_mask': (rejected_ids != tokenizer.pad_token_id).float(),
+            "chosen_ids": chosen_ids,
+            "rejected_ids": rejected_ids,
+            "chosen_mask": (chosen_ids != tokenizer.pad_token_id).float(),
+            "rejected_mask": (rejected_ids != tokenizer.pad_token_id).float(),
         }
 
     train_loader = DataLoader(train_ds, batch_size=PER_DEVICE_BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
@@ -96,16 +106,18 @@ def main():
     print("\n[4/5] Starting DPO training...")
     use_bf16 = torch.cuda.is_bf16_supported()
     print(f"    Precision: {'bf16' if use_bf16 else 'fp16'}")
-    print(f"    Batch size: {PER_DEVICE_BATCH_SIZE} x {GRADIENT_ACCUMULATION_STEPS} = {PER_DEVICE_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}")
+    print(
+        f"    Batch size: {PER_DEVICE_BATCH_SIZE} x {GRADIENT_ACCUMULATION_STEPS} = {PER_DEVICE_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}"
+    )
 
     model.train()
     global_step = 0
     for epoch in range(NUM_EPOCHS):
         for batch_idx, batch in enumerate(train_loader):
-            chosen_ids = batch['chosen_ids'].cuda()
-            rejected_ids = batch['rejected_ids'].cuda()
-            chosen_mask = batch['chosen_mask'].cuda()
-            rejected_mask = batch['rejected_mask'].cuda()
+            chosen_ids = batch["chosen_ids"].cuda()
+            rejected_ids = batch["rejected_ids"].cuda()
+            chosen_mask = batch["chosen_mask"].cuda()
+            rejected_mask = batch["rejected_mask"].cuda()
 
             # Compute policy logps
             policy_chosen = model(input_ids=chosen_ids, attention_mask=chosen_mask)
@@ -153,6 +165,7 @@ def main():
     model.save_pretrained(f"{OUTPUT_DIR}/final")
     tokenizer.save_pretrained(f"{OUTPUT_DIR}/final")
     print("\nDPO training complete!")
+
 
 if __name__ == "__main__":
     main()

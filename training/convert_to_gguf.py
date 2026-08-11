@@ -23,11 +23,14 @@ def main():
     parser = argparse.ArgumentParser(description="Convert HF model to GGUF")
     parser.add_argument("--input", "-i", required=True, help="Path to HF model directory")
     parser.add_argument("--output", "-o", required=True, help="Output GGUF file path")
-    parser.add_argument("--quantization", "-q", default="Q4_K_M",
-                        choices=["F16", "Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q4_K_M", "Q4_K_S", "Q4_0", "Q3_K_M", "Q2_K"],
-                        help="Quantization type (default: Q4_K_M)")
-    parser.add_argument("--llama-cpp", default="/tmp/llama.cpp",
-                        help="Path to llama.cpp checkout")
+    parser.add_argument(
+        "--quantization",
+        "-q",
+        default="Q4_K_M",
+        choices=["F16", "Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q4_K_M", "Q4_K_S", "Q4_0", "Q3_K_M", "Q2_K"],
+        help="Quantization type (default: Q4_K_M)",
+    )
+    parser.add_argument("--llama-cpp", default="/tmp/llama.cpp", help="Path to llama.cpp checkout")
     args = parser.parse_args()
 
     input_path = os.path.abspath(args.input)
@@ -69,7 +72,7 @@ def main():
         print("\n[1/2] Converting HuggingFace -> FP16 GGUF...")
         result = subprocess.run(
             [sys.executable, convert_script, input_path, "--outfile", fp16_path, "--outtype", "f16"],
-            capture_output=False
+            capture_output=False,
         )
         if result.returncode != 0:
             print("Error during conversion!")
@@ -100,10 +103,7 @@ def main():
             shutil.copy(fp16_path, output_path)
         else:
             print(f"\n[2/2] Quantizing to {args.quantization}...")
-            result = subprocess.run(
-                [quantize_bin, fp16_path, output_path, args.quantization],
-                capture_output=False
-            )
+            result = subprocess.run([quantize_bin, fp16_path, output_path, args.quantization], capture_output=False)
             if result.returncode != 0:
                 print("Quantization failed!")
                 sys.exit(1)

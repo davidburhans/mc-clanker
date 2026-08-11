@@ -18,6 +18,7 @@ def app_client():
 @pytest.fixture(autouse=True)
 def init_db():
     from app.db import DatabaseManager
+
     db = DatabaseManager.get_instance()
     db.create_tables()
 
@@ -39,9 +40,16 @@ def mock_auth_user():
     return user
 
 
-def _make_mock_interaction(show_id=1, loop_index=1, action_type="retain",
-                           bpm=128.0, key="C", instruments=None, set_name="Verse",
-                           reasoning="Keeping the groove"):
+def _make_mock_interaction(
+    show_id=1,
+    loop_index=1,
+    action_type="retain",
+    bpm=128.0,
+    key="C",
+    instruments=None,
+    set_name="Verse",
+    reasoning="Keeping the groove",
+):
     """Helper to create a mock LLMInteraction row."""
     interaction = MagicMock()
     interaction.id = loop_index
@@ -100,7 +108,7 @@ class TestReasoningLogsSearch:
 
     def test_search_requires_auth(self, app_client):
         """Unauthenticated request returns 401 when password is set."""
-        with patch.object(state, 'dj_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
             response = app_client.get("/api/llm-config/reasoning-logs?show_id=1")
             assert response.status_code == 401
 
@@ -205,7 +213,7 @@ class TestReasoningLogsExport:
     """Tests for GET /api/llm-config/reasoning-logs/export."""
 
     def test_export_requires_auth(self, app_client):
-        with patch.object(state, 'dj_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
             response = app_client.get("/api/llm-config/reasoning-logs/export?show_id=1")
             assert response.status_code == 401
 
@@ -235,7 +243,7 @@ class TestReasoningTimeline:
     """Tests for GET /api/llm-config/reasoning-timeline."""
 
     def test_timeline_requires_auth(self, app_client):
-        with patch.object(state, 'dj_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
             response = app_client.get("/api/llm-config/reasoning-timeline?show_id=1")
             assert response.status_code == 401
 
@@ -265,10 +273,12 @@ class TestReasoningTimeline:
     def test_timeline_segments(self, app_client, mock_auth_user):
         """Timeline returns segments with aggregated data."""
         interactions = [
-            _make_mock_interaction(loop_index=1, action_type="retain", bpm=128.0,
-                                   instruments=["Bass"], reasoning="Keep bass"),
-            _make_mock_interaction(loop_index=2, action_type="add", bpm=130.0,
-                                   instruments=["Bass", "Drums"], reasoning="Add drums"),
+            _make_mock_interaction(
+                loop_index=1, action_type="retain", bpm=128.0, instruments=["Bass"], reasoning="Keep bass"
+            ),
+            _make_mock_interaction(
+                loop_index=2, action_type="add", bpm=130.0, instruments=["Bass", "Drums"], reasoning="Add drums"
+            ),
         ]
 
         mock_session = MagicMock()
@@ -298,7 +308,7 @@ class TestReasoningStats:
     """Tests for GET /api/llm-config/reasoning-logs/stats."""
 
     def test_stats_requires_auth(self, app_client):
-        with patch.object(state, 'dj_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
             response = app_client.get("/api/llm-config/reasoning-logs/stats?show_id=1")
             assert response.status_code == 401
 
@@ -328,12 +338,13 @@ class TestReasoningStats:
     def test_stats_aggregates(self, app_client, mock_auth_user):
         """Stats correctly aggregate interaction data."""
         interactions = [
-            _make_mock_interaction(action_type="retain", bpm=128.0, key="C",
-                                   instruments=["Bass"], reasoning="Keep it"),
-            _make_mock_interaction(action_type="add", bpm=132.0, key="C",
-                                   instruments=["Bass", "Drums"], reasoning="Add drums"),
-            _make_mock_interaction(action_type="remove", bpm=130.0, key="C",
-                                   instruments=["Drums"], reasoning="Remove bass"),
+            _make_mock_interaction(action_type="retain", bpm=128.0, key="C", instruments=["Bass"], reasoning="Keep it"),
+            _make_mock_interaction(
+                action_type="add", bpm=132.0, key="C", instruments=["Bass", "Drums"], reasoning="Add drums"
+            ),
+            _make_mock_interaction(
+                action_type="remove", bpm=130.0, key="C", instruments=["Drums"], reasoning="Remove bass"
+            ),
         ]
 
         mock_session = MagicMock()

@@ -8,17 +8,21 @@ from app.framework.framework_state import state
 # Set test environment before importing modules
 os.environ["DATABASE_URL"] = ""  # Force SQLite for tests
 
+
 @pytest.fixture
 def app_client():
     """Returns a TestClient with the real app."""
     return TestClient(app)
 
+
 @pytest.fixture(autouse=True)
 def init_db():
     """Initialize DB tables."""
     from app.db import DatabaseManager
+
     db = DatabaseManager.get_instance()
     db.create_tables()
+
 
 @pytest.fixture(autouse=True)
 def reset_state():
@@ -28,6 +32,7 @@ def reset_state():
     state.dj_password = ""
     state.audience_password = ""
     yield
+
 
 @pytest.fixture
 def mock_auth_user():
@@ -45,21 +50,21 @@ class TestShowRoutes:
     def test_list_shows_unauthenticated(self, app_client):
         """Test listing shows without authentication returns 401 if password is set."""
         # Force authentication requirement by setting a password in state
-        with patch.object(state, 'dj_password', 'secret'):
-            with patch.object(state, 'audience_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
+            with patch.object(state, "audience_password", "secret"):
                 response = app_client.get("/api/shows")
                 # Should be 401 because we didn't provide credentials
                 assert response.status_code == 401
 
     def test_get_show_unauthenticated(self, app_client):
         """Test getting a show without authentication returns 401 if password is set."""
-        with patch.object(state, 'dj_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
             response = app_client.get("/api/shows/1")
             assert response.status_code == 401
 
     def test_create_show_unauthenticated(self, app_client):
         """Test creating a show without authentication returns 401 if password is set."""
-        with patch.object(state, 'dj_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
             response = app_client.post("/api/shows", json={"title": "New Show"})
             assert response.status_code == 401
 
@@ -67,7 +72,7 @@ class TestShowRoutes:
         """Test listing shows when user is authenticated via CompatUser or Mock."""
         # In this test, state.dj_password is empty, so AuthMiddleware allows access as CompatUser(id=0)
         # But we patch get_current_user_from_request to return our mock user (id=1)
-        
+
         mock_session = MagicMock()
         mock_session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.offset.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.count.return_value = 0
@@ -109,9 +114,12 @@ class TestShowRoutes:
     def test_get_show_not_owner(self, app_client, mock_auth_user):
         """Test getting a show that belongs to another user returns 404."""
         from fastapi import HTTPException
-        
+
         with patch("app.routes.shows.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("app.routes.shows.require_show_owner", side_effect=HTTPException(status_code=404, detail="Show not found")):
+            with patch(
+                "app.routes.shows.require_show_owner",
+                side_effect=HTTPException(status_code=404, detail="Show not found"),
+            ):
                 response = app_client.get("/api/shows/1")
 
         assert response.status_code == 404
@@ -122,7 +130,7 @@ class TestPlaybackIntegration:
 
     def test_start_playback_unauthenticated(self, app_client):
         """Test starting playback without authentication returns 401 if password is set."""
-        with patch.object(state, 'dj_password', 'secret'):
+        with patch.object(state, "dj_password", "secret"):
             response = app_client.post("/api/shows/1/playback/start")
             assert response.status_code == 401
 

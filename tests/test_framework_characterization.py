@@ -1007,9 +1007,9 @@ async def test_step_await_pregen_records_transition_from_mixer_event(monkeypatch
 
     record_calls = []
     monkeypatch.setattr(
-        state, "record_loop_transition",
-        lambda idx, stems, set_name, reason: record_calls.append(
-            (idx, list(stems), set_name, reason)),
+        state,
+        "record_loop_transition",
+        lambda idx, stems, set_name, reason: record_calls.append((idx, list(stems), set_name, reason)),
     )
     _patch_sleep_instant(monkeypatch)
 
@@ -1017,9 +1017,9 @@ async def test_step_await_pregen_records_transition_from_mixer_event(monkeypatch
 
     # WIRING: the idx from pop_transition_event flows through to the record call
     assert len(record_calls) == 1
-    assert record_calls[0][0] == 2                       # transitioned_loop_idx
+    assert record_calls[0][0] == 2  # transitioned_loop_idx
     assert record_calls[0][1] == list(state.active_stems)  # t_stems snapshot
-    assert record_calls[0][2] == "Test Set"              # t_set = current_set_name
+    assert record_calls[0][2] == "Test Set"  # t_set = current_set_name
     assert record_calls[0][3] == "transition reasoning"  # t_reason = llm_reasoning
     # Proves >= 2 iterations (transition consumed + exhausted flip)
     assert mixer.pop_calls >= 2
@@ -1037,7 +1037,7 @@ async def test_step_await_pregen_breaks_when_current_ahead_below_half_second(mon
     """
     loop = AsyncFrameworkLoop(uuid.uuid4())
     mixer = _FakeMixer(current_sample=0)  # transition_events=None (default)
-    mixer.current_loop_end_sample = 0     # current_ahead = (0-0)/44100 = 0.0
+    mixer.current_loop_end_sample = 0  # current_ahead = (0-0)/44100 = 0.0
     mixer._loop = loop
     loop.mixer = mixer
     loop.running = True
@@ -1046,16 +1046,16 @@ async def test_step_await_pregen_breaks_when_current_ahead_below_half_second(mon
 
     record_calls = []
     monkeypatch.setattr(
-        state, "record_loop_transition",
-        lambda idx, stems, set_name, reason: record_calls.append(
-            (idx, list(stems), set_name, reason)),
+        state,
+        "record_loop_transition",
+        lambda idx, stems, set_name, reason: record_calls.append((idx, list(stems), set_name, reason)),
     )
     _patch_sleep_instant(monkeypatch)
 
     await asyncio.wait_for(loop._step_await_pregen(), timeout=5.0)
 
     # Broke on the FIRST iteration via current_ahead < 0.5
-    assert mixer.pop_calls == 1            # exactly one pop → one iteration
-    assert record_calls == []              # no transition recorded
+    assert mixer.pop_calls == 1  # exactly one pop → one iteration
+    assert record_calls == []  # no transition recorded
     assert not loop._pregen_done.is_set()  # break was NOT from pre-gen-done
-    assert loop.running                     # running still True (break is local)
+    assert loop.running  # running still True (break is local)

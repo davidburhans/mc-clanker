@@ -3,6 +3,7 @@
 These test the full integration of all components:
 state_generator → prompt_builder → dataset_writer → checkpoint.
 """
+
 import json
 import os
 import tempfile
@@ -104,6 +105,7 @@ def test_all_batch_ids_unique_state():
 def test_harness_import_and_argparse(monkeypatch):
     """The harness module is importable and argparse works."""
     from slop_harness.harness import parse_args
+
     monkeypatch.setattr("sys.argv", ["harness", "--base-url", "http://test:999/v1", "--total", "100"])
     args = parse_args()
     assert args.base_url == "http://test:999/v1"

@@ -73,9 +73,7 @@ async def check_database() -> CheckResult:
                 hint="Expected format: postgresql://user:pass@host:port/db",
             )
 
-        conn = await asyncpg.connect(
-            user=user, password=password, host=host, port=port, database=db_name, timeout=5
-        )
+        conn = await asyncpg.connect(user=user, password=password, host=host, port=port, database=db_name, timeout=5)
         await conn.execute("SELECT 1")
         await conn.close()
         return CheckResult(
@@ -102,7 +100,7 @@ async def check_llm_server() -> CheckResult:
     base_url = os.environ.get("LLM_BASE_URL", "http://localhost:1234/v1")
     # Normalize: strip trailing slash, then try /models endpoint relative to the base
     # (The base URL already includes /v1, so we just append /models - not /v1/models)
-    models_url = base_url.rstrip('/') + "/models"
+    models_url = base_url.rstrip("/") + "/models"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(models_url)
@@ -188,7 +186,7 @@ def check_jwt_secret() -> CheckResult:
             category="recommended",
             name="jwt_secret",
             message="JWT_SECRET is using the default value",
-            hint="Set JWT_SECRET to a strong random string: python -c \"import secrets; print(secrets.token_urlsafe(32))\"",
+            hint='Set JWT_SECRET to a strong random string: python -c "import secrets; print(secrets.token_urlsafe(32))"',
         )
     return CheckResult(
         passed=True,
@@ -264,6 +262,7 @@ async def run_onboarding_checks() -> list[CheckResult]:
 # Config persistence — write .env file for docker-compose environments
 # -----------------------------------------------------------------------------
 
+
 def write_env_file(values: dict[str, str]) -> None:
     """Write config values to /app/.env (inside the web container).
 
@@ -299,6 +298,7 @@ def restart_services() -> None:
     """
     try:
         import subprocess
+
         compose_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docker")
         subprocess.run(
             ["docker", "compose", "-f", "compose.yaml", "restart", "web", "worker"],
