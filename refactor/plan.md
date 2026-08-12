@@ -1,5 +1,7 @@
 # Implementation Plan: E1–E6 Refactor of `framework_main_async.py`
 
+> **STATUS (2026-08-11 close-out): Phases 0–10 COMPLETE; Phase 11 (MixerController full port) DEFERRED.** The full `E,F,I,UP006,UP007,UP045` ruff rule set is now enforced and clean (0 errors); suite at **655 passed / 16 skipped**. E5 port-wiring: only `ConductorPort` is constructor-injected; the other three ports remain typing-only + delegate-method seams (accepted boundary — see §1.3). Tree is 17 commits ahead of `origin/main` (local-only). Per-phase completion is tracked by the ✅ markers in §4 (Definition of Done).
+
 > **Source of truth:** `refactor/explore/00–04_*.md`. All line anchors below were verified against `app/framework/framework_main_async.py` at baseline commit `906a49b` (542 passed). This plan executes the deferred work catalogued in `adversarial_review/00_FINAL_REPORT.md §4 (E1–E6)`.
 
 ## Goal
@@ -337,6 +339,7 @@ The 3 dead ModelMgmt attrs (`model_states`, `model_errors`, `download_progress`)
 - **Code:** add `[tool.ruff.lint]` with `select = ["E","F","UP006","UP007","UP045"]` (`F` already includes F401 — catches orphaned-import regressions going forward). **Stage `I` (import sorting) separately** — run `--select I --diff` first; if it churns >a handful of files, defer `I` to its own commit (it is orthogonal to E6).
 - **Verification:** `.venv/bin/python -m ruff check app/ tests/` exits 0 (or only pre-existing baseline items, **not increased**). pytest green.
 - **Commit:** `chore(ruff): enable UP006/UP007/UP045 lint enforcement (Phase 10)`
+- **Status: COMPLETE (2026-08-11 close-out).** The enforced set is the FULL `select = ["E","F","I","UP006","UP007","UP045"]` — `I` (import sorting) was staged separately per the spec above and landed in the close-out (commit `aab8b43`, `style(e10): enforce I (import sort)`). E/F landed in `b2999cc` (`style(e10): enforce E,F lint rules`); the repo-wide format sweep that greens `ruff format --check` landed in `1d77398`. `ruff check app/ tests/` → **"All checks passed!"** (0 debt). Regression checkpoint: `refactor/ruff_baseline.txt`.
 
 ### Phase 11 — *(OPTIONAL / DEFAULT-SKIPPED)* Full `MixerController` port 🔴 VERY HIGH RISK
 
@@ -352,7 +355,7 @@ The 3 dead ModelMgmt attrs (`model_states`, `model_errors`, `download_progress`)
 2. `_run_loop` → **≤ ~60 LOC** orchestrator calling `_step_*` methods, each **≤50 lines** (≤20 where achievable) EXCEPT `_step_commit_state` (~85–90, single-lock atomic — measured P11 body ~85; risk #3). Sub-decompose P11's action-log rebuild into a pure helper to keep the lock body itself tight. ✅ Phase 7a.
 3. `ruff check --select UP006,UP007,UP045,F401 app/ tests/` → **0**; default ruff (E+F) **must not increase** vs the re-baseline captured at the START of Phase 9 into `refactor/ruff_baseline.txt` (do NOT hardcode 735 — the count is ruff-version/scope-sensitive; re-measure with `.venv/bin/python -m ruff`). ✅ Phase 9–10.
 4. **No `typing.List/Dict/Tuple/Optional` in `app/framework/`** (guard test green). ✅ Phase 9.
-5. `.venv/bin/python -m pytest tests/ --timeout=30 -q` → **542 passed + all new characterization/regression tests green**, 0 failed. Every phase.
+5. `.venv/bin/python -m pytest tests/ --timeout=30 -q` → **542 passed + all new characterization/regression tests green**, 0 failed. Every phase. ✅ Close-out: **655 passed / 16 skipped / 0 failed** (113 net-new tests vs the 542 baseline).
 6. **Frozen API still importable** at `app.framework.framework_main_async` (`test_frozen_api_importable` green). ✅ Phase 7b.
 7. GlobalState slice views additive: `state.X` legacy access unchanged; `state.musical.X` live-view works; high-risk attrs not relocated. ✅ Phase 8.
 8. Cache divergence preserved: `test_pregeneration_does_not_route_through_cache_stem` + `test_foreground_loop_routes_through_cache_stem` both green. ✅ Phase 6.
