@@ -212,6 +212,20 @@ class _FakeMixer:
     def _ensure_stereo(self, audio):
         return audio
 
+    def prime_loop(self, tracks, *, duration_samples):
+        # Mirror real Mixer.prime_loop body minus the lock (no daemon contends
+        # on this fake). Routes through _add_track_internal so _maybe_stop("add")
+        # still fires for the stop_on=("add", N) termination harness.
+        start_sample = self.current_sample
+        for audio_data, stem_idx in tracks:
+            self._add_track_internal(self._ensure_stereo(audio_data), start_sample, stem_idx)
+        self.current_loop_end_sample = start_sample + duration_samples
+        self._current_loop_duration = duration_samples
+
+    def loop_position_seconds(self):
+        # Mirror real Mixer.loop_position_seconds (lock elided — no daemon).
+        return (self.current_loop_end_sample - self.current_sample) / self.sample_rate
+
 
 def _patch_sleep_instant(monkeypatch):
     """Collapse every asyncio.sleep so loop waits/backoffs don't hang."""

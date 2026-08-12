@@ -506,13 +506,9 @@ class _LoopSteps:
         if self._loop_idx == 1:
             # First loop: add tracks at the mixer's CURRENT position (not 0),
             # otherwise they are immediately treated as past tracks if generation
-            # took longer than we assumed.
-            with self.mixer.lock:
-                start_sample = self.mixer.current_sample
-                for audio_data, stem_idx in tracks_to_use:
-                    self.mixer._add_track_internal(self.mixer._ensure_stereo(audio_data), start_sample, stem_idx)
-                self.mixer.current_loop_end_sample = start_sample + duration_samples
-                self.mixer._current_loop_duration = duration_samples
+            # took longer than we assumed. The atomic batch lives inside
+            # Mixer.prime_loop (Phase 11 U3a migration off private reach).
+            self.mixer.prime_loop(tracks_to_use, duration_samples=duration_samples)
         else:
             # Subsequent loops: queue audio without touching current loop boundary.
             # The mixer will fire the transition when it reaches current_loop_end_sample
@@ -682,12 +678,10 @@ class _LoopSteps:
                     print(f"[AsyncLoop-{self._loop_idx}] Pre-generation complete, using results")
                     break
 
-                # Read current boundary from the mixer (under lock so we see
-                # transitions that may have already fired).
-                with self.mixer.lock:
-                    live_end = self.mixer.current_loop_end_sample
-                    live_pos = self.mixer.current_sample
-                current_ahead = (live_end - live_pos) / self.mixer.sample_rate
+                # Read current boundary via the public delegation (the mixer
+                # takes its own lock internally so we see transitions that may
+                # have already fired).
+                current_ahead = self.mixer.loop_position_seconds()
                 if self._loop_idx > 1:
                     print(
                         f"[AsyncLoop-{self._loop_idx}] DEBUG: "

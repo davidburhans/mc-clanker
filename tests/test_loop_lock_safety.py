@@ -94,15 +94,17 @@ async def test_record_loop_transition_runs_outside_state_lock(monkeypatch) -> No
 
 
 # --------------------------------------------------------------------------- #
-# Phase 11 U1 pins — P10 loop-1 single-lock batch + dual-lock ordering.
+# Phase 11 U1 pins — P10 loop-1 atomicity + dual-lock ordering (EVOLVED for U3).
 #
-# These freeze the CURRENT private-member reach the orchestrator takes into the
-# concrete ``Mixer`` (``lock``/``_add_track_internal``/``_ensure_stereo``/
-# ``current_loop_end_sample``/``_current_loop_duration``) so a future
-# MixerController port (refactor/plan.md Phase 11, default-deferred) cannot
-# silently split the atomic batch, reorder the writes, or introduce a cross-lock
-# deadlock. They are CHARACTERIZATION tests: GREEN at baseline, no production
-# code may change. They encode the four P11-U1 contract invariants.
+# U3 migrates the orchestrator off its private reach into the concrete
+# ``Mixer``. The atomicity invariant MOVES WITH THE CODE: the pins are evolved
+# (retargeted to the new home), never deleted. Post-U3a the loop-1 handoff is a
+# single ``self.mixer.prime_loop(...)`` call (no ``mixer.lock`` in loop_steps);
+# the atomicity now lives inside ``Mixer.prime_loop`` (pinned structurally below).
+# Post-U3b the P13 boundary read delegates to ``loop_position_seconds``. The
+# permanent source-guard (test_orchestrator_has_no_private_mixer_reach) makes the
+# zero-private-reach migration non-regressable. These are RED pre-U3 (TDD) and
+# GREEN once U3a + U3b both land.
 # --------------------------------------------------------------------------- #
 
 
@@ -128,6 +130,11 @@ def _is_state_lock_ctx(expr: ast.AST) -> bool:
     return _is_attr_chain(expr, "state", "lock")
 
 
+def _is_self_lock_ctx(expr: ast.AST) -> bool:
+    """Match ``self.lock`` (the sync threading.Lock inside the Mixer class)."""
+    return _is_attr_chain(expr, "self", "lock")
+
+
 def _lock_items(node: ast.AST) -> list[ast.AST]:
     """Context expressions of a With/AsyncWith's ``items`` (empty for non-with)."""
     if isinstance(node, (ast.With, ast.AsyncWith)):
@@ -139,11 +146,22 @@ def _loop_steps_tree() -> ast.Module:
     return ast.parse(Path("app/framework/loop_steps.py").read_text())
 
 
+def _framework_mixer_tree() -> ast.Module:
+    return ast.parse(Path("app/framework/framework_mixer.py").read_text())
+
+
 def _find_async_func(tree: ast.Module, name: str) -> ast.AsyncFunctionDef:
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name == name:
             return node
     raise AssertionError(f"async function {name!r} not found in loop_steps.py")
+
+
+def _find_func(tree: ast.Module, name: str) -> ast.FunctionDef:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"function {name!r} not found")
 
 
 def _descendant_locks(node: ast.AST, matcher) -> list[int]:
@@ -174,42 +192,82 @@ def _if_loop_idx_eq_one(func: ast.AsyncFunctionDef) -> ast.If:
     raise AssertionError("no `if self._loop_idx == 1:` found in _step_commit_to_mixer")
 
 
-def _assert_loop1_batch_writes(lock_block: ast.With) -> None:
-    """Pin the 4-statement shape of the single ``with self.mixer.lock:`` batch."""
+def _assert_batch_writes_shape(lock_block: ast.With, *, owner_chain: tuple[str, ...], iter_name: str) -> None:
+    """Pin the 4-statement shape of the single lock batch, generalized by owner.
+
+    The batch write shape is identical whether the lock holder is the
+    orchestrator (historical, ``self.mixer.*``) or the ``Mixer`` itself
+    (``self.*`` post-U3). ``owner_chain`` is the attribute-access prefix to the
+    Mixer (``("self", "mixer")`` or ``("self",)``); ``iter_name`` is the
+    loop-iteration variable (``tracks_to_use`` in loop_steps, ``tracks`` in
+    Mixer.prime_loop). The atomicity invariant moved WITH the code during U3a —
+    this is its new (and only) home.
+    """
     body = lock_block.body
     assert len(body) == 4, f"expected 4 stmts in lock batch, got {len(body)}"
 
-    # (1) start_sample = self.mixer.current_sample  (live read INSIDE the lock).
+    cur_sample = owner_chain + ("current_sample",)
+    add_internal = owner_chain + ("_add_track_internal",)
+    ensure_stereo = owner_chain + ("_ensure_stereo",)
+    loop_end = owner_chain + ("current_loop_end_sample",)
+    loop_dur = owner_chain + ("_current_loop_duration",)
+
+    # (1) start_sample = <owner>.current_sample  (live read INSIDE the lock).
     read_stmt = body[0]
     assert isinstance(read_stmt, ast.Assign) and len(read_stmt.targets) == 1
     assert isinstance(read_stmt.targets[0], ast.Name) and read_stmt.targets[0].id == "start_sample"
-    assert _is_attr_chain(read_stmt.value, "self", "mixer", "current_sample"), (
-        "batch must read self.mixer.current_sample INSIDE the lock"
-    )
+    assert _is_attr_chain(read_stmt.value, *cur_sample), f"batch must read {'.'.join(cur_sample)} INSIDE the lock"
 
-    # (2) for audio_data, stem_idx in tracks_to_use: self.mixer._add_track_internal(
-    #         self.mixer._ensure_stereo(audio_data), start_sample, stem_idx)
+    # (2) for audio_data, stem_idx in <iter_name>: <owner>._add_track_internal(
+    #         <owner>._ensure_stereo(audio_data), start_sample, stem_idx)
     loop_stmt = body[1]
-    assert isinstance(loop_stmt, ast.For) and _is_attr_chain(loop_stmt.iter, "tracks_to_use")
+    assert isinstance(loop_stmt, ast.For) and _is_attr_chain(loop_stmt.iter, iter_name)
     assert len(loop_stmt.body) == 1, "for-body must be the single _add_track_internal call"
     call = loop_stmt.body[0].value if isinstance(loop_stmt.body[0], ast.Expr) else loop_stmt.body[0]
-    assert isinstance(call, ast.Call) and _is_attr_chain(call.func, "self", "mixer", "_add_track_internal")
+    assert isinstance(call, ast.Call) and _is_attr_chain(call.func, *add_internal)
     assert len(call.args) >= 1 and isinstance(call.args[0], ast.Call)
-    assert _is_attr_chain(call.args[0].func, "self", "mixer", "_ensure_stereo"), (
-        "_add_track_internal's first arg must be self.mixer._ensure_stereo(audio_data)"
+    assert _is_attr_chain(call.args[0].func, *ensure_stereo), (
+        f"_add_track_internal's first arg must be {'.'.join(ensure_stereo)}(audio_data)"
     )
 
-    # (3) self.mixer.current_loop_end_sample = start_sample + duration_samples.
+    # (3) <owner>.current_loop_end_sample = start_sample + duration_samples.
     end_stmt = body[2]
     assert isinstance(end_stmt, ast.Assign) and len(end_stmt.targets) == 1
-    assert _is_attr_chain(end_stmt.targets[0], "self", "mixer", "current_loop_end_sample")
+    assert _is_attr_chain(end_stmt.targets[0], *loop_end)
     assert isinstance(end_stmt.value, ast.BinOp) and isinstance(end_stmt.value.op, ast.Add)
 
-    # (4) self.mixer._current_loop_duration = duration_samples.
+    # (4) <owner>._current_loop_duration = duration_samples.
     dur_stmt = body[3]
     assert isinstance(dur_stmt, ast.Assign) and len(dur_stmt.targets) == 1
-    assert _is_attr_chain(dur_stmt.targets[0], "self", "mixer", "_current_loop_duration")
+    assert _is_attr_chain(dur_stmt.targets[0], *loop_dur)
     assert isinstance(dur_stmt.value, ast.Name) and dur_stmt.value.id == "duration_samples"
+
+
+def _assert_loop1_calls_prime_loop(if_body: list[ast.stmt]) -> None:
+    """Pin the post-U3a loop-1 branch: a SINGLE ``self.mixer.prime_loop(...)`` call.
+
+    The inline 4-statement lock batch no longer lives in loop_steps.py — the
+    orchestrator delegates to ``Mixer.prime_loop`` (atomicity pinned on the Mixer
+    side by test_prime_loop_is_single_lock_batch). This asserts the branch body
+    is one ``ast.Expr`` wrapping the delegation, taking ``tracks_to_use``
+    positionally and ``duration_samples`` as a keyword (matching the
+    ``Mixer.prime_loop`` signature).
+    """
+    exprs = [s for s in if_body if isinstance(s, ast.Expr)]
+    assert len(exprs) == 1, f"loop-1 branch must be a single Expr call, got {len(exprs)}"
+    call = exprs[0].value
+    assert isinstance(call, ast.Call), "loop-1 branch body must be a Call"
+    assert _is_attr_chain(call.func, "self", "mixer", "prime_loop"), (
+        "loop-1 branch must call self.mixer.prime_loop(...)"
+    )
+    assert len(call.args) >= 1 and _is_attr_chain(call.args[0], "tracks_to_use"), (
+        "prime_loop must take tracks_to_use as first positional arg"
+    )
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "duration_samples" in kw, "prime_loop must pass duration_samples= keyword"
+    assert _is_attr_chain(kw["duration_samples"], "duration_samples"), (
+        "duration_samples must be the local duration_samples name"
+    )
 
 
 def _assert_set_next_loop_else(if_node: ast.If) -> None:
@@ -224,35 +282,66 @@ def _assert_set_next_loop_else(if_node: ast.If) -> None:
     )
 
 
-def test_step_commit_to_mixer_loop1_is_single_lock_batch() -> None:
-    """Invariant 1 (P10 atomicity): the loop-1 handoff is ONE atomic sync lock batch.
+def test_step_commit_to_mixer_loop1_is_single_prime_loop_call() -> None:
+    """Invariant 1 (P10 atomicity, post-U3a): the loop-1 handoff delegates to a
+    SINGLE ``self.mixer.prime_loop(...)`` call.
 
-    The batch (current_sample read → _add_track_internal+_ensure_stereo per track →
-    current_loop_end_sample write → _current_loop_duration write) must live inside a
-    SINGLE sync ``with self.mixer.lock:``. A Phase-11 port that splits it into two
-    lock acquisitions, reorders the writes, drops the _ensure_stereo wrap, or moves
-    the current_sample read outside the lock fails this structural pin. This is the
-    load-bearing guard against U2 promotion silently splitting the batch.
+    After U3a the inline 4-statement lock batch no longer lives in
+    loop_steps.py — the orchestrator calls ``Mixer.prime_loop`` (the abstraction
+    U2 added), and the atomicity invariant moved WITH the code into
+    ``Mixer.prime_loop`` (pinned by test_prime_loop_is_single_lock_batch below).
+    This pin now asserts: (a) the loop-1 branch is a single ``prime_loop`` Expr
+    call carrying the ``tracks_to_use`` positional arg + ``duration_samples``
+    keyword; (b) the ENTIRE ``_step_commit_to_mixer`` function has ZERO
+    ``with self.mixer.lock:`` blocks (the lock reach now lives inside Mixer). The
+    ``else`` set_next_loop branch is unchanged.
+
+    RED pre-U3a (the loop-1 branch is still the inline ``with self.mixer.lock:``
+    batch); GREEN once U3a lands.
     """
     func = _find_async_func(_loop_steps_tree(), "_step_commit_to_mixer")
     if_node = _if_loop_idx_eq_one(func)
 
-    # The loop-1 branch body is exactly ONE sync `with self.mixer.lock:`.
-    with_blocks = [s for s in if_node.body if isinstance(s, ast.With)]
-    assert len(with_blocks) == 1, "loop-1 branch must have exactly one `with self.mixer.lock:`"
-    lock_block = with_blocks[0]
-    assert _is_mixer_lock_ctx(lock_block.items[0].context_expr), "context must be self.mixer.lock"
-    assert not isinstance(lock_block, ast.AsyncWith), "must be SYNC with (threading.Lock), not async with"
+    # (a) loop-1 branch is a single prime_loop delegation.
+    _assert_loop1_calls_prime_loop(if_node.body)
 
-    # No other mixer.lock block hides in the function (promotion must not add one).
-    all_mixer_locks = _descendant_locks(func, _is_mixer_lock_ctx)
-    assert len(all_mixer_locks) == 1, f"expected exactly 1 mixer.lock block, got {all_mixer_locks}"
+    # (b) zero mixer.lock reach anywhere in _step_commit_to_mixer after U3a.
+    mixer_locks = _descendant_locks(func, _is_mixer_lock_ctx)
+    assert mixer_locks == [], f"_step_commit_to_mixer must not acquire mixer.lock after U3: {mixer_locks}"
 
-    _assert_loop1_batch_writes(lock_block)
     _assert_set_next_loop_else(if_node)
 
-    # R5: no `await` (and no open()) inside the mixer lock — it is a SYNC critical
-    # section; awaiting would stall the daemon _callback that also takes this lock.
+
+def test_prime_loop_is_single_lock_batch() -> None:
+    """Invariant 1 (P10 atomicity), post-U3 home: ``Mixer.prime_loop`` is ONE sync
+    ``with self.lock:`` holding the SAME 4-statement batch the loop-1 handoff used
+    to perform inline.
+
+    The atomicity invariant moved WITH the code during U3a: it no longer lives in
+    ``loop_steps._step_commit_to_mixer`` (now a single ``prime_loop`` call) but in
+    ``Mixer.prime_loop``. This asserts that home is a single sync lock batch with
+    the identical write shape (current_sample read → _add_track_internal+
+    _ensure_stereo per track → current_loop_end_sample → _current_loop_duration)
+    and that no await/open() leaks into the sync critical section (R5 guard,
+    relocated from the old loop_steps pin). GREEN from U2 (prime_loop was added
+    byte-for-byte); stays green through U3.
+    """
+    func = _find_func(_framework_mixer_tree(), "prime_loop")
+
+    with_blocks = [s for s in func.body if isinstance(s, ast.With)]
+    assert len(with_blocks) == 1, "prime_loop must have exactly one `with self.lock:`"
+    lock_block = with_blocks[0]
+    assert _is_self_lock_ctx(lock_block.items[0].context_expr), "context must be self.lock"
+    assert not isinstance(lock_block, ast.AsyncWith), "must be SYNC with (threading.Lock), not async with"
+
+    # Only one lock block in prime_loop (promotion must not split the batch).
+    all_self_locks = _descendant_locks(func, _is_self_lock_ctx)
+    assert len(all_self_locks) == 1, f"expected exactly 1 self.lock block, got {all_self_locks}"
+
+    # Inside Mixer the attribute chains are self.* (no .mixer indirection).
+    _assert_batch_writes_shape(lock_block, owner_chain=("self",), iter_name="tracks")
+
+    # R5 (relocated): no await/open() inside the sync critical section.
     bad = [
         f"L{c.lineno}:{type(c).__name__}"
         for c in ast.walk(lock_block)
@@ -262,7 +351,7 @@ def test_step_commit_to_mixer_loop1_is_single_lock_batch() -> None:
             or (isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "open")
         )
     ]
-    assert not bad, f"no I/O/await inside mixer.lock (R5 dual-lock deadlock surface): {bad}"
+    assert not bad, f"no I/O/await inside self.lock (R5 dual-lock deadlock surface): {bad}"
 
 
 def test_dual_lock_ordering_state_lock_holds_mixer_clear() -> None:
@@ -313,13 +402,20 @@ def test_no_mixer_lock_nests_state_lock() -> None:
     assert not violations, "mixer.lock must NEVER nest state.lock (R5 dual-lock deadlock): " + ", ".join(violations)
 
 
-def test_p13_state_lock_released_before_mixer_lock_read() -> None:
-    """Invariant 3b (P13 sequential): the state.lock snapshot is released before the mixer.lock read.
+def test_p13_delegates_boundary_read_no_mixer_lock() -> None:
+    """Invariant 3b (P13, post-U3b): boundary read delegates to loop_position_seconds.
 
-    P13 ``_step_await_pregen`` snapshots under ``async with state.lock:`` (L674),
-    then SEPARATELY reads the live boundary under ``with self.mixer.lock:`` (L687).
-    The two must be sequential siblings — never nested — so neither lock is held
-    across the other. Pinned structurally so a port cannot merge them.
+    After U3b ``_step_await_pregen`` no longer reaches ``self.mixer.lock`` — it
+    reads the live boundary via ``self.mixer.loop_position_seconds()`` (the
+    abstraction U2 added, which takes its own lock internally). Pinned
+    structurally: (a) P13 STILL snapshots under ``state.lock`` (transition
+    recording); (b) P13 has ZERO ``with self.mixer.lock:`` blocks; (c) P13 calls
+    ``self.mixer.loop_position_seconds()``. The dual-lock no-nesting invariant is
+    preserved (the concrete acquisition moved inside ``Mixer``); the
+    state.lock/mixer.lock nesting scan stays valid as a regression guard.
+
+    RED pre-U3b (P13 still reads the boundary under ``with self.mixer.lock:``);
+    GREEN once U3b lands.
     """
     func = _find_async_func(_loop_steps_tree(), "_step_await_pregen")
     state_blocks = [
@@ -328,9 +424,47 @@ def test_p13_state_lock_released_before_mixer_lock_read() -> None:
     mixer_blocks = [
         n for n in ast.walk(func) if isinstance(n, ast.With) and any(_is_mixer_lock_ctx(c) for c in _lock_items(n))
     ]
+    # (a) transition snapshot still happens under state.lock.
     assert state_blocks, "P13 must snapshot under state.lock"
-    assert mixer_blocks, "P13 must read the boundary under mixer.lock"
+    # (b) the orchestrator no longer acquires mixer.lock directly.
+    assert mixer_blocks == [], f"P13 must not acquire mixer.lock after U3 (uses loop_position_seconds): {mixer_blocks}"
+    # (c) the boundary read is delegated to the public abstraction.
+    delegates = [
+        n
+        for n in ast.walk(func)
+        if isinstance(n, ast.Call) and _is_attr_chain(n.func, "self", "mixer", "loop_position_seconds")
+    ]
+    assert delegates, "P13 must call self.mixer.loop_position_seconds()"
+    # Regression guard: state.lock must not nest mixer.lock (vacuous after U3 —
+    # 0 mixer blocks — but catches re-introduction of a merged dual-lock block).
     for sb in state_blocks:
         assert not _descendant_locks(sb, _is_mixer_lock_ctx), f"P13 state.lock (L{sb.lineno}) must not nest mixer.lock"
-    for mb in mixer_blocks:
-        assert not _descendant_locks(mb, _is_state_lock_ctx), f"P13 mixer.lock (L{mb.lineno}) must not nest state.lock"
+
+
+def test_orchestrator_has_no_private_mixer_reach() -> None:
+    """U3 invariant: loop_steps.py + loop_orchestrator.py reach ZERO Mixer privates.
+
+    After U3 the only orchestrator→Mixer handoffs are ``Mixer.prime_loop`` /
+    ``loop_position_seconds`` (plus the already-public ``clear``/``set_next_loop``/
+    ``pop_transition_event``/``sample_rate``/``current_sample``). No reference to
+    ``_add_track_internal`` / ``_ensure_stereo`` / ``_current_loop_duration``, and
+    no ``with self.mixer.lock:``, may remain in orchestrator source — that reach
+    now lives inside ``Mixer``. Scanned via AST (not text grep) so comments and
+    docstrings do not false-positive. ``current_loop_end_sample`` and
+    ``current_sample`` are intentionally NOT forbidden — both are declared public
+    on the ``MixerController`` Protocol.
+
+    RED pre-U3 (the orchestrator still reaches the privates inline at P10/P13);
+    GREEN once U3a + U3b both land. This is the permanent guard that keeps the
+    migration from regressing.
+    """
+    files = [Path("app/framework/loop_steps.py"), Path("app/framework/loop_orchestrator.py")]
+    forbidden_attrs = {"_add_track_internal", "_ensure_stereo", "_current_loop_duration"}
+    violations: list[str] = []
+    for src in files:
+        for node in ast.walk(ast.parse(src.read_text())):
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
+                violations.append(f"{src.name}:L{node.lineno} attr {node.attr}")
+            if isinstance(node, (ast.With, ast.AsyncWith)) and any(_is_mixer_lock_ctx(c) for c in _lock_items(node)):
+                violations.append(f"{src.name}:L{node.lineno} with self.mixer.lock")
+    assert not violations, f"orchestrator must not reach Mixer privates after U3: {violations}"

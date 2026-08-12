@@ -55,11 +55,13 @@ def _reset_mixer_state():
 class _LockSpyMixer:
     """Fake mixer recording whether ``mixer.lock`` is held at each P10 batch write.
 
-    P10's loop-1 branch performs three mutating operations under one
-    ``with self.mixer.lock:``: a ``_add_track_internal`` call and two attribute
-    assignments (``current_loop_end_sample`` / ``_current_loop_duration``). This
-    spy records ``lock.locked()`` at each via ``__setattr__`` + the call, so a
-    future port that splits the lock or reorders the writes fails the pin.
+    P10's loop-1 branch delegates to ``prime_loop`` (post-U3a), which performs
+    three mutating operations under one ``with self.lock:``: a
+    ``_add_track_internal`` call and two attribute assignments
+    (``current_loop_end_sample`` / ``_current_loop_duration``). This spy records
+    ``lock.locked()`` at each via ``__setattr__`` + the call, so a port that
+    splits the lock or reorders the writes fails the pin. ``prime_loop_calls``
+    confirms the delegation was the entry point (the TDD-red driver until U3a).
 
     Deterministic: the test drives ``_step_commit_to_mixer`` directly on one
     coroutine — no real racing threads — so the lock-held reading is unambiguous.
@@ -78,6 +80,7 @@ class _LockSpyMixer:
         self._current_loop_duration = None
         self.add_locked: list[bool] = []
         self.write_locked: dict[str, list[bool]] = {k: [] for k in self._SPY_TARGETS}
+        self.prime_loop_calls = 0
         object.__setattr__(self, "_armed", True)
 
     def _ensure_stereo(self, audio):
@@ -86,6 +89,25 @@ class _LockSpyMixer:
     def _add_track_internal(self, audio, start_sample, stem_idx):
         self.add_locked.append(self.lock.locked())
 
+    def prime_loop(self, tracks, *, duration_samples):
+        """Mirror real ``Mixer.prime_loop`` so the spy records lock-held at each write.
+
+        After U3a the orchestrator calls ``self.mixer.prime_loop(...)`` instead of
+        the inline batch; the delegation holds ``self.lock`` across the same four
+        writes (current_sample read → _add_track_internal+_ensure_stereo per track
+        → current_loop_end_sample → _current_loop_duration). The spy's
+        ``__setattr__`` + ``_add_track_internal`` record ``lock.locked()==True``
+        inside this lock, and ``prime_loop_calls`` confirms the delegation was the
+        entry point (the TDD-red driver until U3a lands).
+        """
+        self.prime_loop_calls += 1
+        with self.lock:
+            start_sample = self.current_sample
+            for audio_data, stem_idx in tracks:
+                self._add_track_internal(self._ensure_stereo(audio_data), start_sample, stem_idx)
+            self.current_loop_end_sample = start_sample + duration_samples
+            self._current_loop_duration = duration_samples
+
     def __setattr__(self, name, value):
         if getattr(self, "_armed", False) and name in self._SPY_TARGETS:
             self.write_locked[name].append(self.lock.locked())
@@ -93,14 +115,19 @@ class _LockSpyMixer:
 
 
 async def test_p10_loop1_holds_lock_during_every_batch_write() -> None:
-    """Invariant 2: the loop-1 P10 batch holds ``mixer.lock`` across all writes.
+    """Invariant 2: the loop-1 P10 delegation holds ``mixer.lock`` across all writes.
 
-    Drives ``_step_commit_to_mixer`` (loop_idx==1) directly so the lock-held
-    check is deterministic (no racing threads). The single
-    ``with self.mixer.lock:`` must still be held at the moment of EACH mutating
-    write — the ``_add_track_internal`` call, the ``current_loop_end_sample`` set,
-    and the ``_current_loop_duration`` set. A split-lock promotion would record a
-    ``False`` here.
+    After U3a ``_step_commit_to_mixer`` (loop_idx==1) delegates to
+    ``self.mixer.prime_loop(...)``, which holds a SINGLE ``with self.lock:`` across
+    the same batch. Drives ``_step_commit_to_mixer`` directly so the lock-held
+    check is deterministic (no racing threads). The lock must still be held at the
+    moment of EACH mutating write — the ``_add_track_internal`` call, the
+    ``current_loop_end_sample`` set, and the ``_current_loop_duration`` set — and
+    the delegation must be the entry point (``prime_loop_calls == 1``). A
+    split-lock promotion, or a regression to the inline batch, fails here.
+
+    RED pre-U3a (the orchestrator still runs the inline batch, so
+    ``prime_loop_calls == 0``); GREEN once U3a lands.
     """
     loop = AsyncFrameworkLoop(uuid4())
     spy = _LockSpyMixer(current_sample=7777)
@@ -110,6 +137,7 @@ async def test_p10_loop1_holds_lock_during_every_batch_write() -> None:
 
     await loop._step_commit_to_mixer(False, tracks, 44100)
 
+    assert spy.prime_loop_calls == 1, "loop-1 handoff must delegate to prime_loop after U3a"
     assert spy.add_locked == [True], "mixer.lock not held during _add_track_internal"
     assert spy.write_locked["current_loop_end_sample"] == [True], (
         "mixer.lock not held during current_loop_end_sample write"

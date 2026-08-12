@@ -109,13 +109,12 @@ class AuditSinkPort(Protocol):
 class MixerController(Protocol):
     """Real-time audio mixer surface the orchestrator coordinates with.
 
-    P11-U2: ``prime_loop`` and ``loop_position_seconds`` now ENCAPSULATE the P10
-    loop-1 batch and the P13 boundary read that previously reached the concrete
-    ``Mixer`` privates (``lock``/``_add_track_internal``/``_ensure_stereo``/
-    ``_current_loop_duration``) directly. The privates remain as the backing
-    implementation and the orchestrator still reaches them inline (zero behavior
-    change); the U3 follow-up migrates the orchestrator to call these two
-    methods instead. The lock acquired inside both methods is the SAME
+    P11-U3 COMPLETE: ``prime_loop`` and ``loop_position_seconds`` now ENCAPSULATE
+    the P10 loop-1 batch and the P13 boundary read. The orchestrator no longer
+    reaches the concrete ``Mixer`` privates (``lock``/``_add_track_internal``/
+    ``_ensure_stereo``/``_current_loop_duration``) directly — it calls these two
+    methods instead. The privates remain solely as the backing implementation
+    inside ``Mixer``. The lock acquired inside both methods is the SAME
     ``threading.Lock`` the daemon ``_callback`` holds during the crossfade, so the
     dual-lock timing is preserved.
     """
