@@ -26,6 +26,7 @@ Usage:
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -62,7 +63,13 @@ class AsyncFrameworkLoop(_LoopSteps):
     invariants (single-lock P11 commit, no I/O inside ``state.lock``).
     """
 
-    def __init__(self, session_id: uuid.UUID, *, conductor: ConductorPort | None = None):
+    def __init__(
+        self,
+        session_id: uuid.UUID,
+        *,
+        conductor: ConductorPort | None = None,
+        mixer_factory: Callable[[], Mixer] | None = None,
+    ):
         """
         Initialize the async framework loop.
 
@@ -72,9 +79,17 @@ class AsyncFrameworkLoop(_LoopSteps):
                 Defaults to a real ``ConductorLLMAsync`` (which structurally
                 satisfies ``ConductorPort``); inject any ``ConductorPort`` fake
                 for in-memory testing.
+            mixer_factory: optional zero-arg callable that builds the ``Mixer``
+                (E5/R14 dependency injection). Defaults to the ``Mixer`` class
+                itself (callable as ``Mixer()``). Construction stays LAZY — the
+                factory runs inside ``start()``'s ``ThreadPoolExecutor``, not
+                here, so the event loop is never blocked by mixer init.
         """
         self.session_id = session_id
         self.mixer: Mixer | None = None
+        # Mixer factory (E5/R14): injectable for fakes; defaults to the real Mixer
+        # class. Construction stays LAZY — built in start()'s executor, not here.
+        self._mixer_factory: Callable[[], Mixer] = mixer_factory if mixer_factory is not None else Mixer
         # Driving port (E5): injectable for fakes; defaults to the real conductor.
         self.conductor: ConductorPort = conductor if conductor is not None else ConductorLLMAsync()
         self._garage: GarageClient | None = None  # Lazy GarageClient (injected or env-built)
@@ -112,7 +127,7 @@ class AsyncFrameworkLoop(_LoopSteps):
         # loop is never blocked by sounddevice init.
         assert self.mixer is None  # set in start() before _run_loop spawns
         with ThreadPoolExecutor(max_workers=1) as ex:
-            self.mixer = await asyncio.get_running_loop().run_in_executor(ex, Mixer)
+            self.mixer = await asyncio.get_running_loop().run_in_executor(ex, self._mixer_factory)
         assert self.mixer is not None  # just assigned above (run_in_executor returns Any)
         self.mixer.start()
         self.running = True

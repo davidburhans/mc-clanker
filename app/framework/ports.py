@@ -117,6 +117,11 @@ class MixerController(Protocol):
     inside ``Mixer``. The lock acquired inside both methods is the SAME
     ``threading.Lock`` the daemon ``_callback`` holds during the crossfade, so the
     dual-lock timing is preserved.
+
+    P11-U4 COMPLETE: the orchestrator now ctor-injects the mixer via a FACTORY
+    (``AsyncFrameworkLoop(session_id, *, mixer_factory=...)``); the default
+    factory IS the concrete ``Mixer`` class, so the real audio path is unchanged
+    (closes R14 / the E5 DI goal for the mixer surface).
     """
 
     sample_rate: int

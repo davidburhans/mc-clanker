@@ -145,11 +145,13 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 
 | File | Class/Functions | Responsibility |
 |------|-----------------|----------------|
-| `framework_main_async.py` | `AsyncFrameworkLoop` | Async DJ set orchestrator — coordinates conductor, jobs, fetching, mixing |
+| `framework_main_async.py` | (re-export shim) | Thin re-export shim — preserves the frozen public API; `AsyncFrameworkLoop` now lives in `loop_orchestrator.py` |
+| `loop_orchestrator.py` | `AsyncFrameworkLoop` | Async DJ set orchestrator — coordinates conductor, jobs, fetching, mixing; ctor-injects `ConductorPort` + `MixerController` (via `mixer_factory`) |
+| `ports.py` | `ConductorPort`, `MixerController`, `JobQueuePort`, `AudioFetchPort`, `AuditSinkPort` | Hexagonal port protocols (E5) |
 | `framework_state.py` | `GlobalState`, `state` | Thread-safe shared state |
 | `framework_conductor_async.py` | `ConductorLLMAsync`, `ConductorPromptBuilder` | Async LLM client, prompt construction, JSON parsing |
 | `framework_generator.py` | `GeneratorRegistry`, `generate_stem()` | Audio model management (Foundation-1, ACE-Step) |
-| `framework_mixer.py` | `Mixer` | Real-time mixing thread, MP3 broadcasting via FFmpeg |
+| `framework_mixer.py` | `Mixer` | Real-time mixing thread, MP3 broadcasting via FFmpeg; exposes the public `MixerController` surface (`prime_loop`, `loop_position_seconds`) |
 
 ### API Layer
 
