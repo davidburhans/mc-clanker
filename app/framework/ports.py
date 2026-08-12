@@ -109,11 +109,15 @@ class AuditSinkPort(Protocol):
 class MixerController(Protocol):
     """Real-time audio mixer surface the orchestrator coordinates with.
 
-    NOTE: declared for typing in this pass; the concrete ``Mixer`` still exposes
-    extra private members (``_add_track_internal``, ``_ensure_stereo``,
-    ``_current_loop_duration``, ``lock``) that the orchestrator reaches directly
-    at P10/P13. Promoting those to this surface is Phase 11 (default-deferred —
-    the dual-lock crossfade timing is audio-critical).
+    P11-U2: ``prime_loop`` and ``loop_position_seconds`` now ENCAPSULATE the P10
+    loop-1 batch and the P13 boundary read that previously reached the concrete
+    ``Mixer`` privates (``lock``/``_add_track_internal``/``_ensure_stereo``/
+    ``_current_loop_duration``) directly. The privates remain as the backing
+    implementation and the orchestrator still reaches them inline (zero behavior
+    change); the U3 follow-up migrates the orchestrator to call these two
+    methods instead. The lock acquired inside both methods is the SAME
+    ``threading.Lock`` the daemon ``_callback`` holds during the crossfade, so the
+    dual-lock timing is preserved.
     """
 
     sample_rate: int
@@ -135,3 +139,7 @@ class MixerController(Protocol):
     def start(self) -> None: ...
 
     def stop(self) -> None: ...
+
+    def prime_loop(self, tracks: list[tuple[np.ndarray, int]], *, duration_samples: int) -> None: ...
+
+    def loop_position_seconds(self) -> float: ...

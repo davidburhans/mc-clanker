@@ -97,6 +97,43 @@ class Mixer:
                 return self._last_transition_loop_index
         return None
 
+    def prime_loop(self, tracks: list[tuple[np.ndarray, int]], *, duration_samples: int) -> None:
+        """First-loop handoff: add tracks at the live position under one lock.
+
+        Byte-for-byte delegation of the P10 loop-1 batch in
+        ``loop_steps._step_commit_to_mixer`` (the ``self._loop_idx == 1`` branch):
+        read ``current_sample`` INSIDE ``self.lock``, add each track (mono-coerced
+        via ``_ensure_stereo``) at that live position, then set the boundary and
+        current-loop duration from the live position. Additive (P11-U2): the
+        orchestrator still reaches the privates inline; this method lets U3
+        migrate to the abstraction with zero behavior change.
+
+        Example::
+
+            m = Mixer()
+            m.prime_loop([(np.zeros((10, 2), np.float32), 0)], duration_samples=100)
+        """
+        with self.lock:
+            start_sample = self.current_sample
+            for audio_data, stem_idx in tracks:
+                self._add_track_internal(self._ensure_stereo(audio_data), start_sample, stem_idx)
+            self.current_loop_end_sample = start_sample + duration_samples
+            self._current_loop_duration = duration_samples
+
+    def loop_position_seconds(self) -> float:
+        """Seconds of playback headroom remaining before the current loop boundary.
+
+        Byte-for-byte delegation of the P13 ``current_ahead`` read in
+        ``loop_steps._step_await_pregen``: snapshot the live boundary + position
+        under one ``self.lock``, then divide by ``sample_rate`` (a constant read
+        outside the lock, matching P13). Positive = ahead of the boundary;
+        negative = behind schedule. Additive (P11-U2).
+        """
+        with self.lock:
+            live_end = self.current_loop_end_sample
+            live_pos = self.current_sample
+        return (live_end - live_pos) / self.sample_rate
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -108,6 +145,8 @@ class Mixer:
         if audio_data.shape[1] == 1:
             audio_data = np.repeat(audio_data, 2, axis=1)
         return audio_data
+
+    ensure_stereo = _ensure_stereo  # public alias (P11-U2): same staticmethod object
 
     def _extend_tracks_for_loop(self, loop_end_sample: int):
         """Extend current tracks to fill another loop iteration."""
