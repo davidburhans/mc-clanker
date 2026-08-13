@@ -13,13 +13,15 @@ Design notes:
   which STRUCTURALLY satisfies it after its ``param = None`` type lies were
   corrected). The framework core depends on the abstraction, not the concrete
   class — satisfying the CLAUDE.md dependency-inversion rule.
-- ``JobQueuePort`` (submit) / ``AudioFetchPort``: WIRED — the submit + fetch
-  paths are now ctor-injected (``jobs=...`` / ``audio=...``; see U2-jobs +
-  U1-audio). ``JobQueuePort`` ``await_jobs`` routing + ``AuditSinkPort``:
-  documented contracts, still reached through the orchestrator's delegate
-  methods (``_submit_job``'s await path / ``_append_loop_audit``), which tests
-  exercise via ``patch.object``. Promoting the await path to a full ctor-injected
-  port is deferred to U4; ``AuditSinkPort`` remains a future enhancement.
+- ``JobQueuePort`` (submit) / ``AudioFetchPort`` / ``AuditSinkPort`` (append):
+  WIRED — the submit, fetch, and append paths are now ctor-injected
+  (``jobs=...`` / ``audio=...`` / ``audit=...``; see U2-jobs + U1-audio +
+  U3-audit). ``JobQueuePort`` ``await_jobs`` routing + ``AuditSinkPort``
+  ``flush`` routing remain documented contracts, still reached through the
+  orchestrator's delegate seam (``_submit_job``'s await path / the module
+  ``flush_recording_buffers`` via ``shows.py``), which tests exercise via
+  ``patch.object``. Routing the await + flush paths through their injected ports
+  is deferred to U4.
 - ``MixerController`` is declared for documentation/typing only in this pass:
   the concrete ``Mixer`` is NOT yet fully behind it (the orchestrator still
   reaches a few private members at P10/P13 — see refactor/plan.md Phase 11,
@@ -110,7 +112,22 @@ class AudioFetchPort(Protocol):
 
 @runtime_checkable
 class AuditSinkPort(Protocol):
-    """Buffers and flushes the show audit trail (LLM interactions + actions)."""
+    """Buffers and flushes the show audit trail (LLM interactions + actions).
+
+    U3-AUDIT (APPEND) COMPLETE: the orchestrator now ctor-injects the audit-sink
+    port (``AsyncFrameworkLoop(session_id, *, audit=...)``); the default builds
+    ``AuditAdapter()`` EAGERLY (its ctor is a no-op — the DB session opens lazily
+    inside ``flush_recording_buffers`` at call time, and ``_flush_lock`` is
+    module-level, so there is no lazy/env path to preserve), and
+    ``_append_loop_audit`` routes through ``self._audit.append_loop`` (delegating
+    to the module ``append_loop_audit``), so the real append path is byte-for-byte
+    unchanged. Mirrors the U1-audio + U2-jobs + Phase 11 U4 seams. NOTE: only the
+    append path is wired — ``flush`` routing stays deferred to U4 (``shows.py``
+    still calls the module ``flush_recording_buffers`` directly — dual-ownership
+    preserved). The concrete ``AuditAdapter`` takes NO lock of its own; the
+    ``_flush_lock`` + ``state.lock`` semantics live in the wrapped module
+    functions (B13).
+    """
 
     async def append_loop(
         self,
