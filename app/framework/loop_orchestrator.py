@@ -44,13 +44,13 @@ from app.framework.conductor_interaction import (
 from app.framework.framework_conductor_async import ConductorLLMAsync
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_state import state
-from app.framework.job_queue import submit_generator_job
+from app.framework.job_queue import PostgresJobQueueAdapter
 from app.framework.loop_steps import (
     LOOP_RETRY_BACKOFF_SECONDS,
     _LoopSteps,
     _StepResult,
 )
-from app.framework.ports import AudioFetchPort, ConductorPort
+from app.framework.ports import AudioFetchPort, ConductorPort, JobQueuePort
 from app.framework.pregeneration import run_pregeneration
 from app.garage_client import GarageClient
 
@@ -70,6 +70,7 @@ class AsyncFrameworkLoop(_LoopSteps):
         conductor: ConductorPort | None = None,
         mixer_factory: Callable[[], Mixer] | None = None,
         audio: AudioFetchPort | None = None,
+        jobs: JobQueuePort | None = None,
     ):
         """
         Initialize the async framework loop.
@@ -94,6 +95,12 @@ class AsyncFrameworkLoop(_LoopSteps):
                 lazy-env path (test_audio_fetch_guard / characterization Gap 3).
                 An eager adapter stored here would bypass ``self._garage`` and
                 silently break those tests; see the ``_audio`` docstring.
+            jobs: optional job-queue port override (E5/U2 dependency injection),
+                inject any ``JobQueuePort`` fake for in-memory testing. Defaults
+                to a real ``PostgresJobQueueAdapter()`` (EAGER — its constructor
+                is a no-op; the DB session opens lazily inside submit at call
+                time, so unlike the audio port there is no lazy/env path to
+                preserve). Existing callers omitting it are unchanged.
         """
         self.session_id = session_id
         self.mixer: Mixer | None = None
@@ -110,6 +117,11 @@ class AsyncFrameworkLoop(_LoopSteps):
         # break test_audio_fetch_guard / characterization Gap 3, so the default
         # stays None (lazy). See the _audio property docstring.
         self._audio_adapter: AudioFetchPort | None = audio
+        # Job-queue port (U2-jobs, E5 DI): injectable for fakes; defaults to the
+        # real PostgresJobQueueAdapter (eager — its ctor is a no-op; the DB
+        # session is opened lazily inside submit_generator_job at call time, so
+        # there is no Gap-3-style lazy path to preserve — unlike _audio).
+        self._jobs: JobQueuePort = jobs if jobs is not None else PostgresJobQueueAdapter()
         self.running = False
         self.loop_task: asyncio.Task | None = None
         self.stem_cache: dict[str, dict] = {}  # cache_key -> {audio_data, last_used}
@@ -281,11 +293,15 @@ class AsyncFrameworkLoop(_LoopSteps):
         timbre_tags: list[str],
         bars: int,
     ) -> uuid.UUID:
-        """Submit a generation job; delegates to job_queue (Phase 5).
+        """Submit a generation job; delegates to the injected JobQueuePort (U2).
 
         Kept as a method so ``patch.object(loop, '_submit_job')`` keeps working.
+        Routes through ``self._jobs.submit`` (ctor-injected, defaults to
+        ``PostgresJobQueueAdapter``); identical signature + kwargs, so every
+        call site (loop_steps._step_submit_jobs, pregeneration.run_pregeneration)
+        and every test patch is transparent.
         """
-        return await submit_generator_job(
+        return await self._jobs.submit(
             session_id=session_id,
             instrument=instrument,
             prompt=prompt,

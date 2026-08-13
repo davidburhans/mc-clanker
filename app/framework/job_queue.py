@@ -5,6 +5,10 @@ instead of reaching into SQLAlchemy + the GeneratorJob model inline. The
 ``await_jobs`` helper wraps ``app.job_waiter.wait_for_multiple_jobs`` so that
 Phase 7b can route both submit + await through a single injected ``JobQueuePort``.
 
+``PostgresJobQueueAdapter`` is the concrete ``JobQueuePort``: the submit path is
+now constructor-injected into ``AsyncFrameworkLoop`` (U2). The module functions
+below are kept intact — the adapter WRAPS them (do not delete).
+
 NOTE: the foreground ``_run_loop`` and background ``_pre_generate_next_loop``
 still call ``wait_for_multiple_jobs`` via the ``framework_main_async`` module
 binding (the Gap 4/5/6 characterization tests monkeypatch THAT binding). Routing
@@ -78,3 +82,61 @@ async def await_jobs(job_ids: Sequence[uuid.UUID], timeout: float = 120.0) -> di
     from app.job_waiter import wait_for_multiple_jobs
 
     return await wait_for_multiple_jobs(list(job_ids), timeout=timeout)
+
+
+class PostgresJobQueueAdapter:
+    """Postgres generator-job adapter: wraps the module submit/await functions.
+
+    The only production ``JobQueuePort`` implementation. Construction is a no-op
+    (the DB session is opened lazily inside ``submit_generator_job`` at call
+    time), so a default ``PostgresJobQueueAdapter()`` may be eagerly stored in
+    ``AsyncFrameworkLoop.__init__`` without touching the DB — unlike the audio
+    port, there is no env-client / lazy-Garage path to preserve.
+
+    ``await_jobs`` is included so the adapter is STRUCTURALLY COMPLETE against
+    ``JobQueuePort``; it is NOT wired into the loop yet (that rewire is U4 —
+    loop_steps/pregeneration still call ``wait_for_multiple_jobs`` directly).
+    """
+
+    async def submit(
+        self,
+        *,
+        session_id: uuid.UUID,
+        instrument: str,
+        prompt: str,
+        major_family: str,
+        model_id: str,
+        key: str,
+        bpm: int,
+        timbre_tags: list[str],
+        bars: int,
+    ) -> uuid.UUID:
+        """Insert one pending ``GeneratorJob`` row and return its id.
+
+        Delegates to the module function so the lazy ``app.db`` import + the
+        existing DB-session shape stay byte-for-byte unchanged.
+        """
+        return await submit_generator_job(
+            session_id=session_id,
+            instrument=instrument,
+            prompt=prompt,
+            major_family=major_family,
+            model_id=model_id,
+            key=key,
+            bpm=bpm,
+            timbre_tags=timbre_tags,
+            bars=bars,
+        )
+
+    async def await_jobs(
+        self,
+        job_ids: Sequence[uuid.UUID],
+        timeout: float = 120.0,
+    ) -> dict[uuid.UUID, str | None]:
+        """Block until the jobs complete; return ``{job_id: audio_path_or_None}``.
+
+        Bare ``await_jobs`` resolves to the MODULE-LEVEL function below (class
+        scope is not an enclosing scope for methods), so this delegates, never
+        recurses. Not wired into the loop yet (U4).
+        """
+        return await await_jobs(job_ids, timeout=timeout)
