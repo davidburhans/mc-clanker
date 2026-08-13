@@ -1,6 +1,6 @@
 # Implementation Plan: E1–E6 Refactor of `framework_main_async.py`
 
-> **STATUS (Phase 11 close-out): Phases 0–11 COMPLETE — Phase 11 (MixerController full port) LANDED in four units: U1 pinning, U2 additive promotion, U3 migration, U4 ctor-injection.** The full `E,F,I,UP006,UP007,UP045` ruff rule set is enforced and clean (0 errors); suite at **680 passed / 16 skipped**. E5 port-wiring: `ConductorPort` + `MixerController` are now constructor-injected (the latter via a `mixer_factory` callable — see §1.3 + Phase 11 U4); the other three ports remain typing-only + delegate-method seams (accepted boundary — see §1.3). Per-phase completion is tracked by the ✅ markers in §4 (Definition of Done).
+> **STATUS (Phase 11 close-out): Phases 0–11 COMPLETE — Phase 11 (MixerController full port) LANDED in four units: U1 pinning, U2 additive promotion, U3 migration, U4 ctor-injection.** The full `E,F,I,UP006,UP007,UP045` ruff rule set is enforced and clean (0 errors); suite at **680 passed / 16 skipped**. E5 port-wiring: `ConductorPort`, `AudioFetchPort`, and `MixerController` are now constructor-injected (`MixerController` via a `mixer_factory` callable — see §1.3 + Phase 11 U4; `AudioFetchPort` via an additive `audio=...` keyword seam — see §1.3 + U1-audio); the remaining two ports (`JobQueuePort`, `AuditSinkPort`) stay typing-only + delegate-method seams (accepted boundary — see §1.3). Per-phase completion is tracked by the ✅ markers in §4 (Definition of Done).
 
 > **Source of truth:** `refactor/explore/00–04_*.md`. All line anchors below were verified against `app/framework/framework_main_async.py` at baseline commit `906a49b` (542 passed). This plan executes the deferred work catalogued in `adversarial_review/00_FINAL_REPORT.md §4 (E1–E6)`.
 
@@ -92,7 +92,7 @@ class JobQueuePort(Protocol):  # adapter: PostgresJobQueueAdapter (new, wraps _s
     async def await_jobs(self, job_ids: list[UUID], timeout: float = 120.0) -> dict[UUID, str | None]: ...
 
 
-class AudioFetchPort(Protocol):  # adapter: GarageAudioAdapter (new, wraps _fetch_audio)
+class AudioFetchPort(Protocol):  # adapter: GarageAudioAdapter (new, wraps _fetch_audio); ctor-injected (U1-audio)
     async def fetch(self, audio_path: str) -> np.ndarray | None: ...
 
 
@@ -113,12 +113,10 @@ class MixerController(Protocol):  # concrete Mixer satisfies structurally; publi
     def stop(self) -> None: ...
 ```
 
-**E5 port-wiring status (updated at Phase 11 close-out):** Of the five ports above, **`ConductorPort` and `MixerController` are constructor-injected** — `AsyncFrameworkLoop.__init__` accepts `conductor=...` (commit `344a28f`, the E5 driving port) and `mixer_factory=...` (Phase 11 U4, a `Callable[[], Mixer]` whose default IS the concrete `Mixer` class, so the real audio path is unchanged). `JobQueuePort`, `AudioFetchPort`, and `AuditSinkPort` are declared for **typing/documentation only**: the orchestrator still reaches them through internal delegate methods (`_submit_job`,
-`_fetch_audio`, `_append_loop_audit`), which tests exercise via `patch.object(loop, ...)`.
-Full keyword-injection of those remaining three ports (the Phase 7b
-`__init__(self, session_id, *, conductor, jobs, audio, audit, pregen)` spec) is **deferred**
+**E5 port-wiring status (updated post-Phase-11):** Of the five ports above, **`ConductorPort`, `AudioFetchPort`, and `MixerController` are constructor-injected** — `AsyncFrameworkLoop.__init__` accepts `conductor=...` (commit `344a28f`, the E5 driving port), `audio=...` (U1-audio, an `AudioFetchPort | None` keyword whose default builds `GarageAudioAdapter(self._garage)` LAZILY via the `_audio` property, preserving the Gap-3 `_garage`-injection + lazy-env path), and `mixer_factory=...` (Phase 11 U4, a `Callable[[], Mixer]` whose default IS the concrete `Mixer` class, so the real audio path is unchanged). `JobQueuePort` and `AuditSinkPort` remain declared for **typing/documentation only**: the orchestrator still reaches them through internal delegate methods (`_submit_job`, `_append_loop_audit`), which tests exercise via `patch.object(loop, ...)`.
+Full keyword-injection of the remaining two ports (`JobQueuePort`, `AuditSinkPort`) is **deferred**
 — the typing-only Protocol + delegate-method seam is accepted as the current boundary
-(option (a) of `refactor/review/final/quality.md` §E5). `MixerController` is now ctor-injected via a `mixer_factory` callable (Phase 11 U4) — see Phase 11 below.
+(option (a) of `refactor/review/final/quality.md` §E5). `MixerController` is now ctor-injected via a `mixer_factory` callable (Phase 11 U4); `AudioFetchPort` is now ctor-injected via an additive `audio=...` keyword seam (U1-audio) — see below.
 
 **Decision (updated post-Phase-11):** Mixer remains a **concrete dependency**, but is now reached ONLY through its public `MixerController`-satisfying surface (`prime_loop`, `loop_position_seconds`) — the orchestrator no longer reaches Mixer's private members (`_add_track_internal`, `_ensure_stereo`, `_current_loop_duration`, `mixer.lock`) directly (U3). The `Mixer` itself is constructor-injected via a `mixer_factory` callable (U4), matching the E5 DI seam. Phase 11 LANDED in four units (U1–U4); see §3 Phase 11 for detail. The dual-lock coordination (state.lock vs mixer.lock) invariants are pinned by structural + behavioral tests (risk #5 → RESOLVED).
 
@@ -356,6 +354,10 @@ The 3 dead ModelMgmt attrs (`model_states`, `model_errors`, `download_progress`)
 - **U4 ctor-injection — LANDED (branch `refactor/mixer-controller-inject`):** the orchestrator now takes the `Mixer` as a constructor-injected dependency via a **factory** (`Callable[[], Mixer]`) rather than hard-coding `Mixer()` inside `start()`. `AsyncFrameworkLoop.__init__` gains `mixer_factory: Callable[[], Mixer] | None = None` (stored as `self._mixer_factory`); the default factory IS the concrete `Mixer` class, so callers that omit the kwarg (e.g. `app_ui.py`, the 12+ test sites) are byte-for-byte unchanged. A FACTORY is injected (not a pre-built instance) because `Mixer` construction runs inside `start()`'s `ThreadPoolExecutor` (a blocking-construction hedge) — the factory preserves that lazy executor construction; the executor runs `self._mixer_factory`, never a bare `Mixer`. TDD-red suite `tests/test_mixer_injection.py` pins four properties: (1) omitting `mixer_factory` resolves to the concrete `Mixer` class (no change); (2) an injected factory is stored and resolves to the injected fake (real DI); (3) `start()` builds the mixer THROUGH the injected factory, not a real `Mixer` — the core U4 guard, exercised deterministically with no audio hardware and no real loop iteration; (4) the pre-existing `loop.mixer = <fake>` direct-assignment harness still works (the new seam is additive, never breaks it). The `MixerController` Protocol docstring in `ports.py` now notes the ctor-injection landed. This closes R14 (E5 DI goal for the mixer surface) and completes Phase 11.
 - **Risks respected:** risk #5 — **RESOLVED/MIGRATED**. The orchestrator no longer reaches `Mixer` privates (U3 source-guard `test_orchestrator_has_no_private_mixer_reach`); the P10 atomicity + dual-lock ordering invariants are PINNED (U1) and followed the code into `Mixer.prime_loop`/`loop_position_seconds` (U3). The `Mixer` is ctor-injected via a factory (U4) so the real-time audio path is byte-for-byte unchanged (default factory IS the concrete `Mixer` class). Mitigation status: **deferred → guarded → RESOLVED/MIGRATED**.
 
+### Post-Phase-11 — E5 port-wiring continuation (U1-audio) ✅ LANDED
+
+- **U1-audio — AudioFetchPort ctor-injection — LANDED (branch `refactor/audio-port-inject`):** a post-Phase-11 continuation of the E5 DI seam — `AsyncFrameworkLoop.__init__` now also accepts `audio: AudioFetchPort | None = None` (mirroring the Phase 11 U4 `mixer_factory` seam). The default is `None`, and the `_audio` property LAZILY builds `GarageAudioAdapter(self._garage)` on first read — preserving the Gap-3 `_garage`-injection + lazy-env path (the `test_audio_fetch_guard` invariant), so callers that omit the kwarg (e.g. `app_ui.py`, the test harness) are byte-for-byte unchanged. TDD-red suite `tests/test_audio_injection.py` pins: (1) omitting `audio` yields the concrete `GarageAudioAdapter` built lazily (no eager env client); (2) an injected `AudioFetchPort` fake is stored and reached by `_fetch_audio` (real DI); (3) the pre-existing `loop._audio_adapter` / `loop._audio` direct-assignment harness still works (the seam is additive, never breaks it). The `AudioFetchPort` Protocol docstring in `ports.py` now notes the ctor-injection landed.
+
 ---
 
 ## 4. Definition of Done (measurable gates)
@@ -388,7 +390,7 @@ The 3 dead ModelMgmt attrs (`model_states`, `model_errors`, `download_progress`)
 | R11 | PreGenerator gets a SEPARATE `stem_cache` → re-submits every job + duplicate stems (round-1 red-team) | high | Phase 6 | `PreGenerator(stem_cache=self.stem_cache, …)` shared; `test_pregen_skips_job_when_foreground_already_cached` |
 | R12 | `ruff UP --fix` orphans `from typing import …` → +24 F401 detonate at Phase 10 (round-1, verified empirically) | high | Phase 9 | fix command includes `F401`; gate `--select UP006,UP007,UP045,F401` → 0 |
 | R13 | "≤20-line steps" goal unachievable (measured P3=50,P10=47,P11=85) → hollow DoD (round-1) | medium | Phase 7a | DoD §2 revised to ≤50 / `_step_commit_state` ≤90; P11 action-log sub-decomposed |
-| R14 | Ports non-injectable (internal-only construction) → E5/CLAUDE.md DI goal silently unmet (round-1) | medium | Phase 7b + Phase 11 U4 | `ConductorPort` ctor-injected (Phase 7b); `MixerController` ctor-injected via `mixer_factory` callable (Phase 11 U4 — factory approach; construction stays LAZY in `start()`'s `ThreadPoolExecutor`); `test_loop_accepts_injected_fake_ports` + `tests/test_mixer_injection.py`. **DONE.** |
+| R14 | Ports non-injectable (internal-only construction) → E5/CLAUDE.md DI goal silently unmet (round-1) | medium | Phase 7b + Phase 11 U4 + U1-audio | `ConductorPort` ctor-injected (Phase 7b); `MixerController` ctor-injected via `mixer_factory` callable (Phase 11 U4 — factory approach; construction stays LAZY in `start()`'s `ThreadPoolExecutor`); `AudioFetchPort` ctor-injected via additive `audio=...` keyword seam (U1-audio — default builds `GarageAudioAdapter(self._garage)` LAZILY); `test_loop_accepts_injected_fake_ports` + `tests/test_mixer_injection.py` + `tests/test_audio_injection.py`. **DONE.** |
 
 ---
 

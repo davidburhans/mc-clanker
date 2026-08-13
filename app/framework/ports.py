@@ -80,7 +80,14 @@ class JobQueuePort(Protocol):
 
 @runtime_checkable
 class AudioFetchPort(Protocol):
-    """Fetches one stem's audio bytes from object storage and decodes to PCM."""
+    """Fetches one stem's audio bytes from object storage and decodes to PCM.
+
+    U1-AUDIO COMPLETE: the orchestrator now ctor-injects the audio-fetch port
+    (``AsyncFrameworkLoop(session_id, *, audio=...)``); the default builds
+    ``GarageAudioAdapter(self._garage)`` LAZILY via the ``_audio`` property
+    (preserving the Gap-3 ``_garage``-injection + lazy-env path), so the real
+    audio path is byte-for-byte unchanged. Mirrors the Phase 11 U4 mixer seam.
+    """
 
     async def fetch(self, audio_path: str) -> np.ndarray | None:
         """Return a ``(samples, 2)`` float32 ndarray, or ``None`` on miss/error."""
