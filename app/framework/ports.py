@@ -123,9 +123,11 @@ class AuditSinkPort(Protocol):
     ``_append_loop_audit`` routes through ``self._audit.append_loop`` (delegating
     to the module ``append_loop_audit``), so the real append path is byte-for-byte
     unchanged. Mirrors the U1-audio + U2-jobs + Phase 11 U4 seams. NOTE: only the
-    append path is wired — ``flush`` routing stays deferred to U4 (``shows.py``
-    still calls the module ``flush_recording_buffers`` directly — dual-ownership
-    preserved). The concrete ``AuditAdapter`` takes NO lock of its own; the
+    append path is wired into the loop — ``flush`` remains ``shows.py``-routed by
+    design (U4 confirmed the loop never calls flush; structurally complete via
+    ``AuditAdapter.flush`` → ``flush_recording_buffers`` — dual-ownership preserved
+    via the shared module ``_flush_lock``). The concrete ``AuditAdapter`` takes NO
+    lock of its own; the
     ``_flush_lock`` + ``state.lock`` semantics live in the wrapped module
     functions (B13).
     """
