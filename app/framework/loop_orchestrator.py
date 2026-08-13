@@ -328,6 +328,26 @@ class AsyncFrameworkLoop(_LoopSteps):
             bars=bars,
         )
 
+    async def _await_jobs(
+        self,
+        job_ids: list[uuid.UUID],
+        timeout: float = 120.0,
+    ) -> dict[uuid.UUID, str | None]:
+        """Await job completion; delegates to the injected JobQueuePort (U4).
+
+        Kept as a method so ``patch.object(loop, '_await_jobs')`` and the
+        ``loop._await_jobs = AsyncMock(...)`` direct-assignment harness keep
+        working (brief-02 ssD). Routes through ``self._jobs.await_jobs``
+        (ctor-injected, defaults to ``PostgresJobQueueAdapter``); identical
+        signature + kwargs, so every call site (loop_steps._step_await_jobs_fetch,
+        pregeneration.run_pregeneration) and every test patch is transparent.
+
+        Closes the Phase 7b landmine: the loop no longer reaches
+        ``wait_for_multiple_jobs`` directly — all five ports are now reached
+        through their port abstraction (R14 complete).
+        """
+        return await self._jobs.await_jobs(job_ids, timeout=timeout)
+
     async def _fetch_audio(self, audio_path: str) -> np.ndarray | None:
         """
         Fetch audio from Garage and decode to numpy array.

@@ -10,10 +10,10 @@ background path writes ONLY ``loop.stem_cache[cache_key]`` and NEVER calls
 Do not "unify" the two paths. ``loop.stem_cache`` is the loop's SINGLE shared
 cache dict (R11) — pass the loop, never give pre-gen its own cache.
 
-The patchable dependencies (conductor, _submit_job, _fetch_audio, _build_prompt)
-are reached through the ``loop`` instance so ``patch.object(loop, ...)`` in tests
-keeps working. ``wait_for_multiple_jobs`` is imported here directly (no test
-patches it — same as the foreground path).
+The patchable dependencies (conductor, _submit_job, _await_jobs, _fetch_audio,
+_build_prompt) are reached through the ``loop`` instance so ``patch.object(loop,
+...)`` in tests keeps working. The await path routes through ``loop._await_jobs``
+(U4); tests patch the loop delegate.
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from app.framework.conductor_interaction import (
     process_actions,
 )
 from app.framework.domain_audio import make_cache_key, tile_to_loop
-from app.job_waiter import wait_for_multiple_jobs
 
 
 async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, Any]) -> None:
@@ -105,7 +104,7 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
         # state.cache_stem is foreground-only (brief-01 risk #4 divergence).
         if pending_jobs:
             job_ids = [job_id for job_id, _, _ in pending_jobs]
-            results = await wait_for_multiple_jobs(job_ids, timeout=120.0)
+            results = await loop._await_jobs(job_ids, timeout=120.0)
 
             for job_id, orig_idx, cache_key in pending_jobs:
                 audio_path = results.get(job_id)

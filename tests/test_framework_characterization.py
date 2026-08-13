@@ -249,13 +249,11 @@ def _wire_loop_common(loop, *, conductor_response=None, conductor_side_effect=No
 def _wire_loop_no_io(loop, monkeypatch, *, response, pregen_sets_done=True):
     """Full no-I/O wiring for driving the real _run_loop.
 
-    Fakes conductor + _submit_job + wait_for_multiple_jobs + _fetch_audio +
+    Fakes conductor + _submit_job + _await_jobs + _fetch_audio +
     audit + pregen + asyncio.sleep so a loop drive touches no network/GPU/DB.
     Job results are empty ({}), so no audio is fetched and stems fall back to
     silence — enough to exercise the mixer handoff paths.
     """
-    import app.framework.loop_steps as steps
-
     loop.conductor.get_next_state_async = AsyncMock(return_value=response)
     loop._submit_job = AsyncMock(return_value=uuid.uuid4())
     loop._fetch_audio = AsyncMock(return_value=None)
@@ -269,7 +267,7 @@ def _wire_loop_no_io(loop, monkeypatch, *, response, pregen_sets_done=True):
         return None
 
     loop._pre_generate_next_loop = _fake_pregen
-    monkeypatch.setattr(steps, "wait_for_multiple_jobs", AsyncMock(return_value={}))
+    loop._await_jobs = AsyncMock(return_value={})
     _patch_sleep_instant(monkeypatch)
 
 
@@ -968,8 +966,6 @@ async def test_d0_p7_cached_stem_skips_job_submission(monkeypatch):
 async def test_d0_p8_foreground_fetch_routes_through_cache_stem(monkeypatch):
     """Foreground _run_loop calls state.cache_stem when a stem's audio is fetched
     (the divergence complement to the pregen path, which never calls it)."""
-    import app.framework.loop_steps as steps
-
     loop = AsyncFrameworkLoop(uuid.uuid4())
     _seed_loop_for_run(loop, current_sample=0, stop_on=("add", 1))
     state.active_stems = []  # add-only -> one submitted stem
@@ -981,7 +977,7 @@ async def test_d0_p8_foreground_fetch_routes_through_cache_stem(monkeypatch):
     # Override the no-IO wiring so a real audio path runs end-to-end.
     loop._submit_job = AsyncMock(return_value=job_id)
     loop._fetch_audio = AsyncMock(return_value=np.ones((100, 2), dtype=np.float32))
-    monkeypatch.setattr(steps, "wait_for_multiple_jobs", AsyncMock(return_value={job_id: "audio/x.aac"}))
+    loop._await_jobs = AsyncMock(return_value={job_id: "audio/x.aac"})
 
     with patch.object(state, "cache_stem") as cs:
         await asyncio.wait_for(loop._run_loop(), timeout=5.0)

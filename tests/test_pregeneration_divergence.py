@@ -68,7 +68,7 @@ async def test_pregeneration_does_not_route_through_cache_stem() -> None:
         patch.object(loop, "conductor") as mc,
         patch.object(loop, "_submit_job", new_callable=AsyncMock),
         patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio),
-        patch("app.framework.pregeneration.wait_for_multiple_jobs", new_callable=AsyncMock, return_value={}),
+        patch.object(loop, "_await_jobs", new_callable=AsyncMock, return_value={}),
         patch.object(state, "cache_stem") as cache_stem_mock,
     ):
         mc.get_next_state_async = AsyncMock(return_value=_add_response())
@@ -96,8 +96,9 @@ async def test_foreground_loop_routes_through_cache_stem() -> None:
 
     with (
         patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio) as fetch_mock,
-        patch(
-            "app.framework.loop_steps.wait_for_multiple_jobs",
+        patch.object(
+            loop,
+            "_await_jobs",
             new_callable=AsyncMock,
             return_value={job_id: "audio/x.aac"},
         ),
@@ -119,8 +120,9 @@ async def test_pregen_result_tracks_are_non_silent_when_audio_fetched() -> None:
         patch.object(loop, "conductor") as mc,
         patch.object(loop, "_submit_job", new_callable=AsyncMock, return_value=job_id),
         patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=audio),
-        patch(
-            "app.framework.pregeneration.wait_for_multiple_jobs",
+        patch.object(
+            loop,
+            "_await_jobs",
             new_callable=AsyncMock,
             return_value={job_id: "audio/x.aac"},
         ),
@@ -145,8 +147,9 @@ async def test_pregen_skips_job_when_stem_already_cached() -> None:
         patch.object(loop, "conductor") as mc,
         patch.object(loop, "_submit_job", new_callable=AsyncMock, return_value=job_id) as submit_a,
         patch.object(loop, "_fetch_audio", new_callable=AsyncMock, return_value=np.ones((10, 2), dtype=np.float32)),
-        patch(
-            "app.framework.pregeneration.wait_for_multiple_jobs",
+        patch.object(
+            loop,
+            "_await_jobs",
             new_callable=AsyncMock,
             return_value={job_id: "audio/x.aac"},
         ),

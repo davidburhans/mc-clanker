@@ -10,10 +10,12 @@ now constructor-injected into ``AsyncFrameworkLoop`` (U2). The module functions
 below are kept intact — the adapter WRAPS them (do not delete).
 
 NOTE: the foreground ``_run_loop`` and background ``_pre_generate_next_loop``
-still call ``wait_for_multiple_jobs`` via the ``framework_main_async`` module
-binding (the Gap 4/5/6 characterization tests monkeypatch THAT binding). Routing
-those calls through ``await_jobs`` is deferred to Phase 7b, where the port is
-injected and the test harness patches the fake adapter instead.
+both now await through the injected ``JobQueuePort`` via the loop's
+``_await_jobs`` delegate (U4 — Phase 7b complete). The Gap 4/5/6
+characterization tests now patch the loop delegate (``patch.object(loop,
+'_await_jobs')``) instead of the module binding. ``PostgresJobQueueAdapter``
+wraps this module's ``await_jobs`` (which still wraps
+``wait_for_multiple_jobs``), so the real await path is byte-for-byte unchanged.
 """
 
 from __future__ import annotations
@@ -76,8 +78,8 @@ async def submit_generator_job(
 async def await_jobs(job_ids: Sequence[uuid.UUID], timeout: float = 120.0) -> dict[uuid.UUID, str | None]:
     """Block until the jobs complete; return ``{job_id: audio_path_or_None}``.
 
-    Thin wrapper over the LISTEN/NOTIFY waiter. Not yet wired into the loop
-    (see module docstring); provided so Phase 7b's injected port reuses it.
+    Thin wrapper over the LISTEN/NOTIFY waiter. Now wired into the loop via
+    ``_await_jobs`` (U4); the injected ``JobQueuePort`` reuses it.
     """
     from app.job_waiter import wait_for_multiple_jobs
 
@@ -93,9 +95,9 @@ class PostgresJobQueueAdapter:
     ``AsyncFrameworkLoop.__init__`` without touching the DB — unlike the audio
     port, there is no env-client / lazy-Garage path to preserve.
 
-    ``await_jobs`` is included so the adapter is STRUCTURALLY COMPLETE against
-    ``JobQueuePort``; it is NOT wired into the loop yet (that rewire is U4 —
-    loop_steps/pregeneration still call ``wait_for_multiple_jobs`` directly).
+    ``await_jobs`` is included and now WIRED into the loop: the loop's
+    ``_await_jobs`` delegate routes through ``self._jobs.await_jobs`` (U4 —
+    Phase 7b / R14 complete).
     """
 
     async def submit(
@@ -137,6 +139,6 @@ class PostgresJobQueueAdapter:
 
         Bare ``await_jobs`` resolves to the MODULE-LEVEL function below (class
         scope is not an enclosing scope for methods), so this delegates, never
-        recurses. Not wired into the loop yet (U4).
+        recurses. Now wired into the loop via ``_await_jobs`` (U4).
         """
         return await await_jobs(job_ids, timeout=timeout)

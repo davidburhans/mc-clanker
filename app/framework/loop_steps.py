@@ -9,7 +9,7 @@ the thin ``_run_loop`` driver, and the adapter delegates.
 The mixin references ``self.*`` instance attributes set in
 ``AsyncFrameworkLoop.__init__`` (``mixer``/``stem_cache``/``_loop_idx``/
 ``_pregen_*``/``conductor``/...) and the adapter delegates (``_build_prompt`` /
-``_submit_job`` / ``_fetch_audio`` / ``_append_loop_audit`` /
+``_submit_job`` / ``_await_jobs`` / ``_fetch_audio`` / ``_append_loop_audit`` /
 ``_pre_generate_next_loop``) defined on the orchestrator — all resolved at runtime
 via MRO, so ``patch.object(loop, '_submit_job')`` keeps working unchanged.
 
@@ -39,7 +39,6 @@ from app.framework.conductor_interaction import (
 )
 from app.framework.domain_audio import make_cache_key, tile_to_loop
 from app.framework.framework_state import state
-from app.job_waiter import wait_for_multiple_jobs
 
 if TYPE_CHECKING:
     import uuid
@@ -143,6 +142,14 @@ class _LoopSteps:
         bars: int,
     ) -> uuid.UUID:
         """Delegate provided by ``AsyncFrameworkLoop``."""
+        raise NotImplementedError
+
+    async def _await_jobs(
+        self,
+        job_ids: list[uuid.UUID],
+        timeout: float = 120.0,
+    ) -> dict[uuid.UUID, str | None]:
+        """Delegate provided by ``AsyncFrameworkLoop`` (U4)."""
         raise NotImplementedError
 
     async def _fetch_audio(self, audio_path: str) -> np.ndarray | None:
@@ -444,7 +451,7 @@ class _LoopSteps:
             print(f"[AsyncLoop-{self._loop_idx}] Waiting for {len(job_ids)} jobs to complete...")
             wait_start = time.time()
 
-            results = await wait_for_multiple_jobs(job_ids, timeout=120.0)
+            results = await self._await_jobs(job_ids, timeout=120.0)
 
             wait_duration = time.time() - wait_start
             print(f"[AsyncLoop-{self._loop_idx}] Jobs completed in {wait_duration:.2f}s")

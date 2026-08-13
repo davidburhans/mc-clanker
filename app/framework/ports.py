@@ -13,15 +13,15 @@ Design notes:
   which STRUCTURALLY satisfies it after its ``param = None`` type lies were
   corrected). The framework core depends on the abstraction, not the concrete
   class — satisfying the CLAUDE.md dependency-inversion rule.
-- ``JobQueuePort`` (submit) / ``AudioFetchPort`` / ``AuditSinkPort`` (append):
-  WIRED — the submit, fetch, and append paths are now ctor-injected
-  (``jobs=...`` / ``audio=...`` / ``audit=...``; see U2-jobs + U1-audio +
-  U3-audit). ``JobQueuePort`` ``await_jobs`` routing + ``AuditSinkPort``
-  ``flush`` routing remain documented contracts, still reached through the
-  orchestrator's delegate seam (``_submit_job``'s await path / the module
-  ``flush_recording_buffers`` via ``shows.py``), which tests exercise via
-  ``patch.object``. Routing the await + flush paths through their injected ports
-  is deferred to U4.
+- ``JobQueuePort`` (submit + await) / ``AudioFetchPort`` / ``AuditSinkPort`` (append):
+  WIRED — the submit, await, fetch, and append paths are now ctor-injected
+  (``jobs=...`` / ``audio=...`` / ``audit=...``; see U2-jobs + U4-await +
+  U1-audio + U3-audit). R14 is complete: all five ports are ctor-injected AND
+  reached through their port abstraction. ``AuditSinkPort`` ``flush`` routing
+  remains a documented contract, reached through the module
+  ``flush_recording_buffers`` via ``shows.py`` (the loop never calls flush —
+  zero behavior change; dual-ownership preserved), which tests exercise via
+  ``patch.object``.
 - ``MixerController`` is declared for documentation/typing only in this pass:
   the concrete ``Mixer`` is NOT yet fully behind it (the orchestrator still
   reaches a few private members at P10/P13 — see refactor/plan.md Phase 11,
@@ -67,10 +67,11 @@ class JobQueuePort(Protocol):
     opens lazily inside ``submit`` at call time, so unlike the audio port there
     is no lazy-env / Gap-3 path to preserve), and ``_submit_job`` routes through
     ``self._jobs.submit``, so the real submit path is byte-for-byte unchanged.
-    Mirrors the U1-audio audio seam + the Phase 11 U4 mixer seam. NOTE: only the
-    submit path is wired — ``await_jobs`` routing stays deferred to U4 (the
-    foreground/background loop paths still call ``wait_for_multiple_jobs``
-    directly, which the Gap 4/5/6 characterization tests monkeypatch).
+    Mirrors the U1-audio audio seam + the Phase 11 U4 mixer seam. U4-AWAIT
+    COMPLETE: ``await_jobs`` is now also wired — the loop's ``_await_jobs``
+    delegate routes through ``self._jobs.await_jobs`` (R14 complete; the
+    foreground/background loop paths no longer call ``wait_for_multiple_jobs``
+    directly).
     """
 
     async def submit(
