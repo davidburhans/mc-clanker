@@ -50,7 +50,7 @@ from app.framework.loop_steps import (
     _LoopSteps,
     _StepResult,
 )
-from app.framework.ports import ConductorPort
+from app.framework.ports import AudioFetchPort, ConductorPort
 from app.framework.pregeneration import run_pregeneration
 from app.garage_client import GarageClient
 
@@ -69,6 +69,7 @@ class AsyncFrameworkLoop(_LoopSteps):
         *,
         conductor: ConductorPort | None = None,
         mixer_factory: Callable[[], Mixer] | None = None,
+        audio: AudioFetchPort | None = None,
     ):
         """
         Initialize the async framework loop.
@@ -84,6 +85,15 @@ class AsyncFrameworkLoop(_LoopSteps):
                 itself (callable as ``Mixer()``). Construction stays LAZY — the
                 factory runs inside ``start()``'s ``ThreadPoolExecutor``, not
                 here, so the event loop is never blocked by mixer init.
+            audio: optional audio-fetch port override (E5/U1 dependency
+                injection), inject any ``AudioFetchPort`` fake for in-memory
+                testing. Defaults to None: the ``_audio`` property then LAZILY
+                builds ``GarageAudioAdapter(self._garage)`` — NOT an eager
+                ``GarageAudioAdapter(None)``, because reading ``self._garage``
+                inside the property preserves the Gap-3 ``_garage``-injection +
+                lazy-env path (test_audio_fetch_guard / characterization Gap 3).
+                An eager adapter stored here would bypass ``self._garage`` and
+                silently break those tests; see the ``_audio`` docstring.
         """
         self.session_id = session_id
         self.mixer: Mixer | None = None
@@ -93,7 +103,13 @@ class AsyncFrameworkLoop(_LoopSteps):
         # Driving port (E5): injectable for fakes; defaults to the real conductor.
         self.conductor: ConductorPort = conductor if conductor is not None else ConductorLLMAsync()
         self._garage: GarageClient | None = None  # Lazy GarageClient (injected or env-built)
-        self._audio_adapter: GarageAudioAdapter | None = None  # Lazy GarageAudioAdapter
+        # Audio-fetch port (U1-audio, E5 DI): injectable for fakes. When None the
+        # _audio property lazily builds GarageAudioAdapter(self._garage) —
+        # PRESERVING the Gap-3 _garage injection + lazy-env path. An eager
+        # GarageAudioAdapter(None) here would bypass self._garage and silently
+        # break test_audio_fetch_guard / characterization Gap 3, so the default
+        # stays None (lazy). See the _audio property docstring.
+        self._audio_adapter: AudioFetchPort | None = audio
         self.running = False
         self.loop_task: asyncio.Task | None = None
         self.stem_cache: dict[str, dict] = {}  # cache_key -> {audio_data, last_used}
@@ -104,20 +120,31 @@ class AsyncFrameworkLoop(_LoopSteps):
         self._loop_idx = 0  # Advanced by _step_wait_for_start (P1) on each PROCEED iteration
 
     @property
-    def _audio(self) -> GarageAudioAdapter:
-        """Lazily create the Garage audio-fetch adapter (Phase 2).
+    def _audio(self) -> AudioFetchPort:
+        """Resolve the audio-fetch port, building the default lazily (Phase 2).
 
-        Reads ``self._garage`` (the raw, possibly-None instance attr) on purpose,
-        not an eager ``create_garage_client_from_env()`` call: a test may inject a
-        preset client (Gap 3 sets ``loop._garage``), AND client creation must happen
-        inside the adapter's fetch try/except via
-        ``audio_fetch.create_garage_client_from_env`` — calling the factory eagerly
+        When ``audio`` was ctor-injected, ``self._audio_adapter`` holds it and is
+        returned verbatim (real DI). When omitted, ``_audio_adapter`` is None and
+        this builds ``GarageAudioAdapter(self._garage)`` LAZILY — reading the raw
+        ``_garage`` attr (not an eager ``create_garage_client_from_env()``), so a
+        test may preset ``loop._garage`` AND client creation happens inside
+        ``fetch``'s try/except via ``audio_fetch.create_garage_client_from_env``
+        (the Gap-3 / test_audio_fetch_guard invariant). Calling the factory eagerly
         here would raise KeyError when Garage env is unset and break the migrated
         string-patches / the empty-bytes / exception None paths.
         """
         if self._audio_adapter is None:
             self._audio_adapter = GarageAudioAdapter(self._garage)
         return self._audio_adapter
+
+    @_audio.setter
+    def _audio(self, value: AudioFetchPort | None) -> None:
+        """Inject/replace the audio-fetch port (additive seam; mirrors mixer).
+
+        Writing None resets to the lazy default (the property then rebuilds from
+        ``_garage``), matching the Gap-3 ``loop._audio_adapter = None`` reset.
+        """
+        self._audio_adapter = value
 
     async def start(self):
         """Start the mixer thread + the async generation loop task."""
