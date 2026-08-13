@@ -186,3 +186,38 @@ async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
         )
         for action in actions:
             state.action_buffer.append(_audit_action_row(show_id, loop_idx, now, relative_ms, action, active_stems))
+
+
+class AuditAdapter:
+    """Postgres audit-trail adapter: wraps the module append/flush functions.
+
+    The only production ``AuditSinkPort`` implementation. Construction is a
+    no-op (the DB session opens lazily inside ``flush_recording_buffers`` at
+    call time), so a default ``AuditAdapter()`` may be eagerly stored in
+    ``AsyncFrameworkLoop.__init__`` without touching the DB or acquiring locks.
+
+    ``append_loop`` delegates to the module ``append_loop_audit`` (note the
+    method-vs-module name skew: the port's ``append_loop`` maps to the module
+    ``append_loop_audit``). ``flush`` delegates to ``flush_recording_buffers``.
+    The adapter takes NO lock of its own — the module functions already own the
+    ``_flush_lock`` + ``state.lock`` semantics (B13). Delegation is safe
+    precisely because the lock lives in the module functions, not the adapter.
+
+    Only ``append_loop`` is wired into the loop (via ``_append_loop_audit``);
+    ``flush`` is included for structural completeness against ``AuditSinkPort``
+    and will be wired in U4 (routes flush still calls the module
+    ``flush_recording_buffers`` directly today — dual-ownership preserved).
+    """
+
+    async def append_loop(
+        self,
+        conductor_response: dict[str, Any],
+        active_stems: list[dict[str, Any]],
+        loop_idx: int,
+    ) -> None:
+        """Buffer one loop's LLM interaction + per-action rows."""
+        await append_loop_audit(conductor_response, active_stems, loop_idx)
+
+    async def flush(self) -> None:
+        """Bulk-insert buffered rows; re-queue on failure."""
+        await flush_recording_buffers()

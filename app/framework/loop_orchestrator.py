@@ -33,6 +33,7 @@ import numpy as np
 
 from app.framework.audio_fetch import GarageAudioAdapter
 from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (routes/shows.py, tests import these from here)
+    AuditAdapter,
     _flush_lock,
     append_loop_audit,
     flush_recording_buffers,
@@ -50,7 +51,7 @@ from app.framework.loop_steps import (
     _LoopSteps,
     _StepResult,
 )
-from app.framework.ports import AudioFetchPort, ConductorPort, JobQueuePort
+from app.framework.ports import AudioFetchPort, AuditSinkPort, ConductorPort, JobQueuePort
 from app.framework.pregeneration import run_pregeneration
 from app.garage_client import GarageClient
 
@@ -71,6 +72,7 @@ class AsyncFrameworkLoop(_LoopSteps):
         mixer_factory: Callable[[], Mixer] | None = None,
         audio: AudioFetchPort | None = None,
         jobs: JobQueuePort | None = None,
+        audit: AuditSinkPort | None = None,
     ):
         """
         Initialize the async framework loop.
@@ -101,6 +103,13 @@ class AsyncFrameworkLoop(_LoopSteps):
                 is a no-op; the DB session opens lazily inside submit at call
                 time, so unlike the audio port there is no lazy/env path to
                 preserve). Existing callers omitting it are unchanged.
+            audit: optional audit-sink port override (E5/U3 dependency
+                injection), inject any ``AuditSinkPort`` fake for in-memory
+                testing. Defaults to a real ``AuditAdapter()`` (EAGER — its
+                constructor is a no-op; the DB session opens lazily inside
+                ``flush_recording_buffers`` at call time, and ``_flush_lock`` is
+                module-level, so there is no lazy/env path to preserve — unlike
+                ``_audio``). Existing callers omitting it are unchanged.
         """
         self.session_id = session_id
         self.mixer: Mixer | None = None
@@ -122,6 +131,12 @@ class AsyncFrameworkLoop(_LoopSteps):
         # session is opened lazily inside submit_generator_job at call time, so
         # there is no Gap-3-style lazy path to preserve — unlike _audio).
         self._jobs: JobQueuePort = jobs if jobs is not None else PostgresJobQueueAdapter()
+        # Audit-sink port (U3-audit, E5 DI): injectable for fakes; defaults to
+        # the real AuditAdapter (eager — its constructor is a no-op; the DB
+        # session opens lazily inside flush_recording_buffers at call time, and
+        # _flush_lock is module-level so there is no lazy/env path to preserve
+        # — unlike _audio).
+        self._audit: AuditSinkPort = audit if audit is not None else AuditAdapter()
         self.running = False
         self.loop_task: asyncio.Task | None = None
         self.stem_cache: dict[str, dict] = {}  # cache_key -> {audio_data, last_used}
@@ -331,12 +346,15 @@ class AsyncFrameworkLoop(_LoopSteps):
         return await self._audio.fetch(audio_path)
 
     async def _append_loop_audit(self, conductor_response, active_stems, loop_idx):
-        """Buffer one loop's audit rows; delegates to audit_recording (Phase 3).
+        """Buffer one loop's audit rows; delegates to the injected AuditSinkPort (U3).
 
         Kept as a method so ``patch.object(loop, '_append_loop_audit')`` and
-        direct test calls keep working (brief-02 ssD).
+        direct test calls keep working (brief-02 ssD). Routes through
+        ``self._audit.append_loop`` (ctor-injected, defaults to ``AuditAdapter``);
+        identical signature, so every call site (loop_steps._step_append_audit)
+        and every test patch / direct call is transparent.
         """
-        await append_loop_audit(conductor_response, active_stems, loop_idx)
+        await self._audit.append_loop(conductor_response, active_stems, loop_idx)
 
     async def _pre_generate_next_loop(self, for_loop_idx: int, snapshot: dict[str, Any]):
         """Pre-generate the next loop; delegates to pregeneration (Phase 6).
