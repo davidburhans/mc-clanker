@@ -168,7 +168,8 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/routes/reasoning_logs.py` | Conductor reasoning NDJSON export |
 | `app/routes/youtube.py` | YouTube Live RTMP stream start/stop/status/config |
 | `app/auth.py` | JWT tokens, bcrypt password hashing |
-| `app/db.py` | SQLAlchemy DatabaseManager singleton (thread-safe) |
+| `app/db.py` | SQLAlchemy DatabaseManager singleton (thread-safe); REL-09: PG engines get pool_pre_ping/pool_recycle + connect/statement timeouts (dialect-gated; SQLite paths unchanged) |
+| `app/middleware_db.py` | Sync DB helpers the auth/session middlewares run off the event loop via `asyncio.to_thread` (REL-09); returns detached-safe data (expunged user / scalars) |
 | `app/models/` | SQLAlchemy ORM models (User, Show, GeneratorJob, etc.) |
 | `app/playback.py` | Pre-recorded show playback |
 | `app/worker.py` | Async job processor (separate container) |

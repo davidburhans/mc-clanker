@@ -224,6 +224,31 @@ connect/statement timeout → **event loop blocks ~2 min: `/api/health`,
 route/middleware DB work off-loop (`asyncio.to_thread`, pattern already in
 `config.py:_ping_database`).
 
+**Status: fixed-in rel-09-db** — the engine kwargs landed on the PostgreSQL
+branch only, gated by dialect (`make_url(url).get_backend_name() ==
+"postgresql"`, not "DATABASE_URL set" — tests deploy SQLite via DATABASE_URL;
+libpq-only `connect_args` would `TypeError` there). An explicit non-PG
+DATABASE_URL is honored verbatim plus `check_same_thread=False` (REL-09 runs
+DB access in `asyncio.to_thread` workers); the no-DATABASE_URL SQLite fallback
+is byte-identical. Budgets live as module constants in `app/db.py`
+(`DB_CONNECT_TIMEOUT_SECONDS`/`DB_STATEMENT_TIMEOUT_MS`/`DB_POOL_RECYCLE_SECONDS`,
+monkeypatchable, deliberately not env knobs). The three per-request middleware
+queries (Bearer user lookup, per-show audience gate, session-routing lookup)
+moved into sync helpers in `app/middleware_db.py`, awaited via
+`asyncio.to_thread`; `GET /api/shows/{id}/audio` gates+stats off-loop the same
+way (FileResponse still streams from Starlette off-loop). Failure semantics
+preserved: AuthMiddleware DB errors propagate (500), SessionAffinityMiddleware
+stays fail-open with a WARNING log (its `print`s became logger calls).
+Documented residuals: the remaining `async def` route bodies with sync DB
+(shows CRUD/list/actions, reasoning-logs exports, jobs, config writes,
+playback control) stay cold-path on the loop — the full async-ORM migration
+is the spec-declared follow-up (U11 also owns paginating the export queries,
+which otherwise become `QueryCanceled` victims of the new engine-wide 10 s
+statement_timeout on large corpora); DB-error → 503 mapping in auth middleware
+was considered and rejected as a semantic change without a spec mandate.
+Pinned by `tests/test_db.py::TestEngineResilienceRel09` and
+`tests/test_db_offloop.py` (slow-fake + heartbeat loop-starvation asserts).
+
 ### REL-10 [High] `/stream.mp3` abrupt disconnect leaks one ffmpeg + two threads + a registered client queue
 `app_ui.py:713-736` — sync generator blocks in `stdout.read(4096)`; feeder
 thread blocks writing ffmpeg stdin under backpressure; the cleanup `finally`

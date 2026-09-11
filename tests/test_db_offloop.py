@@ -315,13 +315,18 @@ class TestShowGateOffLoop:
         assert outcome[1].status_code == 200  # owner bypass survives the move off-loop
 
         # Fast verdict subcases: wrong Basic password -> 401; no-password show -> pass.
+        # Basic-only header (T9 precedent): exactly one DB query per dispatch — the
+        # show-gate fetch — so one scripted result per fake is exact, and it pins
+        # the SEC-5 behavior that the Basic CompatUser path never sets
+        # current_user_id (no owner bypass for Basic callers).
+        basic_request = _make_request("/api/shows/1/audio", authorization=_basic_header("dj", "wrong-pass"))
         hashed_show = _FakeShow(user_id=7, audience_password_hash="$2b$12$notarealbcryptvalue")
         open_show = _FakeShow(user_id=7, audience_password_hash=None)
         verdicts: list[tuple[int, int]] = []
         for show, expected_status in ((hashed_show, 401), (open_show, 200)):
             monkeypatch.setattr(app.db, "DatabaseManager", _SlowDatabaseManager(first_results=[show]))
             with patch("app.app_ui.state", _auth_state(dj_password="djsecret")):
-                response = await middleware.dispatch(request, _ok_call_next)
+                response = await middleware.dispatch(basic_request, _ok_call_next)
             verdicts.append((response.status_code, expected_status))
         assert verdicts == [(401, 401), (200, 200)]
 
@@ -412,10 +417,9 @@ class TestSessionAffinityOffLoop:
 class TestMiddlewareDbHelperContracts:
     def test_middleware_db_helper_contracts(self, monkeypatch, tmp_path):
         """T13: helpers return detached-safe data (expunged user / scalars / str|None)."""
-        from app.middleware_db import fetch_bearer_user, fetch_show_gate_fields, lookup_session_server
-
         import app.models  # noqa: F401  — register ORM models with Base.metadata
         from app.db import DatabaseManager
+        from app.middleware_db import fetch_bearer_user, fetch_show_gate_fields, lookup_session_server
         from app.models import SessionRouting, Show, User
 
         db_file = tmp_path / "middleware_helpers.db"

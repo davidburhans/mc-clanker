@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.framework.framework_main_async import run_framework_loop_async
 from app.framework.framework_state import state
+from app.middleware_db import fetch_bearer_user, fetch_show_gate_fields, lookup_session_server
 from app.routes import api_router
 
 log = logging.getLogger(__name__)
@@ -188,8 +189,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Import here to avoid circular imports
         from app.auth import decode_token
-        from app.db import DatabaseManager
-        from app.models import Show, User
 
         auth_header = request.headers.get("Authorization")
         current_user = None
@@ -203,19 +202,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
             token = auth_header[7:]
             payload = decode_token(token)
             if payload and "sub" in payload:
-                user_id = int(payload["sub"])
-                db_manager = DatabaseManager.get_instance()
-                with db_manager.session() as session:
-                    user = session.query(User).filter(User.id == user_id).first()
-                    if user and user.is_active:
-                        # Expunge before the session's commit expires the
-                        # instance — request.state.user is read after this
-                        # session closes (review SEC-5).
-                        session.expunge(user)
-                        # Attach user to request state
-                        request.state.user = user
-                        current_user = user
-                        current_user_id = user.id
+                # REL-09: the user lookup runs in a worker thread — a hung DB
+                # bounds at the engine timeouts instead of freezing the loop.
+                # DB errors propagate (500) exactly as before the move.
+                user = await asyncio.to_thread(fetch_bearer_user, int(payload["sub"]))
+                if user is not None:
+                    # The helper returned the instance expunged from its
+                    # session — request.state.user is read after that session
+                    # closed (review SEC-5).
+                    request.state.user = user
+                    current_user = user
+                    current_user_id = user.id
 
         # If not JWT, try HTTP Basic auth with env vars (backwards compatibility)
         dj_pass = getattr(state, "dj_password", "")
@@ -314,40 +311,37 @@ class AuthMiddleware(BaseHTTPMiddleware):
         show_password_match = re.match(r"^/api/shows/(\d+)/(playback|audio)(\/.*)?$", path)
         if show_password_match:
             show_id = int(show_password_match.group(1))
-            db_manager = DatabaseManager.get_instance()
-            with db_manager.session() as session:
-                show = session.query(Show).filter(Show.id == show_id).first()
-                # The show's authenticated owner is already authorized for these
-                # routes (require_show_owner in routes/utils.py); the audience
-                # gate used to 401 them because a Bearer header never yields a
-                # Basic password (review SEC-5). CompatUser.id is 0 and never
-                # matches a real show.user_id, so Basic-compat callers still hit
-                # the gate below.
-                is_show_owner = current_user_id is not None and show is not None and show.user_id == current_user_id
-                if show and show.audience_password_hash and not is_show_owner:
-                    # Extract password from Basic auth
-                    provided_pass = None
-                    if auth_header and auth_header.startswith("Basic "):
-                        try:
-                            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
-                            if ":" in decoded:
-                                _, provided_pass = decoded.split(":", 1)
-                        except Exception:
-                            pass
+            # REL-09: the gate fetch runs in a worker thread like the Bearer
+            # lookup; DB errors propagate (500) exactly as before the move.
+            # Scalars only — the ORM row would detach when its session closed.
+            show_user_id, audience_password_hash = await asyncio.to_thread(fetch_show_gate_fields, show_id)
+            # The show's authenticated owner is already authorized for these
+            # routes (require_show_owner in routes/utils.py); the audience
+            # gate used to 401 them because a Bearer header never yields a
+            # Basic password (review SEC-5). CompatUser.id is 0 and never
+            # matches a real show.user_id, so Basic-compat callers still hit
+            # the gate below.
+            is_show_owner = current_user_id is not None and show_user_id == current_user_id
+            if show_user_id is not None and audience_password_hash and not is_show_owner:
+                # Extract password from Basic auth
+                provided_pass = None
+                if auth_header and auth_header.startswith("Basic "):
+                    try:
+                        decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                        if ":" in decoded:
+                            _, provided_pass = decoded.split(":", 1)
+                    except Exception:
+                        pass
 
-                    if provided_pass:
-                        from app.auth import verify_password
+                if provided_pass:
+                    from app.auth import verify_password
 
-                        if not verify_password(provided_pass, show.audience_password_hash):
-                            return needs_auth(f"Show {show_id}")
-                    else:
+                    if not verify_password(provided_pass, audience_password_hash):
                         return needs_auth(f"Show {show_id}")
-                elif show:
-                    # Show exists but no password - allow access
-                    pass
                 else:
-                    # Show not found - let the route handle 404
-                    pass
+                    return needs_auth(f"Show {show_id}")
+            # (user_id, None) = show exists without a password — allow access;
+            # (None, None) = show not found — let the route handle 404.
 
         return await call_next(request)
 
@@ -416,54 +410,41 @@ class SessionAffinityMiddleware(BaseHTTPMiddleware):
             # Not a valid UUID, skip
             return await call_next(request)
 
-        # Look up which server handles this session
-        from sqlalchemy import text
-
-        from app.db import DatabaseManager
-
-        db_manager = DatabaseManager.get_instance()
-
+        # Look up which server handles this session (REL-09: in a worker
+        # thread; fail-open preserved — a routing-lookup failure must never
+        # block playback).
         try:
-            with db_manager.session() as session:
-                result = session.execute(
-                    text("""
-                        SELECT server_id FROM session_routing
-                        WHERE session_id = :session_id
-                    """),
-                    {"session_id": session_id},
-                ).fetchone()
+            routing_server_id = await asyncio.to_thread(lookup_session_server, session_id)
 
-                if result is None:
-                    # No routing entry yet, let the request proceed
-                    # (session might not have started yet)
-                    return await call_next(request)
+            if routing_server_id is None:
+                # No routing entry yet, let the request proceed
+                # (session might not have started yet)
+                return await call_next(request)
 
-                routing_server_id = result[0]
+            # If this server is not the routing server, redirect
+            if routing_server_id != current_server_id and not _SAFE_SERVER_ID.match(routing_server_id):
+                # Round-3 D7: never build a redirect from an arbitrary stored
+                # value — a poisoned row must degrade to local handling, not send
+                # the victim's request (and body) to an attacker-chosen host.
+                log.warning("SESSION AFFINITY: ignoring unsafe routing server_id %r", routing_server_id)
+                return await call_next(request)
 
-                # If this server is not the routing server, redirect
-                if routing_server_id != current_server_id and not _SAFE_SERVER_ID.match(str(routing_server_id)):
-                    # Round-3 D7: never build a redirect from an arbitrary stored
-                    # value — a poisoned row must degrade to local handling, not send
-                    # the victim's request (and body) to an attacker-chosen host.
-                    log.warning("SESSION AFFINITY: ignoring unsafe routing server_id %r", routing_server_id)
-                    return await call_next(request)
+            if routing_server_id != current_server_id:
+                # Build redirect URL
+                # Use the scheme from the request, or default to http
+                scheme = request.url.scheme or "http"
+                redirect_url = f"{scheme}://{routing_server_id}/{'/'.join(path_parts[1:])}"
 
-                if routing_server_id != current_server_id:
-                    # Build redirect URL
-                    # Use the scheme from the request, or default to http
-                    scheme = request.url.scheme or "http"
-                    redirect_url = f"{scheme}://{routing_server_id}/{'/'.join(path_parts[1:])}"
+                # Preserve query string
+                if request.url.query:
+                    redirect_url += f"?{request.url.query}"
 
-                    # Preserve query string
-                    if request.url.query:
-                        redirect_url += f"?{request.url.query}"
-
-                    print(f"SESSION AFFINITY: Redirecting {path} to {redirect_url}")
-                    return RedirectResponse(url=redirect_url, status_code=307)
+                log.debug("SESSION AFFINITY: Redirecting %s to %s", path, redirect_url)
+                return RedirectResponse(url=redirect_url, status_code=307)
 
         except Exception as e:
             # If there's a database error, log it but don't block the request
-            print(f"SESSION AFFINITY: Error looking up routing: {e}")
+            log.warning("SESSION AFFINITY: Error looking up routing: %s", e)
 
         return await call_next(request)
 

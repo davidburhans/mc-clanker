@@ -3,9 +3,18 @@ import threading
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
+
+# REL-09: bounds on every pooled PG connection so a hung/NAT-idled database
+# degrades (one cancelled statement / one pre-ping reconnect) instead of
+# freezing the event loop for the OS-level TCP timeout (~2 min). Constants,
+# not env knobs — promote only when a deployment needs a different budget.
+DB_CONNECT_TIMEOUT_SECONDS = 5
+DB_STATEMENT_TIMEOUT_MS = 10_000
+DB_POOL_RECYCLE_SECONDS = 1800
 
 
 class DatabaseManager:
@@ -15,9 +24,27 @@ class DatabaseManager:
     def __init__(self):
         database_url = os.environ.get("DATABASE_URL")
 
-        if database_url:
-            # PostgreSQL in production
-            self.engine = create_engine(database_url, pool_size=10, max_overflow=20)
+        if database_url and make_url(database_url).get_backend_name() == "postgresql":
+            # PostgreSQL in production (REL-09): pre-ping recovers NAT-idled
+            # conns, recycle bounds pool age, connect/statement timeouts bound
+            # a hung DB so middleware/route queries can never block the loop
+            # past ~10 s. libpq-only args — never passed to the SQLite paths.
+            self.engine = create_engine(
+                database_url,
+                pool_size=10,
+                max_overflow=20,
+                pool_pre_ping=True,
+                pool_recycle=DB_POOL_RECYCLE_SECONDS,
+                connect_args={
+                    "connect_timeout": DB_CONNECT_TIMEOUT_SECONDS,
+                    "options": f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS}",
+                },
+            )
+        elif database_url:
+            # Explicit non-PG DATABASE_URL (tests set sqlite:///...): honor it
+            # verbatim, plus the SQLite cross-thread flag the fallback uses —
+            # REL-09 moves DB access into asyncio.to_thread worker threads.
+            self.engine = create_engine(database_url, connect_args={"check_same_thread": False})
         else:
             # SQLite fallback for local development
             db_path = os.path.join(os.path.dirname(__file__), "data", "mc_clanker.db")

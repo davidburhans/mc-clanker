@@ -553,17 +553,25 @@ async def get_show_llm_interactions(show_id: int, request: Request, limit: int =
         return {"interactions": [i.to_dict() for i in interactions], "total": total, "limit": limit, "offset": offset}
 
 
-@router.get("/shows/{show_id}/audio")
-async def get_show_audio(show_id: int, request: Request):
-    """Download recorded audio file."""
+def _resolve_owned_show_audio_path(show_id: int, request: Request) -> str:
+    """Owner-gated audio path for GET /shows/{show_id}/audio (REL-09: worker thread).
+
+    Raises the same HTTPExceptions (401/404) require_show_owner does; to_thread
+    re-raises them at the await point for FastAPI to convert.
+    """
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
         show = require_show_owner(show_id, request, session)
-
         if not show.audio_file_path or not os.path.exists(show.audio_file_path):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found")
+        return show.audio_file_path
 
-        return FileResponse(show.audio_file_path, media_type="audio/wav", filename=f"show_{show_id}.wav")
+
+@router.get("/shows/{show_id}/audio")
+async def get_show_audio(show_id: int, request: Request):
+    """Download recorded audio file (REL-09: gate+stat off-loop; FileResponse streams off-loop)."""
+    audio_path = await asyncio.to_thread(_resolve_owned_show_audio_path, show_id, request)
+    return FileResponse(audio_path, media_type="audio/wav", filename=f"show_{show_id}.wav")
 
 
 # =============================================================================
