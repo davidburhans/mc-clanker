@@ -236,7 +236,7 @@ against fakes; documented how to run it.
 | Unit | Status | Commit |
 |------|--------|--------|
 | baseline | landed | e125167 |
-| 1 rel-mixer-resilience | pending | — |
+| 1 rel-mixer-resilience | **landed** (939p/16s green; reviewer safe-to-land, 0 blockers) | 46e9d13 |
 | 2 rel-reset-reprime | pending | — |
 | 3 rel-worker-vram | pending | — |
 | 4 rel-llm-capture | pending | — |
@@ -251,6 +251,13 @@ against fakes; documented how to run it.
 | 13 rel-worker-correctness | pending | — |
 | 14 rel-p3-hygiene | pending | — |
 | 15 rel-soak-harness | pending | — |
+
+## Follow-ups (from unit reviews)
+
+- rel-01: guard log is tick-cadence-bounded (~21.7 lines/s under persistent
+  failure) but not rate-limited — consider a consecutive-failure counter in
+  /api/health during U15 soak. routes/stems.py:86 third clip site feeds only
+  sanitized decode output now — fold into U14/REL-31 touch.
 
 ## Decisions log
 
