@@ -80,6 +80,18 @@ FALLBACK_MASTER_KEY = "A minor"
 # it the P13 break must win, exactly as before this fix.
 BOUNDARY_BREAK_SECONDS = 0.5
 
+# REL-06 (audit High): a retained stem is cache-HIT every loop, so its TTL
+# must be measured from the last HIT, not the initial fetch — otherwise the
+# "core groove" the conductor is told to retain ages out and is regenerated
+# every 300 s (audible churn + needless GPU), forever.
+STEM_CACHE_TTL_SECONDS = 300.0
+
+# REL-06 entry cap: TTL bounds age, not count — a retain-all fallback (LLM
+# outage) or fast prompt churn adds 4-6 entries/loop for a full TTL window.
+# ~5-6 MB per 8-bar 44.1 kHz stereo stem => ~180 MB worst case (sibling
+# state.cache_stem LRU caps at 16).
+STEM_CACHE_MAX_ENTRIES = 32
+
 
 def sanitize_master_bpm(candidate: Any, fallback: int | None) -> int:
     """Coalesce a missing/null/out-of-range conductor BPM to a usable value.
@@ -524,6 +536,9 @@ class _LoopSteps:
             # Check cache
             if cache_key in self.stem_cache:
                 print(f"Cache HIT: '{prompt}'")
+                # REL-06: TTL clock restarts on every hit — a retained stem
+                # must not age out while in active use.
+                self.stem_cache[cache_key]["last_used"] = time.time()
                 continue  # Already have audio
 
             # Submit job
@@ -623,6 +638,19 @@ class _LoopSteps:
         else:
             tracks_to_use = prepared_tracks
             duration_samples = loop_duration_samples
+
+        # REL-02 (audit Critical): a boundary-less mixer (reset via
+        # Mixer.clear(), or the no-future-tracks fallback in Mixer._callback)
+        # can never consume set_next_loop audio — the transition gate is
+        # current_loop_end_sample > 0 — so staging there is permanent silence.
+        # Re-enter the loop-1 prime path instead: it re-establishes the
+        # boundary now, and _loop_idx 1 gives P11/P12/P13 the correct loop-1
+        # semantics (initial record, no pregen spawn, prompt P13 exit).
+        # Unlocked read is safe: GIL-atomic public int (sanctioned by
+        # test_orchestrator_has_no_private_mixer_reach); clear() runs earlier
+        # in this same task, so no interleaving can produce a stale 0 read.
+        if self.mixer.current_loop_end_sample <= 0:
+            self._loop_idx = 1
 
         # B2: loop>1 hands its audio to the mixer's single next_loop_audio slot.
         # Remember the index so P13 refuses to return before the boundary consumes
@@ -763,11 +791,8 @@ class _LoopSteps:
         if commit.needs_initial_record:
             state.record_loop_transition(1, commit.rec_stems, commit.rec_set_name, commit.rec_reasoning)
 
-        # Cache maintenance
-        current_time = time.time()
-        stale_keys = [k for k, v in self.stem_cache.items() if current_time - v["last_used"] > 300]
-        for k in stale_keys:
-            del self.stem_cache[k]
+        # Cache maintenance (REL-06: TTL from last use + entry cap)
+        self._prune_stem_cache()
 
         # PRE-GENERATION: Only start if we don't have a loop already queued
         # and no pre-gen task is running
@@ -804,6 +829,24 @@ class _LoopSteps:
                 f"[AsyncLoop-{self._loop_idx}] Pre-gen for a later loop still running; "
                 f"leaving loop {self._loop_idx + 1} to the fresh conductor path"
             )
+
+    def _prune_stem_cache(self) -> None:
+        """REL-06: drop stale-then-overflow stem-cache entries (TTL + cap).
+
+        TTL first (no hit for STEM_CACHE_TTL_SECONDS), then oldest-last_used
+        overflow beyond STEM_CACHE_MAX_ENTRIES. Called from P12 only —
+        stem_cache has a single async owner (this loop task), so no lock.
+        """
+        now = time.time()
+        stale_keys = [k for k, v in self.stem_cache.items() if now - v["last_used"] > STEM_CACHE_TTL_SECONDS]
+        for key in stale_keys:
+            del self.stem_cache[key]
+        overflow = len(self.stem_cache) - STEM_CACHE_MAX_ENTRIES
+        if overflow <= 0:
+            return
+        by_age = sorted(self.stem_cache.items(), key=lambda item: item[1]["last_used"])
+        for key, _entry in by_age[:overflow]:
+            del self.stem_cache[key]
 
     async def _step_await_pregen(self) -> None:
         """P13: await pre-generation completion, recording mixer transitions meanwhile.

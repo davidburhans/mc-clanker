@@ -90,6 +90,10 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
             cache_key = make_cache_key(m_id, prompt, current_bpm, current_key, track_bars)
 
             if cache_key in loop.stem_cache:
+                # REL-06: same TTL-refresh as the foreground hit in
+                # _step_submit_jobs. This stays a loop.stem_cache-ONLY write —
+                # never state.cache_stem (brief-01 risk #4 divergence).
+                loop.stem_cache[cache_key]["last_used"] = time.time()
                 continue
 
             orig = t.get("_original_details", {})
