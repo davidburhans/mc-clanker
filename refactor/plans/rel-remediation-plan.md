@@ -242,7 +242,7 @@ against fakes; documented how to run it.
 | 4 rel-llm-capture | **landed** (987p/16s green; land-with-fixes applied: doc drift; DPO contract pinned) | 9268e69 |
 | 5 rel-storage-retention | **landed** (1013p/16s green after round-1 fixes; invariant 4 preserved) | b53a981 |
 | 6 rel-job-queue | **landed** (1032p/16s green; pending-only abandon + reaper + depth throttle; claim SQL untouched) | b0e794c |
-| 7 rel-db-offloop | **landed** (1047p/16s green; dialect-gated PG engine resilience; middleware + audio-route DB off-loop via to_thread; SQLite fallback byte-identical; T6 fast-subcase test corrected to its documented Basic-auth intent) |  |
+| 7 rel-db-offloop | **landed** (1047p/16s green; dialect-gated PG engine resilience; middleware + audio-route DB off-loop via to_thread; SQLite fallback byte-identical; T6 fast-subcase test corrected to its documented Basic-auth intent) | 0b2ee6a |
 | 8 rel-stream-fanout | pending | — |
 | 9 rel-recording-writer | pending | — |
 | 10 rel-youtube-247 | pending | — |
