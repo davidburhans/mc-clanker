@@ -96,14 +96,16 @@ dead `GPUMonitor` offload path). Acceptance: timeout circuit-breaker contract
 asserting CPU-first load (mock `load_file` captures device arg); registry
 lock test (concurrent generate calls serialize).
 
-**U4 rel-llm-capture** — REL-04: audit buffers grow unbounded in RAM, flush
-only at stop-show; crash loses the entire trail; flush failure re-prepends
-and compounds. Fix: periodic flush from `_step_post_commit` when
-`len(state.llm_interaction_buffer) > 200` (lock-serialized `AuditAdapter.flush`
-exists); keep stop-flush; flush in lifespan shutdown. REL-14: deleting a
-live show leaves buffered rows referencing the deleted `show_id` → FK
-IntegrityError poisons every future flush. Fix: drop buffered rows for the
-deleted show in the teardown path (or flush-then-delete). PLUS (user
+**U4 rel-llm-capture** — VERIFIED: REL-04 fully holds; REL-14 Weakened: the
+FK-poison loop is unreachable because `start_show` clears both buffers
+first — but that clearing *silently discards* captured rows, which violates
+invariant 4 (training-data loss). REL-04 fix as planned: periodic flush from
+`_step_post_commit` when `len(state.llm_interaction_buffer) > 200`
+(lock-serialized `AuditAdapter.flush` exists); keep stop-flush; flush in
+lifespan shutdown. REL-14 fix, amended to the real bug: on `start_show`,
+flush pending buffers BEFORE clearing (never silently discard); on
+`delete_show` teardown, deliberately drop buffered rows for the deleted
+`show_id` (or flush-then-delete) and log the count. PLUS (user
 directive): audit the capture schema against what the DPO pipeline consumes
 (`training/dpo_pipeline.py`, `training/convert_to_unsloth_dataset.py`,
 `tests/test_dpo_pipeline.py`) — if fields the fine-tuning needs are missing
@@ -252,6 +254,9 @@ against fakes; documented how to run it.
 
 ## Decisions log
 
+- 2026-09-11: independent claim-verification pass (2 read-only agents, all 32
+  findings): 31 Verified, REL-14 Weakened — spec amended in U4 (silent
+discard on start_show is the real bug, worse given invariant 4).
 - 2026-09-11: scope = everything P0–P3 + soak harness (user).
 - 2026-09-11: baseline commit of in-flight YouTube work first (user).
 - 2026-09-11: LLM capture durability/losslessness promoted to invariant 4
