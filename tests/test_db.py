@@ -1,3 +1,4 @@
+import asyncio
 import os
 from unittest.mock import MagicMock, patch
 
@@ -232,3 +233,108 @@ class TestModelsIntegration:
         assert "reasoning" in fields
         assert "error" in fields
         assert "was_fallback" in fields
+
+
+class TestEngineResilienceRel09:
+    """REL-09a: per-dialect engine resilience config (unit plan §3.1, T1-T4).
+
+    The PG branch must gain pool_pre_ping / pool_recycle / libpq connect+statement
+    timeouts; the no-DATABASE_URL SQLite fallback must stay byte-identical; an
+    explicit sqlite:// DATABASE_URL must keep working — including sessions used
+    from asyncio.to_thread worker threads (REL-09 moves DB access off the loop).
+    """
+
+    def test_pg_engine_gets_resilience_kwargs(self, monkeypatch):
+        """T1: DATABASE_URL=postgresql:// builds the engine with the REL-09 kwargs."""
+        from app.db import DatabaseManager
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h/db")
+        with patch("app.db.create_engine") as mock_engine, patch("app.db.sessionmaker"):
+            DatabaseManager.get_instance()
+
+        mock_engine.assert_called_once()
+        call_args, call_kwargs = mock_engine.call_args
+        assert call_args == ("postgresql://u:p@h/db",)
+        assert call_kwargs["pool_size"] == 10
+        assert call_kwargs["max_overflow"] == 20
+        assert call_kwargs["pool_pre_ping"] is True
+        assert call_kwargs["pool_recycle"] == 1800
+        assert call_kwargs["connect_args"] == {
+            "connect_timeout": 5,
+            "options": "-c statement_timeout=10000",
+        }
+
+    def test_sqlite_fallback_engine_unchanged(self, monkeypatch):
+        """T2: no DATABASE_URL — the fallback branch stays byte-identical (no PG kwargs)."""
+        from app.db import DatabaseManager
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        with (
+            patch("app.db.create_engine") as mock_engine,
+            patch("app.db.sessionmaker"),
+            patch("os.makedirs"),
+        ):
+            DatabaseManager.get_instance()
+
+        call_args, call_kwargs = mock_engine.call_args
+        assert "sqlite" in call_args[0]
+        # Exact-dict assert: neither pool_pre_ping nor pool_recycle may leak in.
+        assert call_kwargs == {"connect_args": {"check_same_thread": False}}
+
+    async def test_sqlite_database_url_routes_to_sqlite_branch(self, monkeypatch, tmp_path):
+        """T3: sqlite:// DATABASE_URL is honored verbatim and is cross-thread safe.
+
+        test_db.py:79 precedent: DATABASE_URL may be sqlite, so the PG branch must
+        be dialect-gated. The load-bearing assert is the construction contract: the
+        non-PG DATABASE_URL branch must carry ``check_same_thread=False`` — REL-09
+        runs DB access in asyncio.to_thread workers, and a pooled sqlite connection
+        created on the loop thread raises ProgrammingError in a worker without it.
+        (File-based sqlite defaults to NullPool, so the flag cannot be observed
+        behaviorally — hence the recording spy around the real create_engine.)
+        """
+        import app.db as db_module
+        import app.models  # noqa: F401  — register ORM models with Base.metadata
+        from app.db import DatabaseManager
+        from app.models import User
+
+        recorded_kwargs: dict = {}
+        real_create_engine = db_module.create_engine
+
+        def _recording_create_engine(url, **kwargs):
+            recorded_kwargs.update(kwargs)
+            return real_create_engine(url, **kwargs)
+
+        monkeypatch.setattr(db_module, "create_engine", _recording_create_engine)
+
+        db_file = tmp_path / "dburl_sqlite.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
+        db = DatabaseManager.get_instance()
+        assert db.is_sqlite
+        assert recorded_kwargs.get("connect_args") == {"check_same_thread": False}, (
+            f"sqlite DATABASE_URL engine missing check_same_thread=False: kwargs={sorted(recorded_kwargs)}"
+        )
+        db.create_tables()
+
+        def insert_then_count() -> int:
+            with db.session() as session:
+                session.add(User(username="dburl_offloop", email="dburl@example.com", password_hash="x"))
+            with db.session() as session:
+                return session.query(User).count()
+
+        user_count = await asyncio.to_thread(insert_then_count)
+        assert user_count == 1
+
+    def test_pg_driver_suffix_routes_to_pg_branch(self, monkeypatch):
+        """T4: postgresql+psycopg2:// normalizes onto the PG branch (make_url gating)."""
+        from app.db import DatabaseManager
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg2://u:p@h/db")
+        with patch("app.db.create_engine") as mock_engine, patch("app.db.sessionmaker"):
+            DatabaseManager.get_instance()
+
+        call_kwargs = mock_engine.call_args.kwargs
+        assert call_kwargs["pool_pre_ping"] is True
+        assert call_kwargs["connect_args"] == {
+            "connect_timeout": 5,
+            "options": "-c statement_timeout=10000",
+        }
