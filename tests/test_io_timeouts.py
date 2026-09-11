@@ -141,6 +141,38 @@ class TestAacRoundtrip:
 
 
 # --------------------------------------------------------------------------- #
+# REL-21 — AAC decode float-branch NaN/Inf sanitization (no ffmpeg needed)
+# --------------------------------------------------------------------------- #
+class TestNormalizeDecodedAudioSanitization:
+    """_normalize_decoded_audio must sanitize the float default branch (REL-21).
+
+    Float WAVs can carry NaN/Inf from a corrupt stem; ``astype`` preserves
+    them and a downstream clip would too. The int branches cannot contain
+    NaN/Inf and must keep their exact full-scale mapping.
+    """
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    def test_normalize_decoded_audio_sanitizes_float_nan_inf(self, dtype):
+        """float32/float64 inputs map NaN→0.0, ±inf→±1.0, keep finite values."""
+        poisoned = np.array([[np.nan, np.inf, -np.inf, 0.25]], dtype=dtype)
+        norm = _normalize_decoded_audio(poisoned)
+        assert norm.dtype == np.float32
+        assert np.isfinite(norm).all(), "NaN/Inf must not survive normalization"
+        assert norm[0][0] == 0.0, "NaN must map to 0.0"
+        assert norm[0][1] == 1.0, "+inf must clamp to 1.0"
+        assert norm[0][2] == -1.0, "-inf must clamp to -1.0"
+        assert norm[0][3] == 0.25, "finite values must pass through unchanged"
+
+    def test_normalize_decoded_audio_int_branches_unchanged(self):
+        """int16 full-scale mapping is untouched by the float sanitization."""
+        samples = np.array([[-32768, 32767]], dtype=np.int16)
+        norm = _normalize_decoded_audio(samples)
+        assert norm.dtype == np.float32
+        assert norm[0][0] == -1.0
+        assert pytest.approx(float(norm[0][1]), abs=1e-5) == 0.99997
+
+
+# --------------------------------------------------------------------------- #
 # B4 — Icecast ffmpeg pipe-buffer deadlock
 # --------------------------------------------------------------------------- #
 class TestIcecastNoStderrDeadlock:

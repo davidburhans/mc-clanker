@@ -330,6 +330,8 @@ def test_health_check(client):
     data = response.json()
     assert data["status"] == "healthy"
     assert "is_running" in data
+    # REL-01: health payload must expose mixer render-thread liveness.
+    assert "mixer_alive" in data
 
 
 def test_download_stem_previous_set(client):
