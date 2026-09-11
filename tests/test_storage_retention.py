@@ -631,3 +631,116 @@ def test_llm_dump_row_matches_orm_dump():
     # the retention pass (plan decision 7 guard).
     degraded = llm_dump_row(dict(raw_record, prompt_messages="legacy context-summary blob"))
     assert [message["role"] for message in degraded["messages"]] == ["assistant"]
+
+
+# ---------------------------------------------------------------------------
+# Review round-1 regression pins (rel-05)
+# ---------------------------------------------------------------------------
+
+
+def test_prune_spares_empty_dirs_the_sweep_did_not_touch(tmp_path):
+    """R1-P2 race guard: only dirs this sweep unlinked from may be rmdir'd.
+
+    A brand-new empty show dir (start_show raced between makedirs and its
+    first file open) must survive a retention cycle that removed expired
+    takes elsewhere; the emptied dir still goes.
+    """
+    from app.retention import sweep_expired_files_sync
+
+    old = time.time() - 15 * 86400
+    emptied = tmp_path / "11"
+    emptied.mkdir()
+    stale_take = emptied / "audio.wav"
+    stale_take.write_bytes(b"x")
+    os.utime(stale_take, (old, old))
+    fresh_empty = tmp_path / "12"  # exists, empty, NOT touched by the sweep
+    fresh_empty.mkdir()
+
+    removed = sweep_expired_files_sync(
+        str(tmp_path), ("audio*.wav",), 14, "show recordings", prune_empty_subdirs=True, include_subdirs=True
+    )
+
+    assert removed == 1
+    assert not stale_take.exists()
+    assert not emptied.exists()  # this one the sweep emptied -> pruned
+    assert fresh_empty.exists()  # the race window survives
+
+
+async def test_audit_retention_refuses_unwritable_archive_dir(tmp_path, caplog, monkeypatch):
+    """R1-P1: unwritable AUDIT_ARCHIVE_DIR must refuse the whole pass (keep every row)."""
+    from app.retention import delete_expired_audit_rows
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("i am a file where the dir should be")
+    db = MagicMock()
+    db.acquire = AsyncMock()
+
+    with caplog.at_level(logging.ERROR):
+        removed = await delete_expired_audit_rows(db, llm_retention_days=5, archive_dir=str(blocker))
+
+    assert removed == 0
+    db.acquire.assert_not_awaited()
+    assert any("refusing to prune" in rec.message for rec in caplog.records)
+
+
+async def test_one_shot_cleanup_honors_retention_envs(monkeypatch, tmp_path):
+    """R1-P2 parity: the cron one-shot path must share the service path's env parsing."""
+    import app.cleanup as cleanup_mod
+
+    monkeypatch.setenv("GARAGE_ENDPOINT", "http://fake")
+    monkeypatch.setenv("GARAGE_ACCESS_KEY", "k")
+    monkeypatch.setenv("GARAGE_SECRET_KEY", "s")
+    monkeypatch.setenv("GARAGE_BUCKET", "b")
+    monkeypatch.setenv("SESSION_STALE_HOURS", "0")  # 0 = off must hold on THIS path
+    monkeypatch.setenv("LLM_RETENTION_DAYS", "9")
+    monkeypatch.setenv("AUDIT_ARCHIVE_DIR", str(tmp_path / "archive"))
+    monkeypatch.setenv("SHOW_AUDIO_RETENTION_DAYS", "3")
+    monkeypatch.setenv("EXPORT_RETENTION_DAYS", "4")
+
+    captured: dict = {}
+
+    class _FakePool:
+        async def close(self) -> None:
+            return None
+
+    class _FakeCleanup:
+        def __init__(self, config):
+            captured["config"] = config
+            self.db = None
+
+        async def _run_cleanup(self) -> int:
+            return 0
+
+    async def _fake_pool(*_args, **_kwargs):
+        return _FakePool()
+
+    monkeypatch.setattr(cleanup_mod, "JobExpirationCleanup", _FakeCleanup)
+    monkeypatch.setattr(cleanup_mod, "create_garage_client_from_env", lambda: None)
+    monkeypatch.setattr(cleanup_mod.asyncpg, "create_pool", _fake_pool)
+
+    removed = await cleanup_mod.cleanup_expired_jobs_once("postgres://fake")
+
+    assert removed == 0
+    config = captured["config"]
+    assert config.session_stale_hours == 0  # '0 = off' contract holds on the cron path
+    assert config.llm_retention_days == 9
+    assert config.show_audio_retention_days == 3
+    assert config.export_retention_days == 4
+    assert config.audit_archive_dir == str(tmp_path / "archive")
+
+
+def test_dir_helpers_match_env_and_default_expressions(monkeypatch, tmp_path):
+    """Plan §2.2 pin: recordings_dir()/exports_dir() are exactly the old inline env reads."""
+    from app.lib import paths
+
+    monkeypatch.setenv("SHOWS_DIR", str(tmp_path / "shows"))
+    monkeypatch.setenv("EXPORT_DIR", str(tmp_path / "exports"))
+    assert paths.recordings_dir() == str(tmp_path / "shows")
+    assert paths.exports_dir() == str(tmp_path / "exports")
+
+    monkeypatch.delenv("SHOWS_DIR")
+    monkeypatch.delenv("EXPORT_DIR")
+    assert paths.recordings_dir() == os.environ.get(
+        "SHOWS_DIR", os.path.join(paths._APP_ROOT, "data", "shows")
+    )
+    assert paths.exports_dir() == os.environ.get("EXPORT_DIR", "/exports")

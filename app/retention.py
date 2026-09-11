@@ -124,16 +124,18 @@ def sweep_expired_files_sync(
     remaining reclaim or a later pass. Returns the count removed.
     """
     removed = 0
+    emptied_dirs: set[str] = set()
     for path in collect_expired_files(root, patterns, retention_days, include_subdirs):
         try:
             os.unlink(path)
             removed += 1
+            emptied_dirs.add(os.path.dirname(path))
         except OSError as exc:
             logger.warning("%s retention: could not remove %s: %s", label, path, exc)
     if removed:
         logger.info("%s retention: removed %d expired file(s) from %s", label, removed, root)
     if prune_empty_subdirs:
-        prune_empty_subdirs_sync(root)
+        prune_emptied_dirs_sync(emptied_dirs)
     return removed
 
 
@@ -181,19 +183,20 @@ def collect_expired_files(
     return expired
 
 
-def prune_empty_subdirs_sync(root: str) -> None:
-    """Best-effort rmdir of now-empty direct subdirectories (emptied show-id dirs)."""
-    try:
-        entries = list(os.scandir(root))
-    except OSError:
-        return
-    for entry in entries:
-        if not entry.is_dir(follow_symlinks=False):
-            continue
+def prune_emptied_dirs_sync(emptied_dirs: set[str]) -> None:
+    """Best-effort rmdir of ONLY the dirs this sweep emptied (review round-1 P2 race guard).
+
+    The old whole-root scan rmdir'd ANY empty direct subdir of SHOWS_DIR, so a
+    retention cycle could race start_show between its makedirs and the first
+    file open: the brand-new show dir vanished under it → FileNotFoundError 500
+    on a live row. Only dirs this sweep unlinked from are candidates, and rmdir
+    still succeeds only while the dir is empty.
+    """
+    for directory in sorted(emptied_dirs):
         try:
-            os.rmdir(entry.path)  # succeeds only when empty
+            os.rmdir(directory)  # succeeds only when still empty
         except OSError:
-            pass  # still holds files (or not ours to judge) — keep it
+            pass  # a fresh take landed since the unlink, or not ours to judge — keep it
 
 
 # ---------------------------------------------------------------------------
@@ -212,12 +215,43 @@ async def delete_expired_audit_rows(db, llm_retention_days: int, archive_dir: st
     if llm_retention_days <= 0:
         logger.debug("LLM corpus retention disabled (keep forever); skipping")
         return 0
+    # Review round-1 P1: the NDJSON archive is the ONLY copy once the DELETE
+    # runs, so an unusable destination must refuse the whole pass (keep every
+    # row) instead of failing per table mid-cycle. Durability itself is a
+    # deployment property — docker/compose.yaml binds a persistent host dir for
+    # every service that runs cleanup — but writability is checkable here.
+    if not await asyncio.to_thread(_archive_dir_writable, archive_dir):
+        return 0
     assert db is not None  # initialized in start() before cleanup runs
     deleted = 0
     async with db.acquire() as conn:
         for table, columns, shaper in _AUDIT_TABLES:
             deleted += await archive_and_delete_table(conn, table, columns, shaper, llm_retention_days, archive_dir)
     return deleted
+
+
+def _archive_dir_writable(archive_dir: str) -> bool:
+    """Probe the archive destination with a real scratch-file create+delete (review P1).
+
+    os.access lies on read-only bind mounts (enforced at VFS level) and for
+    root (mode bits bypassed), so the honest writability check is writing a
+    scratch file. Refusal keeps every row (invariant 4) and logs once per
+    cycle rather than per table inside write_ndjson_archive.
+    """
+    try:
+        os.makedirs(archive_dir, exist_ok=True)
+        probe = os.path.join(archive_dir, f".probe_{os.getpid()}")
+        with open(probe, "w", encoding="utf-8"):
+            pass
+        os.unlink(probe)
+        return True
+    except OSError as exc:
+        logger.error(
+            "Audit retention: archive dir %s is not writable (%s); refusing to prune (invariant 4: keep every row)",
+            archive_dir,
+            exc,
+        )
+        return False
 
 
 async def archive_and_delete_table(

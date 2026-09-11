@@ -82,6 +82,11 @@ services:
     # stays decoupled from audio storage. Runs the same app.cleanup module the
     # worker's in-process loop uses; here the retention envs default ON.
     command: ["/app/.venv/bin/python", "-m", "app.cleanup"]
+    # Review round-1 (P2): this image's Dockerfile HEALTHCHECK probes
+    # http://localhost:4400/api/health/ready, which this batch command never
+    # serves — without disabling it the container is reported unhealthy forever.
+    healthcheck:
+      disable: true
     env_file:
       - ../.env
     environment:
@@ -127,8 +132,16 @@ services:
       - GARAGE_BUCKET_REGION=${GARAGE_BUCKET_REGION:-garage}
       - NVIDIA_VISIBLE_DEVICES=all
       - CUDA_VISIBLE_DEVICES=0
+      # Review round-1 (P1): the worker's in-process cleanup loop also runs the
+      # opt-in LLM corpus retention (LLM_RETENTION_DAYS via ../.env), so its
+      # NDJSON archive destination MUST be durable storage. Bind the same host
+      # dir the compose cleanup service's default lands in (one corpus
+      # location) instead of ephemeral container storage; the worker stays
+      # decoupled from the rest of audio storage (only this subdir is mounted).
+      - AUDIT_ARCHIVE_DIR=${AUDIT_ARCHIVE_DIR:-/exports/audit_archive}
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface:rw
+      - ../exports/audit_archive:/exports/audit_archive:rw
     devices:
       - nvidia.com/gpu=all
     depends_on:

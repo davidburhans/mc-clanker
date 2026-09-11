@@ -15,7 +15,7 @@ Usage:
     python -m app.cleanup
 
     # Or import for use in worker
-    from app.cleanup import cleanup_expired_jobs, CleanupConfig, create_cleanup_from_env
+    from app.cleanup import cleanup_expired_jobs_once, CleanupConfig, create_cleanup_config_from_env
 
 Environment Variables:
     - DATABASE_URL: PostgreSQL connection string
@@ -27,7 +27,9 @@ Environment Variables:
     - EXPORT_RETENTION_DAYS: days to keep mc_clanker_*.{wav,mp3} in EXPORT_DIR (0 = off)
     - SESSION_STALE_HOURS: age at which session_routing rows are reaped (0 = off)
     - LLM_RETENTION_DAYS: days to keep the audit corpus (0 = keep forever, invariant 4)
-    - AUDIT_ARCHIVE_DIR: NDJSON export destination for LLM_RETENTION_DAYS
+    - AUDIT_ARCHIVE_DIR: NDJSON export destination for LLM_RETENTION_DAYS — must
+      point at persistent storage and be mounted into every container that runs
+      cleanup (compose cleanup service + worker in-process loop)
 """
 
 import asyncio
@@ -333,6 +335,11 @@ async def cleanup_expired_jobs_once(pg_dsn: str) -> int:
             secret_key=os.environ["GARAGE_SECRET_KEY"],
             bucket=os.environ["GARAGE_BUCKET"],
         ),
+        # Review round-1 P2: share the service path's env parsing. Without it,
+        # SESSION_STALE_HOURS=0 could not disable the reaper here (the 24 h
+        # default always ran on this cron path) and the retention envs were
+        # silently ignored.
+        **_retention_kwargs(),
     )
     cleanup = JobExpirationCleanup(config)
     cleanup.garage = create_garage_client_from_env()
