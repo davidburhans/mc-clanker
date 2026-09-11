@@ -241,7 +241,7 @@ against fakes; documented how to run it.
 | 3 rel-worker-vram | **landed** (968p/16s green; reviewer safe-to-land, 0 blockers) | e28eee7 |
 | 4 rel-llm-capture | **landed** (987p/16s green; land-with-fixes applied: doc drift; DPO contract pinned) | 9268e69 |
 | 5 rel-storage-retention | **landed** (1013p/16s green after round-1 fixes; invariant 4 preserved) | b53a981 |
-| 6 rel-job-queue | **landed** (1032p/16s green; pending-only abandon + reaper + depth throttle; claim SQL untouched) | e2c15ea |
+| 6 rel-job-queue | **landed** (1032p/16s green; pending-only abandon + reaper + depth throttle; claim SQL untouched) | b0e794c |
 | 7 rel-db-offloop | pending | — |
 | 8 rel-stream-fanout | pending | — |
 | 9 rel-recording-writer | pending | — |
