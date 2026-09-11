@@ -24,6 +24,7 @@ Environment Variables Required:
 """
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -31,7 +32,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import asyncpg
 
@@ -56,6 +57,14 @@ JOB_LEASE = timedelta(seconds=JOB_LEASE_SECONDS)  # passed to asyncpg as a PG in
 JOB_LEASE_HEARTBEAT_SECONDS = 60.0  # refresh the lease while generation runs
 # Hard cap so a hung model generation cannot wedge a worker slot forever (B6).
 GENERATION_TIMEOUT_SECONDS = 600.0  # 10 minutes (normal generation is 5-30s)
+# REL-03 circuit breaker: a timed-out generation thread cannot be killed and
+# keeps holding VRAM + hf_hub locks, so retrying in-process just leaks another
+# one. After this many consecutive timeouts (no successful pipeline between),
+# exit non-zero and let Docker restart into a fresh CUDA context.
+GENERATION_TIMEOUT_BREAKER_THRESHOLD = 2
+# REL-23: bound on one between-jobs VRAM eviction pass — a zombie holding the
+# registry lock must not stall the loop (see _maybe_evict_idle_models).
+VRAM_EVICTION_TIMEOUT_SECONDS = 30.0
 
 
 async def _silently_cancel(task: "asyncio.Task") -> None:
@@ -98,7 +107,7 @@ class GeneratorWorker:
     between multiple workers.
     """
 
-    def __init__(self, config: WorkerConfig):
+    def __init__(self, config: WorkerConfig, exit_hook: Callable[[int], None] | None = None):
         self.config = config
         self.db: asyncpg.Pool | None = None
         self.garage: GarageClient | None = None
@@ -106,6 +115,13 @@ class GeneratorWorker:
         self.running = True
         self.jobs_processed = 0
         self.jobs_failed = 0
+        # REL-03 early-warning breadcrumb (surfaced in get_stats); reset only
+        # by a completed generate+upload pipeline, not by non-timeout failures.
+        self.consecutive_generation_timeouts = 0
+        # REL-03: os._exit (not sys.exit) deliberately skips graceful teardown
+        # — the interpreter deadlocks joining the abandoned non-daemon thread.
+        # Injectable so tests can observe the trip without dying.
+        self.exit_hook = exit_hook or os._exit
 
     async def start(self):
         """Main entry point. Creates DB pool and starts worker loops."""
@@ -114,6 +130,17 @@ class GeneratorWorker:
         # Load audio generation models from config
         self.generators.load()
         logger.info(f"Loaded {len(self.generators.models)} audio models: {list(self.generators.models.keys())}")
+
+        # REL-03 (audit Critical): a cold-cache model download can never fit
+        # inside the 600 s generation window, and its abandoned thread wedges
+        # the hf_hub lock for every later retry. Warm the cache BEFORE the job
+        # loop, outside any timeout. to_thread keeps SIGTERM handling
+        # responsive during a multi-GB download. Per-model failures are
+        # logged and skipped: one bad repo must not stop the worker serving
+        # the other models.
+        download_failures = await asyncio.to_thread(self.generators.download_models)
+        for model_id, error in download_failures.items():
+            logger.error("Pre-download failed for model %s: %s", model_id, error)
 
         # Create connection pool (handles concurrent job processing)
         self.db = await asyncpg.create_pool(
@@ -158,6 +185,9 @@ class GeneratorWorker:
             return
         logger.info("Processing job %s: %s", job["id"], job["instrument"])
         await self._process_claimed_job(job)
+        # REL-23: between-jobs VRAM eviction (idle branch skips it — no new
+        # loads can happen while idle, and the post-job check already ran).
+        await self._maybe_evict_idle_models()
 
     async def _process_claimed_job(self, job: dict):
         """Generate, upload, and complete a claimed job; clean up orphans on failure."""
@@ -275,14 +305,89 @@ class GeneratorWorker:
         gen_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"gen-{job['id']}")
         heartbeat = asyncio.create_task(self._heartbeat_loop(job["id"]))
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._generate_and_upload(job, gen_pool),
                 timeout=GENERATION_TIMEOUT_SECONDS,
             )
+        except asyncio.TimeoutError as exc:
+            # REL-03: the abandoned thread keeps holding VRAM / hf locks, so a
+            # timeout is not just a failed job — feed the circuit breaker.
+            self._handle_generation_timeout(job)
+            # Wrap-and-reraise so _process_claimed_job's generic handler marks
+            # the row failed with a MEANINGFUL message (bare str(
+            # asyncio.TimeoutError) is often empty).
+            raise TimeoutError(f"generation pipeline exceeded {GENERATION_TIMEOUT_SECONDS:.0f}s") from exc
+        else:
+            # Only a completed pipeline proves the CUDA context healthy;
+            # non-timeout failures deliberately leave the counter untouched.
+            self.consecutive_generation_timeouts = 0
+            return result
         finally:
             heartbeat.cancel()
             await _silently_cancel(heartbeat)
             gen_pool.shutdown(wait=False, cancel_futures=True)
+
+    def _handle_generation_timeout(self, job: dict) -> None:
+        """REL-03 breaker: 2nd consecutive generation timeout -> exit(1).
+
+        os._exit (not sys.exit) deliberately skips graceful teardown: the
+        audit found the interpreter deadlocks joining the abandoned
+        non-daemon thread. The current job row keeps its live lease and is
+        reclaimed/reaped after it lapses (<= ~11 min); compose
+        restart=unless-stopped brings this worker back with a fresh context.
+
+        "Consecutive" counts since the last COMPLETED pipeline, not since the
+        last non-timeout failure: the thread abandoned by timeout #1 survives
+        an unrelated later failure (fast CUDA-OOM, upload 500) still holding
+        VRAM/hf locks, so only a completed generate+upload proves health.
+        """
+        self.consecutive_generation_timeouts += 1
+        count = self.consecutive_generation_timeouts
+        logger.error("Job %s generation timed out (consecutive=%d)", job["id"], count)
+        if count < GENERATION_TIMEOUT_BREAKER_THRESHOLD:
+            return
+        # Structured JSON for the trip line (AGENTS.md observability rule).
+        logger.error(
+            "circuit_breaker_open %s",
+            json.dumps(
+                {
+                    "event": "circuit_breaker_open",
+                    "worker_id": self.config.worker_id,
+                    "job_id": str(job["id"]),
+                    "consecutive_timeouts": count,
+                    "timeout_seconds": GENERATION_TIMEOUT_SECONDS,
+                    "action": "exit_1",
+                    "reason": "generation_timeout_streak",
+                }
+            ),
+        )
+        self.exit_hook(1)
+
+    async def _maybe_evict_idle_models(self) -> None:
+        """REL-23: LRU-evict loaded non-default models when VRAM is critical.
+
+        Between jobs only. Bounded on purpose: a REL-03 zombie can hold the
+        registry lock forever, and a stuck eviction must not stall the loop —
+        the NEXT job's 600 s timeout is what trips the breaker.
+        """
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._evict_idle_models_sync),
+                timeout=VRAM_EVICTION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("VRAM eviction timed out (registry lock busy); skipping")
+
+    def _evict_idle_models_sync(self) -> None:
+        """Blocking half of _maybe_evict_idle_models (torch queries + .cpu() moves)."""
+        monitor = self.generators.gpu_monitor
+        if not monitor.should_offload():
+            return
+        for model_id in self.generators.lru_eviction_candidates():
+            logger.info("VRAM critical: unloading idle model %s", model_id)
+            self.generators.unload_model(model_id)
+            if not monitor.should_offload():
+                return
 
     async def _heartbeat_loop(self, job_id: uuid.UUID) -> None:
         """Periodically extend the lease while generation runs."""
@@ -441,6 +546,7 @@ class GeneratorWorker:
             "worker_id": self.config.worker_id,
             "jobs_processed": self.jobs_processed,
             "jobs_failed": self.jobs_failed,
+            "consecutive_generation_timeouts": self.consecutive_generation_timeouts,
             "is_running": self.running,
         }
 

@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 
 import numpy as np
@@ -8,6 +9,8 @@ from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 from stable_audio_tools import create_model_from_config
 from stable_audio_tools.inference.generation import generate_diffusion_cond
+
+from app.gpu_monitor import GPUMonitor
 
 
 class ModelState:
@@ -55,12 +58,17 @@ class StableAudioEngine:
                     return file_path
         return None
 
-    def load(self):
-        if not torch.cuda.is_available():
-            raise RuntimeError(f"{self.repo_id} requires CUDA GPU with ~8GB VRAM")
+    def download(self):
+        """Ensure weights + config are in the local HF cache; return their paths.
 
-        self.device = "cuda"
+        Extracted from load() so the worker can warm the cache at startup,
+        OUTSIDE the generation timeout window (REL-03): a cold-cache download
+        inside a job cannot fit the 600 s cap, and the abandoned thread keeps
+        the hf_hub .incomplete lock. hf_hub_download is file-locked, so
+        concurrent workers queue rather than corrupt.
 
+        Usage: ``weights, config = engine.download()``
+        """
         model_path = self._get_cached_model_path(self.filename)
         config_path = self._get_cached_model_path(self.config_filename)
 
@@ -70,6 +78,15 @@ class StableAudioEngine:
             config_path = hf_hub_download(repo_id=self.repo_id, filename=self.config_filename)
         else:
             print(f"[{self.repo_id}] Loading model from cache: {model_path}")
+        return model_path, config_path
+
+    def load(self):
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"{self.repo_id} requires CUDA GPU with ~8GB VRAM")
+
+        self.device = "cuda"
+
+        model_path, config_path = self.download()
 
         with open(config_path, "r") as f:
             config = json.load(f)
@@ -90,14 +107,17 @@ class StableAudioEngine:
                     raise
         try:
             if model_path.endswith(".safetensors"):
-                state_dict = load_file(model_path, device=self.device)
+                # REL-08: load to CPU first — load_file(device=gpu) +
+                # load_state_dict + .to() transiently pins ~2x model VRAM.
+                state_dict = load_file(model_path, device="cpu")
             else:
-                state_dict = torch.load(model_path, map_location=self.device)
+                state_dict = torch.load(model_path, map_location="cpu")
                 if isinstance(state_dict, dict) and "state_dict" in state_dict:
                     state_dict = state_dict["state_dict"]
 
             self.model.load_state_dict(state_dict)
-            self.model = self.model.to(self.device)
+            del state_dict  # REL-08: release the CPU copy before the GPU move
+            self.model = self.model.to(self.device)  # single device move
             self.sample_rate = self.model.sample_rate
             print(f"[{self.repo_id}] Loaded successfully.")
         except Exception as e:
@@ -166,6 +186,9 @@ class GeneratorRegistry:
         self.default_model_id = None
         self.model_states = {}  # model_id -> ModelState
         self.model_errors = {}  # model_id -> error message
+        self.model_last_used = {}  # REL-23: model_id -> time.monotonic() of last successful use
+        self._generation_lock = threading.Lock()  # REL-07: serialize GPU access
+        self.gpu_monitor = GPUMonitor()  # REL-23: per-model VRAM attribution
 
     def load(self):
         if not os.path.exists(self.config_path):
@@ -201,6 +224,24 @@ class GeneratorRegistry:
             if self.default_model_id is None:
                 self.default_model_id = model_id
 
+    def download_models(self) -> dict[str, str]:
+        """Pre-download every enabled engine's weights into the HF cache (REL-03).
+
+        Intended for worker startup, outside the generation timeout window.
+        Per-model failures are recorded in model_errors and returned — one bad
+        repo must not kill the batch or the worker start that calls this.
+
+        Usage: ``failures = registry.download_models()``
+        """
+        failures: dict[str, str] = {}
+        for model_id, engine in self.models.items():
+            try:
+                engine.download()
+            except Exception as e:  # noqa: BLE001 - isolate per-model failures
+                self.model_errors[model_id] = str(e)
+                failures[model_id] = str(e)
+        return failures
+
     @property
     def sample_rate(self):
         if self.default_model_id and self.default_model_id in self.models:
@@ -217,6 +258,15 @@ class GeneratorRegistry:
         if not self.models:
             raise RuntimeError("No models loaded in registry.")
 
+        # REL-07: one GPU, so one coarse lock. A zombie thread from a timed-out
+        # generation holds this forever, which turns the NEXT job into a 600 s
+        # timeout (the REL-03 breaker's designed escalation) instead of racing
+        # the zombie onto the same engine for 2x VRAM -> OOM -> another zombie.
+        with self._generation_lock:
+            return self._generate_batch_locked(requests, bpm, cfg_scale=cfg_scale, steps=steps)
+
+    def _generate_batch_locked(self, requests, bpm, cfg_scale=7.0, steps=50):
+        """generate_batch body; caller must hold _generation_lock (REL-07)."""
         # Group requests by model_id to process batches per engine
         model_requests = {}
         # Keep track of original indices to reconstruct the results array
@@ -235,7 +285,7 @@ class GeneratorRegistry:
             # Ensure the model is loaded before generation
             if model_id and not self.is_model_loaded(model_id):
                 print(f"Loading model '{model_id}' on-demand...")
-                self.load_model(model_id)
+                self._load_model_locked(model_id)
 
             if model_id not in model_requests:
                 model_requests[model_id] = []
@@ -251,6 +301,9 @@ class GeneratorRegistry:
             engine = self.models[model_id]
             # Route to engine
             engine_results, sr = engine.generate_batch(m_requests, bpm, cfg_scale=cfg_scale, steps=steps)
+            # REL-23: refresh LRU recency on successful use only — a failing
+            # model keeps its stale stamp and ages into eviction sooner.
+            self.model_last_used[model_id] = time.monotonic()
 
             if common_sr is None:
                 common_sr = sr
@@ -270,7 +323,12 @@ class GeneratorRegistry:
         return self.models[model_id].model is not None
 
     def load_model(self, model_id, progress_callback=None):
-        """Load a single model on-demand."""
+        """Load a single model on-demand (serialized on _generation_lock)."""
+        with self._generation_lock:
+            self._load_model_locked(model_id, progress_callback)
+
+    def _load_model_locked(self, model_id, progress_callback=None):
+        """load_model body; caller must hold _generation_lock (REL-07)."""
         if model_id not in self.models:
             raise ValueError(f"Model '{model_id}' not found in registry")
 
@@ -286,8 +344,11 @@ class GeneratorRegistry:
             if progress_callback and hasattr(engine, "set_progress_callback"):
                 engine.set_progress_callback(progress_callback)
 
-            engine.load()
+            # REL-23: attribute the load's VRAM delta per model (the monitor
+            # degrades to a plain call on hosts without torch CUDA).
+            self.gpu_monitor.track_model_load(model_id, engine.load)
             self.model_states[model_id] = ModelState.LOADED
+            self.model_last_used[model_id] = time.monotonic()
             print(f"[{model_id}] Model loaded successfully.")
         except Exception as e:
             self.model_states[model_id] = ModelState.ERROR
@@ -300,24 +361,38 @@ class GeneratorRegistry:
         if model_id not in self.models:
             raise ValueError(f"Model '{model_id}' not found in registry")
 
-        engine = self.models[model_id]
-        if engine.model is None:
-            # Already unloaded
+        with self._generation_lock:
+            engine = self.models[model_id]
+            if engine.model is not None:
+                engine.unload()
+            # Bookkeeping is unconditional and idempotent (REL-23): the real
+            # monitor's record_model_unload no-ops for untracked models, so a
+            # model that never finished loading still leaves consistent
+            # monitor + LRU stamps behind.
+            self.gpu_monitor.record_model_unload(model_id)
             self.model_states[model_id] = ModelState.IDLE
-            return
+            self.model_last_used.pop(model_id, None)
+            print(f"[{model_id}] Model unloaded.")
 
-        engine.unload()
-        self.model_states[model_id] = ModelState.IDLE
-        print(f"[{model_id}] Model unloaded.")
+            # If this was the default model, reassign to first loaded model
+            if self.default_model_id == model_id:
+                for mid, eng in self.models.items():
+                    if eng.model is not None and mid != model_id:
+                        self.default_model_id = mid
+                        break
+                else:
+                    self.default_model_id = None
 
-        # If this was the default model, reassign to first loaded model
-        if self.default_model_id == model_id:
-            for mid, eng in self.models.items():
-                if eng.model is not None and mid != model_id:
-                    self.default_model_id = mid
-                    break
-            else:
-                self.default_model_id = None
+    def lru_eviction_candidates(self) -> list[str]:
+        """Loaded non-default model ids, least-recently-used first (REL-23).
+
+        Usage: ``for model_id in registry.lru_eviction_candidates(): registry.unload_model(model_id)``
+        """
+        loaded = (mid for mid, engine in self.models.items() if engine.model is not None)
+        return sorted(
+            (mid for mid in loaded if mid != self.default_model_id),
+            key=lambda mid: self.model_last_used.get(mid, float("-inf")),
+        )
 
     def reload_model(self, model_id, progress_callback=None):
         """Reload a model (unload then load)."""

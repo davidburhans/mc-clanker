@@ -157,9 +157,12 @@ def _gpu_stack():
 
 
 def _pool_yielding(conn) -> MagicMock:
-    """An asyncpg-like pool whose ``async with pool.acquire() as c:`` yields conn."""
+    """An asyncpg-like pool whose ``async with pool.acquire() as c:`` yields conn.
+
+    acquire() must stay a sync MagicMock: an AsyncMock call returns a bare
+    coroutine, which `async with` cannot enter on Python 3.12 (pattern from
+    test_queue_lease_and_dedup.py, the suite that actually runs torch-less)."""
     pool = MagicMock()
-    pool.acquire = AsyncMock()
     pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
     pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
     return pool
@@ -175,7 +178,10 @@ def _make_conn() -> MagicMock:
 
 
 def _make_worker(exit_hook=None):
-    """GeneratorWorker with a mock DB pool; exit hook injectable (never os._exit)."""
+    """GeneratorWorker with mock DB pool + garage client; exit hook injectable
+    (never os._exit). The garage mock lets timeout-path tests get past the
+    fail-fast garage assert in _generate_and_upload so the 0.05 s window can
+    actually fire mid-generation (same pattern as test_worker.py:232)."""
     worker = worker_module.GeneratorWorker(
         worker_module.WorkerConfig(
             worker_id="vram-worker",
@@ -185,6 +191,7 @@ def _make_worker(exit_hook=None):
         exit_hook=exit_hook,
     )
     worker.db = _pool_yielding(_make_conn())
+    worker.garage = MagicMock()
     return worker
 
 

@@ -238,7 +238,7 @@ against fakes; documented how to run it.
 | baseline | landed | e125167 |
 | 1 rel-mixer-resilience | **landed** (939p/16s green; reviewer safe-to-land, 0 blockers) | 46e9d13 |
 | 2 rel-reset-reprime | **landed** (949p/16s green; reviewer safe-to-land, 0 blockers) | eda6ede |
-| 3 rel-worker-vram | pending | — |
+| 3 rel-worker-vram | **landed** (968p/16s green = 949 baseline + 19 new; ruff clean) | filled at merge |
 | 4 rel-llm-capture | pending | — |
 | 5 rel-storage-retention | pending | — |
 | 6 rel-job-queue | pending | — |

@@ -93,6 +93,16 @@ generation timeout, structured-log and `os._exit(1)`; Docker restart is the
 designed recovery for a wedged CUDA context. Pre-download enabled models in
 `start()` outside the timeout window.
 
+**Status: fixed-in rel-03-worker** — breaker landed in
+`_generate_with_lease`/`_handle_generation_timeout`: the counter resets only on
+a completed generate+upload pipeline (a non-timeout failure still leaves the
+timeout-#1 zombie holding VRAM), the exit hook is ctor-injected (defaults to
+`os._exit`), and the timeout re-raises as `TimeoutError("generation pipeline
+exceeded Ns")` so the row still gets a meaningful `error_message`. Weights
+pre-download via `GeneratorRegistry.download_models()` at `start()`, off-loop
+and before the pool exists, with per-model failure isolation. Pinned by
+`tests/test_worker_vram.py` (B1–B4, P1–P4).
+
 ### REL-04 [Critical] Show audit buffers grow in RAM for the whole show; flushed only at stop **[×3 — loop, server, mixer lanes]**
 `audit_recording.py:184,199` — `append_loop_audit` appends one LLMInteraction
 dict (full conductor JSON) + N ShowAction dicts per loop, no cap. Only
@@ -149,6 +159,14 @@ job's `generate_batch` lazy-load races it on the same engine; two concurrent
 **Fix:** `threading.Lock` serializing `load_model`/`generate_batch` (single-GPU
 worker gains nothing from concurrency).
 
+**Status: fixed-in rel-03-worker** — one coarse `GeneratorRegistry._generation_lock`
+serializes `generate_batch`/`load_model`/`unload_model` (`reload_model` takes
+it twice sequentially, never nested; the lazy load rides `_load_model_locked`).
+Compositional note: a REL-03 zombie dying inside `generate_batch` now holds
+this lock forever — which is exactly what escalates the next job to the
+timeout→breaker→restart path instead of racing it for 2× VRAM. Pinned by
+`tests/test_worker_vram.py` (L1–L2).
+
 ### REL-08 [High] Model load transiently holds ~2× model size in VRAM
 `framework_generator.py:93-100` — `load_file(model_path, device=self.device)`
 loads weights straight to GPU, then `load_state_dict` + `.to(self.device)`
@@ -156,6 +174,13 @@ while the state_dict is still referenced → ~12 GB peak for a 6 GB model.
 OOMs on ≤16 GB cards at first second-model load even when steady state fits.
 **Fix:** `load_file` on CPU, `del state_dict` after `load_state_dict`, single
 `.to(device)`.
+
+**Status: fixed-in rel-03-worker** — weight read is CPU-first
+(`load_file(device="cpu")` / `torch.load(map_location="cpu")`), `state_dict`
+deleted after `load_state_dict`, then one `.to(device)` move. Peak-VRAM halving
+itself is only verifiable on real hardware (U15 soak #4); the captured
+device/map_location args + single `.to()` are pinned by `tests/test_worker_vram.py`
+(F1–F2).
 
 ### REL-09 [High] Sync SQLAlchemy on the event loop + engine without `pool_pre_ping`/`pool_recycle`/timeouts
 `db.py:20` — `create_engine(database_url, pool_size=10, max_overflow=20)` and
@@ -247,7 +272,7 @@ on lifespan startup when the env key is present. (Already an item in
 | REL-20 | `sync_lock` held across `instruments.json` disk write — stalls every audio tick | `framework_state.py:367-373` | mutate under lock, write outside |
 | REL-21 | No NaN/Inf sanitization: `np.clip` preserves NaN; one bad stem poisons the whole mix for a loop | `aac_encoder.py:52-62`, `framework_mixer.py:375-377` | `np.nan_to_num` in decode/normalize — **fixed-in rel-01-mixer** (`Mixer._sanitize_pcm_block` at both broadcast sites + AAC float branch) |
 | REL-22 | Unclean shutdown never finalizes WAV headers (sizes stay 0; show row stays `live`) | `framework_state.py` close path | finalize from file length in shutdown close |
-| REL-23 | Worker never evicts models; `GPUMonitor` offload is dead code | `worker.py` (no unload refs) | LRU-evict non-default model when VRAM critical between jobs |
+| REL-23 | Worker never evicts models; `GPUMonitor` offload is dead code | `worker.py` (no unload refs) | LRU-evict non-default model when VRAM critical between jobs — **fixed-in rel-03-worker** (`GPUMonitor` wired into `GeneratorRegistry` for load/unload attribution; new `model_last_used` + `lru_eviction_candidates()` give true LRU order; worker evicts between jobs via `_maybe_evict_idle_models`, bounded 30 s so a lock-holding zombie can't stall the loop, graceful no-op without CUDA; pinned by `tests/test_worker_vram.py` E1–E7) |
 | REL-24 | Upload runs before lease-ownership check — zombie worker can overwrite completed audio or orphan Garage objects | `worker.py:340-341` | re-check `_still_own_job_row` after generation, before upload |
 | REL-25 | Worker hard-codes 44.1 kHz, drops engine sample rate; `generation_steps`/`cfg_scale` never reach the worker (config UI is a silent no-op) | `worker.py:337,344`, `framework_generator.py:408-415` | thread `(array, sr)` through; persist cfg/steps on the job row |
 | REL-26 | Icecast module is dead code carrying three 24/7 hazards if ever wired (`is_connected` can never be true, no auto-restart, permanent disable on slow first chunk) | `framework_icecast.py` | fix or delete before wiring |
