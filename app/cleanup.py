@@ -26,6 +26,8 @@ Environment Variables:
     - SHOW_AUDIO_RETENTION_DAYS: days to keep audio*.wav under SHOWS_DIR (0 = off)
     - EXPORT_RETENTION_DAYS: days to keep mc_clanker_*.{wav,mp3} in EXPORT_DIR (0 = off)
     - SESSION_STALE_HOURS: age at which session_routing rows are reaped (0 = off)
+    - PENDING_GRACE_SECONDS: age at which never-claimed 'pending' generator jobs
+      are failed with error_message='queue_backlog_reaped' (0 = off; REL-12b)
     - LLM_RETENTION_DAYS: days to keep the audit corpus (0 = keep forever, invariant 4)
     - AUDIT_ARCHIVE_DIR: NDJSON export destination for LLM_RETENTION_DAYS — must
       point at persistent storage and be mounted into every container that runs
@@ -69,12 +71,14 @@ def _retention_kwargs() -> dict:
 
     Bare-env defaults are DISABLED (0 days) so existing deployments see zero
     behavior change; the shipped compose sets SHOW_AUDIO_RETENTION_DAYS=14 and
-    EXPORT_RETENTION_DAYS=7 explicitly.
+    EXPORT_RETENTION_DAYS=7 explicitly. Also carries the REL-12 queue-hygiene
+    knob (PENDING_GRACE_SECONDS).
     """
     return {
         "show_audio_retention_days": _env_int("SHOW_AUDIO_RETENTION_DAYS", 0),
         "export_retention_days": _env_int("EXPORT_RETENTION_DAYS", 0),
         "session_stale_hours": _env_int("SESSION_STALE_HOURS", 24),
+        "pending_grace_seconds": _env_int("PENDING_GRACE_SECONDS", 86400),
         "llm_retention_days": _env_int("LLM_RETENTION_DAYS", 0),
         "audit_archive_dir": os.environ.get("AUDIT_ARCHIVE_DIR", "/exports/audit_archive"),
     }
@@ -93,6 +97,10 @@ class CleanupConfig:
     show_audio_retention_days: int = 0
     export_retention_days: int = 0
     session_stale_hours: int = 24
+    # REL-12b: fail 'pending' jobs older than this (the audit's 24 h effective
+    # horizon). 0 disables the pass; seconds (not days) so an outage backlog can
+    # be reaped tighter than the terminal-retention horizon expires_at serves.
+    pending_grace_seconds: int = 86400
     llm_retention_days: int = 0
     audit_archive_dir: str = "/exports/audit_archive"
     # Empty → resolved via app.lib.paths at pass time (respects SHOWS_DIR/EXPORT_DIR).
@@ -173,13 +181,19 @@ class JobExpirationCleanup:
             Number of jobs acted on this cycle (reaped + deleted).
         """
         reaped = await self._reap_stale_processing()
+        # REL-12b: the stale-pending reaper is error-isolated like the U5 passes
+        # (one bad SQL run must not wedge the cycle). NOTE: the disabled-check
+        # inside _reap_stale_pending MUST keep the ``<= 0`` form — configs that
+        # are MagicMocks (no real value) then compare False and disable the
+        # pass instead of running SQL against the mock.
+        backlog = await self._run_pass("stale pending reaper", self._reap_stale_pending)
         deleted_count = await self._delete_expired_jobs()
         # REL-05/REL-16 (U5): retention passes are error-isolated so a failure
         # can never block job reaping/deletion or a sibling pass.
         sessions = await self._run_pass("session reaper", self._reap_stale_sessions)
         files = await self._run_pass("recording retention", self._sweep_expired_recordings)
         audit = await self._run_pass("audit retention", self._delete_expired_audit_rows)
-        return reaped + deleted_count + sessions + files + audit
+        return reaped + backlog + deleted_count + sessions + files + audit
 
     async def _run_pass(self, label: str, pass_fn: Callable[[], int]) -> int:
         """Run one cleanup pass in isolation: a failure logs and yields 0 (cycle stays resilient)."""
@@ -219,6 +233,38 @@ class JobExpirationCleanup:
         reaped = len(rows)
         if reaped:
             logger.warning("Reaped %d stale 'processing' jobs (expired lease)", reaped)
+        return reaped
+
+    async def _reap_stale_pending(self) -> int:
+        """Fail 'pending' jobs older than pending_grace_seconds (REL-12b).
+
+        The loop terminal-abandons its own losers (REL-12a); this pass is the
+        backstop for rows no loop ever waits on (API submissions, a crashed
+        web process) and bounds outage backlog at ~one grace period. NEVER
+        touches 'processing' rows — those are claimed/running and owned by
+        the lease/reclaim machinery.
+        """
+        grace = self.config.pending_grace_seconds
+        if grace <= 0:  # 0 disables; also keeps MagicMock configs inert (see _run_cleanup)
+            return 0
+        assert self.db is not None  # initialized in start() before cleanup runs
+        async with self.db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE generator_jobs
+                SET status = 'failed',
+                    error_message = COALESCE(error_message, 'queue_backlog_reaped'),
+                    completed_at = NOW(),
+                    expires_at = NOW() + INTERVAL '1 hour'
+                WHERE status = 'pending'
+                  AND created_at < NOW() - make_interval(secs => $1)
+                RETURNING id
+                """,
+                grace,
+            )
+        reaped = len(rows)
+        if reaped:
+            logger.warning("Reaped %d stale 'pending' jobs (backlog past %ds)", reaped, grace)
         return reaped
 
     async def _delete_expired_jobs(self) -> int:

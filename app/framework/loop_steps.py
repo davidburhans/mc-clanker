@@ -18,7 +18,7 @@ no I/O inside the lock) live in the ``_step_*`` methods HERE. The source-level g
 ``test_no_io_inside_state_lock_in_orchestrator`` is scoped to scan BOTH this file
 and ``loop_orchestrator.py``; do not weaken that scope.
 
-Result types (``_StepResult``/``_CommitResult``/``_PregenDecision``/``_StateSnapshot``)
+Result types (``_StepResult``/``_CommitResult``/``_PregenDecision``/``_StateSnapshot``/``_SubmitJobsResult``)
 are defined here because they are produced and consumed by the ``_step_*`` methods
 and imported back into the orchestrator's driver.
 """
@@ -66,6 +66,14 @@ JOB_WAIT_TIMEOUT_SECONDS = 600.0
 # One extra, much shorter pass recovers those late completions; genuinely
 # failed jobs return immediately, so the grace only ever costs still-pending work.
 JOB_LATE_COMPLETION_GRACE_SECONDS = 30.0
+
+# REL-12c: submission backpressure bound. Steady state peaks at ONE uncached
+# batch (<= 6 jobs — the single worker drains sequentially at 5-30 s/stem), so
+# a depth over 10x a full batch means the drain rate has fallen behind by
+# design; we skip-and-log submissions for the cycle (prompts stay cache-missed
+# and retry next loop) instead of growing the queue without bound. Module attr
+# so tests monkeypatch it (JOB_WAIT_TIMEOUT_SECONDS precedent).
+JOB_PENDING_DEPTH_LIMIT = 64
 
 # Round-3 fix B5 (review 08/6): an explicit JSON ``null`` for master_bpm /
 # master_key slipped past ``.get(default)`` (the default only fires on a MISSING
@@ -162,6 +170,34 @@ async def reawait_late_job_completions(
     return merged
 
 
+def _collect_uncached_stems(
+    stems: list[dict[str, Any]],
+    current_bpm: int,
+    current_key: str,
+    stem_cache: dict[str, dict],
+) -> list[tuple[int, dict[str, Any], str]]:
+    """P7 phase 1 (pure): scan the cache, return uncached ``(idx, stem, cache_key)``.
+
+    Cache HITS refresh ``last_used`` in place (REL-06: the TTL clock restarts
+    on every hit — a retained stem must not age out while in active use) and
+    are excluded from submission.
+    """
+    uncached: list[tuple[int, dict[str, Any], str]] = []
+    for i, t in enumerate(stems):
+        prompt = t["prompt"]
+        track_bars = t["bars"]
+        m_id = t.get("model_id")
+        cache_key = make_cache_key(m_id, prompt, current_bpm, current_key, track_bars)
+
+        if cache_key in stem_cache:
+            print(f"Cache HIT: '{prompt}'")
+            stem_cache[cache_key]["last_used"] = time.time()
+            continue  # Already have audio
+
+        uncached.append((i, t, cache_key))
+    return uncached
+
+
 class _StepResult(enum.Enum):
     """Outer-while control-flow signal for _step_* methods (brief-05 decomp).
 
@@ -195,6 +231,13 @@ class _PregenDecision(NamedTuple):
     conductor_response: dict | None
     prepared_tracks: list
     loop_duration_samples: int
+
+
+class _SubmitJobsResult(NamedTuple):
+    """P7 output: jobs submitted + stem indexes skipped by the REL-12c throttle."""
+
+    pending_jobs: list  # [(job_id, original_index, cache_key)]
+    skipped_idxs: list[int]
 
 
 class _StateSnapshot(NamedTuple):
@@ -262,6 +305,14 @@ class _LoopSteps:
         timeout: float = 120.0,
     ) -> dict[uuid.UUID, str | None]:
         """Delegate provided by ``AsyncFrameworkLoop`` (U4)."""
+        raise NotImplementedError
+
+    async def _abandon_jobs(self, job_ids: list[Any]) -> int:
+        """Delegate provided by ``AsyncFrameworkLoop`` (U6/REL-12a)."""
+        raise NotImplementedError
+
+    async def _pending_depth(self) -> int:
+        """Delegate provided by ``AsyncFrameworkLoop`` (U6/REL-12c)."""
         raise NotImplementedError
 
     async def _fetch_audio(self, audio_path: str) -> np.ndarray | None:
@@ -529,57 +580,65 @@ class _LoopSteps:
 
         return local_next_stems, local_current_bpm, local_current_key
 
-    async def _step_submit_jobs(self, local_next_stems, local_current_bpm, local_current_key) -> list:
-        """P7: submit generation jobs for uncached stems.
+    async def _step_submit_jobs(self, local_next_stems, local_current_bpm, local_current_key) -> _SubmitJobsResult:
+        """P7: submit generation jobs for uncached stems (REL-12c: skip-and-log
+        the whole phase when the pending backlog exceeds the bound — never
+        block; skipped prompts stay cache-missed and retry next loop).
 
-        The cache-HIT ``continue`` is LOCAL to this for-loop (already have
-        audio) — it is not an outer-while jump, so it stays inline.
+        Two-phase so the depth probe fires ONLY when a submission would occur:
+        phase 1 (``_collect_uncached_stems``) is a pure cache scan, so
+        retained-stem loops cost zero DB queries.
         """
-        pending_jobs = []  # List of (job_id, original_index)
+        uncached = _collect_uncached_stems(local_next_stems, local_current_bpm, local_current_key, self.stem_cache)
 
-        for i, t in enumerate(local_next_stems):
-            prompt = t["prompt"]
-            track_bars = t["bars"]
-            m_id = t.get("model_id")
+        # REL-12c backpressure: over the bound, skip-and-log EVERY submission
+        # this cycle (never block / never await a drain). Skipped indexes ride
+        # out so P8 can report them "failed" in the applied-actions audit.
+        if uncached and await self._queue_backlogged():
+            skipped = [i for i, _t, _cache_key in uncached]
+            print(
+                f"[AsyncLoop-{self._loop_idx}] Pending backlog over {JOB_PENDING_DEPTH_LIMIT}; "
+                f"skipping {len(skipped)} submission(s) this cycle"
+            )
+            return _SubmitJobsResult([], skipped)
+
+        pending_jobs = []  # List of (job_id, original_index, cache_key)
+        for i, t, cache_key in uncached:
             orig = t.get("_original_details", {})
-            cache_key = make_cache_key(m_id, prompt, local_current_bpm, local_current_key, track_bars)
-
-            # Check cache
-            if cache_key in self.stem_cache:
-                print(f"Cache HIT: '{prompt}'")
-                # REL-06: TTL clock restarts on every hit — a retained stem
-                # must not age out while in active use.
-                self.stem_cache[cache_key]["last_used"] = time.time()
-                continue  # Already have audio
-
-            # Submit job
             job_id = await self._submit_job(
                 session_id=self.session_id,
                 instrument=orig.get("sub_family", "Unknown"),
-                prompt=prompt,
+                prompt=t["prompt"],
                 major_family=orig.get("major_family"),
-                model_id=m_id,
+                model_id=t.get("model_id"),
                 key=local_current_key,
                 bpm=local_current_bpm,
                 timbre_tags=orig.get("timbre_tags", []),
-                bars=track_bars,
+                bars=t["bars"],
             )
             pending_jobs.append((job_id, i, cache_key))
 
-        return pending_jobs
+        return _SubmitJobsResult(pending_jobs, [])
 
-    async def _step_await_jobs_fetch(self, pending_jobs, local_next_stems) -> dict[int, str]:
+    async def _step_await_jobs_fetch(
+        self, pending_jobs, local_next_stems, skipped_idxs: list[int] | None = None
+    ) -> dict[int, str]:
         """P8: wait for jobs, fetch audio, populate stem_cache + state.cache_stem.
 
         B7: fetched audio is routed through ``state.cache_stem`` (under lock) so
         the 16-entry LRU cap is enforced — the background pregen path never
         calls it (brief-01 risk #4 divergence).
 
-        U4 (DPO field audit): returns ``{orig_idx: "generated" | "failed"}`` for
-        the submitted jobs; stems absent from the map were cache hits (the
-        applied-actions builder defaults them to "cached").
+        U4 (DPO field audit): returns ``{orig_idx: "generated" | "failed"}``
+        for the submitted jobs AND the REL-12c throttle-skipped stems; stems
+        absent from the map were cache hits (the applied-actions builder
+        defaults them to "cached").
         """
         outcomes: dict[int, str] = {}
+        # REL-12c: a throttle-skipped stem reports "failed" — absent from the
+        # map the applied-actions audit would default it to "cached" (a lie).
+        for idx in skipped_idxs or ():
+            outcomes[idx] = "failed"
         if pending_jobs:
             job_ids = [job_id for job_id, _, _ in pending_jobs]
             print(f"[AsyncLoop-{self._loop_idx}] Waiting for {len(job_ids)} jobs to complete...")
@@ -587,6 +646,13 @@ class _LoopSteps:
 
             results = await self._await_jobs(job_ids, timeout=JOB_WAIT_TIMEOUT_SECONDS)
             results = await self._reawait_late_completions(job_ids, results)
+
+            # REL-12a: the loop has given up on anything still unreported —
+            # terminalize the still-pending rows or they are immortal (the
+            # worker's FIFO claim would keep generating them; the next loop's
+            # cache-miss would resubmit the identical prompt).
+            missing = [job_id for job_id in job_ids if not results.get(job_id)]
+            await self._abandon_missing_jobs(missing)
 
             wait_duration = time.time() - wait_start
             print(f"[AsyncLoop-{self._loop_idx}] Jobs completed in {wait_duration:.2f}s")
@@ -609,6 +675,31 @@ class _LoopSteps:
                     print(f"Job {job_id} failed or timed out")
                     outcomes[orig_idx] = "failed"
         return outcomes
+
+    async def _abandon_missing_jobs(self, job_ids: list[Any]) -> None:
+        """REL-12a: terminal-fail still-pending jobs this loop gave up on.
+
+        Best-effort by design: a failed abandon must never kill the loop —
+        the stale-pending reaper (REL-12b) is the backstop.
+        """
+        if not job_ids:
+            return
+        try:
+            count = await self._abandon_jobs(job_ids)
+        except Exception as exc:  # noqa: BLE001 - hygiene, never fatal
+            print(f"[AsyncLoop-{self._loop_idx}] abandon_jobs failed: {exc}")
+            return
+        if count:
+            print(f"[AsyncLoop-{self._loop_idx}] Abandoned {count} job(s) (loop_abandoned)")
+
+    async def _queue_backlogged(self) -> bool:
+        """REL-12c: is the pending backlog over JOB_PENDING_DEPTH_LIMIT? Fail-open."""
+        try:
+            depth = await self._pending_depth()
+        except Exception as exc:  # noqa: BLE001 - a broken gauge must not stop the set
+            print(f"[AsyncLoop-{self._loop_idx}] pending-depth probe failed ({exc}); submitting anyway")
+            return False
+        return depth > JOB_PENDING_DEPTH_LIMIT
 
     async def _reawait_late_completions(
         self,

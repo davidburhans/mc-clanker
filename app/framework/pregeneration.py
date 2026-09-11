@@ -26,9 +26,11 @@ from app.framework.conductor_interaction import (
     load_available_models,
     process_actions,
 )
-from app.framework.domain_audio import make_cache_key, tile_to_loop
+from app.framework.domain_audio import tile_to_loop
 from app.framework.loop_steps import (
+    JOB_PENDING_DEPTH_LIMIT,
     JOB_WAIT_TIMEOUT_SECONDS,
+    _collect_uncached_stems,
     reawait_late_job_completions,
     sanitize_master_bpm,
     sanitize_master_key,
@@ -81,40 +83,50 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
                 }
             )
 
-        # Submit jobs. Shares loop.stem_cache (R11); skips stems already cached.
+        # Submit jobs. Shares loop.stem_cache (R11); skips stems already cached
+        # (the same _collect_uncached_stems scan the foreground P7 uses, so the
+        # REL-06 hit-refresh cannot drift between the paths).
+        # REL-12c: the same depth-gauge throttle as P7 — when the pending
+        # backlog is over the bound, skip-and-log the whole phase (never block);
+        # the skipped prompts stay cache-missed and retry on a later cycle.
+        skipped_idxs: list[int] = []
         pending_jobs: list[tuple[Any, int, str]] = []
-        for i, t in enumerate(next_stems):
-            prompt = t["prompt"]
-            track_bars = t["bars"]
-            m_id = t.get("model_id")
-            cache_key = make_cache_key(m_id, prompt, current_bpm, current_key, track_bars)
-
-            if cache_key in loop.stem_cache:
-                # REL-06: same TTL-refresh as the foreground hit in
-                # _step_submit_jobs. This stays a loop.stem_cache-ONLY write —
-                # never state.cache_stem (brief-01 risk #4 divergence).
-                loop.stem_cache[cache_key]["last_used"] = time.time()
-                continue
-
-            orig = t.get("_original_details", {})
-            job_id = await loop._submit_job(
-                session_id=loop.session_id,
-                instrument=orig.get("sub_family", "Unknown"),
-                prompt=prompt,
-                major_family=orig.get("major_family"),
-                model_id=m_id,
-                key=current_key,
-                bpm=current_bpm,
-                timbre_tags=orig.get("timbre_tags", []),
-                bars=track_bars,
+        uncached = _collect_uncached_stems(next_stems, current_bpm, current_key, loop.stem_cache)
+        if uncached and await loop._queue_backlogged():
+            skipped_idxs = [i for i, _t, _cache_key in uncached]
+            print(
+                f"[AsyncFrameworkLoop] Pre-gen: pending backlog over {JOB_PENDING_DEPTH_LIMIT}; "
+                f"skipping {len(skipped_idxs)} submission(s) this cycle"
             )
-            pending_jobs.append((job_id, i, cache_key))
+        else:
+            for i, t, cache_key in uncached:
+                prompt = t["prompt"]
+                track_bars = t["bars"]
+                m_id = t.get("model_id")
+
+                orig = t.get("_original_details", {})
+                job_id = await loop._submit_job(
+                    session_id=loop.session_id,
+                    instrument=orig.get("sub_family", "Unknown"),
+                    prompt=prompt,
+                    major_family=orig.get("major_family"),
+                    model_id=m_id,
+                    key=current_key,
+                    bpm=current_bpm,
+                    timbre_tags=orig.get("timbre_tags", []),
+                    bars=track_bars,
+                )
+                pending_jobs.append((job_id, i, cache_key))
 
         # Wait for jobs + fetch audio. NOTE: writes ONLY loop.stem_cache here —
         # state.cache_stem is foreground-only (brief-01 risk #4 divergence).
         # U4: stem_outcomes mirrors the foreground P8 tri-state so both loop
         # paths capture identical applied_actions data.
         stem_outcomes: dict[int, str] = {}
+        # REL-12c: a throttle-skipped stem reports "failed" — absent from the
+        # map the applied-actions audit would default it to "cached" (a lie).
+        for idx in skipped_idxs:
+            stem_outcomes[idx] = "failed"
         if pending_jobs:
             job_ids = [job_id for job_id, _, _ in pending_jobs]
             # B3: same batch budget as the foreground path — one worker drains a
@@ -124,6 +136,11 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
             results = await reawait_late_job_completions(
                 loop._await_jobs, job_ids, results, label=f"pregen-{for_loop_idx}"
             )
+
+            # REL-12a: this background path must abandon its losers too, or it
+            # re-leaks the immortal-pending bug the foreground path just fixed.
+            missing = [job_id for job_id in job_ids if not results.get(job_id)]
+            await loop._abandon_missing_jobs(missing)
 
             for job_id, orig_idx, cache_key in pending_jobs:
                 audio_path = results.get(job_id)

@@ -79,7 +79,9 @@ class JobQueuePort(Protocol):
     COMPLETE: ``await_jobs`` is now also wired — the loop's ``_await_jobs``
     delegate routes through ``self._jobs.await_jobs`` (R14 complete; the
     foreground/background loop paths no longer call ``wait_for_multiple_jobs``
-    directly).
+    directly). U6/REL-12: the port also owns the queue LIFECYCLE —
+    ``abandon_jobs`` terminal-fails still-pending rows a loop gave up on, and
+    ``pending_depth`` is the backpressure gauge for the submit throttle.
     """
 
     async def submit(
@@ -100,6 +102,19 @@ class JobQueuePort(Protocol):
 
     async def await_jobs(self, job_ids: list[UUID], timeout: float = 120.0) -> dict[UUID, str | None]:
         """Block until the jobs complete; return ``{job_id: audio_path_or_None}``."""
+        ...
+
+    async def abandon_jobs(self, job_ids: list[UUID]) -> int:
+        """Terminal-fail still-``pending`` jobs the caller has given up on (REL-12a).
+
+        Only rows still 'pending' are touched — never a claimed/running
+        ('processing') row. Idempotent: already-terminal rows are no-ops.
+        Returns the number of rows abandoned.
+        """
+        ...
+
+    async def pending_depth(self) -> int:
+        """Current number of 'pending' generator jobs (REL-12c backpressure gauge)."""
         ...
 
 

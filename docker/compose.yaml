@@ -103,6 +103,9 @@ services:
       - SHOW_AUDIO_RETENTION_DAYS=${SHOW_AUDIO_RETENTION_DAYS:-14}
       - EXPORT_RETENTION_DAYS=${EXPORT_RETENTION_DAYS:-7}
       - SESSION_STALE_HOURS=${SESSION_STALE_HOURS:-24}
+      # REL-12: fail pending jobs older than this (backstop for rows no loop
+      # ever abandons; 0 disables). Default = the audit's 24h horizon.
+      - PENDING_GRACE_SECONDS=${PENDING_GRACE_SECONDS:-86400}
       # REL-16/invariant 4: the fine-tuning corpus is KEEP-FOREVER unless you
       # opt in; enabling archives rows to AUDIT_ARCHIVE_DIR before deleting.
       - LLM_RETENTION_DAYS=${LLM_RETENTION_DAYS:-0}

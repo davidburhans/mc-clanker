@@ -56,6 +56,14 @@ class _FakeJobQueue:
         self.awaited.append({"job_ids": list(job_ids), "timeout": timeout})
         return self._await_result
 
+    # REL-12 grew the port with the queue-lifecycle members; this fake mirrors
+    # tests/test_jobs_injection.py._FakeJobQueue and declares them too.
+    async def abandon_jobs(self, job_ids: list[UUID]) -> int:
+        return len(job_ids)
+
+    async def pending_depth(self) -> int:
+        return 0
+
 
 async def test_await_jobs_delegates_to_injected_jobs() -> None:
     """_await_jobs routes through self._jobs.await_jobs with identical kwargs."""

@@ -43,6 +43,14 @@ class _FakeJobQueue:
     async def await_jobs(self, job_ids: list[UUID], timeout: float = 120.0) -> dict[UUID, str | None]:
         return {}
 
+    # REL-12 grew the port with the queue-lifecycle members; the structural
+    # isinstance assertions in this file require the fake to declare them too.
+    async def abandon_jobs(self, job_ids: list[UUID]) -> int:
+        return len(job_ids)
+
+    async def pending_depth(self) -> int:
+        return 0
+
 
 def test_loop_constructs_default_jobs_adapter() -> None:
     """Omitting ``jobs`` yields the concrete PostgresJobQueueAdapter, eagerly.

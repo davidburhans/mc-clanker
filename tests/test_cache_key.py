@@ -61,20 +61,25 @@ def test_no_inline_cache_key_fstring_remains_in_framework() -> None:
 
 
 def test_all_three_call_sites_invoke_make_cache_key() -> None:
-    """The three consumers must reference ``make_cache_key`` by name.
+    """The three consumers must reference the single cache-key source of truth.
 
     Sites: ``domain_audio.tile_to_loop`` (P9), ``loop_steps._step_submit_jobs``
-    (P7 foreground), ``pregeneration.run_pregeneration`` (background). If a site
-    drops the call (e.g. re-inlines the key), this fails before the drift can ship.
+    (P7 foreground), ``pregeneration.run_pregeneration`` (background). Since
+    REL-12 the two SUBMIT paths share ONE cache scan —
+    ``loop_steps._collect_uncached_stems`` — so the pregen site pins the shared
+    helper (dropping it would reopen the drift the inline scan had); loop_steps
+    itself must keep calling ``make_cache_key`` inside that helper. If a site
+    drops the shared call (e.g. re-inlines the key), this fails before the
+    drift can ship.
     """
     expected = {
         "domain_audio.py": "make_cache_key",
         "loop_steps.py": "make_cache_key",
-        "pregeneration.py": "make_cache_key",
+        "pregeneration.py": "_collect_uncached_stems",
     }
     for fname, needle in expected.items():
         source = (_FRAMEWORK_DIR / fname).read_text()
-        assert needle in source, f"{fname} must call make_cache_key (cache-key drift guard)"
+        assert needle in source, f"{fname} must route through {needle} (cache-key drift guard)"
 
 
 def test_make_cache_key_returns_a_value_usable_as_a_dict_key() -> None:

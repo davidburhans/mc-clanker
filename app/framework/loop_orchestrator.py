@@ -294,8 +294,10 @@ class AsyncFrameworkLoop(_LoopSteps):
                         snap.current_key,
                         deduped_tracks,
                     )
-                    pending_jobs = await self._step_submit_jobs(local_next_stems, local_current_bpm, local_current_key)
-                    stem_outcomes = await self._step_await_jobs_fetch(pending_jobs, local_next_stems)
+                    submit = await self._step_submit_jobs(local_next_stems, local_current_bpm, local_current_key)
+                    stem_outcomes = await self._step_await_jobs_fetch(
+                        submit.pending_jobs, local_next_stems, submit.skipped_idxs
+                    )
                     prepared_tracks, loop_duration_samples = await self._step_tile_audio(
                         local_next_stems, local_current_bpm, local_current_key, deduped_tracks
                     )
@@ -385,6 +387,22 @@ class AsyncFrameworkLoop(_LoopSteps):
         through their port abstraction (R14 complete).
         """
         return await self._jobs.await_jobs(job_ids, timeout=timeout)
+
+    async def _abandon_jobs(self, job_ids: list[uuid.UUID]) -> int:
+        """Fail still-pending jobs; delegates to the injected JobQueuePort (U6/REL-12a).
+
+        Kept as a method so ``patch.object(loop, '_abandon_jobs')`` keeps working
+        (same pattern as ``_await_jobs``); routes through ``self._jobs.abandon_jobs``.
+        """
+        return await self._jobs.abandon_jobs(job_ids)
+
+    async def _pending_depth(self) -> int:
+        """Pending-job count; delegates to the injected JobQueuePort (U6/REL-12c).
+
+        Kept as a method so ``patch.object(loop, '_pending_depth')`` keeps
+        working; routes through ``self._jobs.pending_depth``.
+        """
+        return await self._jobs.pending_depth()
 
     async def _fetch_audio(self, audio_path: str) -> np.ndarray | None:
         """

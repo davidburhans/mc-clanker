@@ -20,9 +20,12 @@ wraps this module's ``await_jobs`` (which still wraps
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func
 
 
 async def submit_generator_job(
@@ -86,6 +89,64 @@ async def await_jobs(job_ids: Sequence[uuid.UUID], timeout: float = 120.0) -> di
     return await wait_for_multiple_jobs(list(job_ids), timeout=timeout)
 
 
+async def abandon_generator_jobs(job_ids: Sequence[uuid.UUID | str]) -> int:
+    """Fail still-pending rows in ``job_ids`` as 'loop_abandoned' (REL-12a).
+
+    Guarded to status='pending' ONLY: a claimed/running ('processing') row is
+    never touched (unit acceptance: no path may fail a running job), and
+    already-terminal rows are no-ops, so the call is idempotent and safe to
+    retry. Timestamps are Python-side binds — interval arithmetic is not
+    portable to the SQLite fallback. Prints when count > 0 (module convention).
+    """
+    ids = list(job_ids)
+    if not ids:
+        return 0
+
+    def _abandon_sync() -> int:
+        from sqlalchemy import update
+
+        from app.db import DatabaseManager
+        from app.models.generator_job import GeneratorJob
+
+        now = datetime.now(timezone.utc)
+        db_manager = DatabaseManager.get_instance()
+        with db_manager.session() as session:
+            stmt = (
+                update(GeneratorJob)
+                .where(GeneratorJob.id.in_(ids), GeneratorJob.status == "pending")
+                .values(
+                    status="failed",
+                    error_message=func.coalesce(GeneratorJob.error_message, "loop_abandoned"),
+                    completed_at=now,
+                    expires_at=now + timedelta(hours=1),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            return int(session.execute(stmt).rowcount or 0)
+
+    count = await asyncio.to_thread(_abandon_sync)
+    if count:
+        print(f"[AsyncFrameworkLoop] Abandoned {count} job(s) still pending (loop_abandoned)")
+    return count
+
+
+async def count_pending_jobs() -> int:
+    """Number of pending generator jobs — the REL-12c backpressure gauge."""
+
+    def _count_sync() -> int:
+        from sqlalchemy import select
+
+        from app.db import DatabaseManager
+        from app.models.generator_job import GeneratorJob
+
+        db_manager = DatabaseManager.get_instance()
+        with db_manager.session() as session:
+            stmt = select(func.count()).select_from(GeneratorJob).where(GeneratorJob.status == "pending")
+            return int(session.execute(stmt).scalar_one())
+
+    return await asyncio.to_thread(_count_sync)
+
+
 class PostgresJobQueueAdapter:
     """Postgres generator-job adapter: wraps the module submit/await functions.
 
@@ -142,3 +203,15 @@ class PostgresJobQueueAdapter:
         recurses. Now wired into the loop via ``_await_jobs`` (U4).
         """
         return await await_jobs(job_ids, timeout=timeout)
+
+    async def abandon_jobs(self, job_ids: list[uuid.UUID]) -> int:
+        """Terminal-fail still-pending jobs; delegates to the module function (REL-12a).
+
+        Bare-name delegation (same pattern as ``submit``/``await_jobs``): the
+        module global is resolved at call time, so tests can monkeypatch it.
+        """
+        return await abandon_generator_jobs(job_ids)
+
+    async def pending_depth(self) -> int:
+        """Pending-job count; delegates to the module function (REL-12c gauge)."""
+        return await count_pending_jobs()

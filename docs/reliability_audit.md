@@ -257,6 +257,31 @@ already abandoned; sustained slow-worker episode → unbounded queue growth.
 reaper to fail stale `pending` rows past `expires_at`, and throttle
 submission when observed drain rate falls behind.
 
+**Status: fixed-in rel-12-queue** — both submit→await paths (foreground
+`_step_await_jobs_fetch` and the pregen mirror) now terminal-abandon their
+losers after the grace pass via the new `JobQueuePort.abandon_jobs`
+(`error_message='loop_abandoned'`, guarded to `status='pending'` ONLY — a
+claimed/running `'processing'` row is never failed; its lease machinery owns
+it). `JobExpirationCleanup` gains the error-isolated `_reap_stale_pending`
+backstop for rows no loop ever waits on (API submissions, a crashed web
+process), knobbed by `PENDING_GRACE_SECONDS` (default 86400 = the audit's
+effective 24 h horizon; `0` disables) and predicate on `created_at` rather
+than `expires_at` so queue hygiene decouples from the terminal-retention
+horizon. Submission backpressure: a `JobQueuePort.pending_depth()` gauge and
+`JOB_PENDING_DEPTH_LIMIT = 64` in `loop_steps.py`; over the bound the whole
+submit phase skip-and-logs for the cycle (never blocks; prompts stay
+cache-missed and retry next loop) and the skipped stems report the documented
+`"failed"` applied-actions outcome. The worker's claim SQL is deliberately
+unchanged: once abandoned rows are terminal, the existing `status='pending'`
+filter already excludes them, and a staleness predicate there would duplicate
+the grace knob in a second process. Documented residuals: a stem still
+`'processing'` at loop expiry completes late and its audio goes unused
+(bounded by the worker's timeout circuit; the C8 `content_hash` in-flight
+dedup is the follow-up that collapses the duplicate row); API-submitted rows
+older than the grace now come back `failed` (that is the intent;
+`PENDING_GRACE_SECONDS=0` restores the old wait-forever behavior). Pinned by
+`tests/test_job_queue_lifecycle.py`.
+
 ### REL-13 [High] Export/stats/timeline endpoints load entire tables; exports are broken on real sessions
 `reasoning_logs.py:153,178,188,275` and `shows.py:646,667` — unbounded
 `.all()` (a week-long show ≈ 75 k interactions ≈ hundreds of MB per request);
