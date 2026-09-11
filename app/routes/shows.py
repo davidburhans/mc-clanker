@@ -1,8 +1,8 @@
 import asyncio
+import fnmatch
 import json
 import logging
 import os
-import struct
 import time
 import uuid
 from datetime import datetime, timezone
@@ -14,6 +14,9 @@ from app.auth import get_current_user_from_request, hash_password
 from app.db import DatabaseManager
 from app.framework.audit_recording import drop_buffered_rows_for_show, flush_recording_buffers
 from app.framework.framework_state import state
+from app.lib.paths import exports_dir, recordings_dir
+from app.lib.wav import finalize_wav as _finalize_wav
+from app.lib.wav import write_wav_header as _write_wav_header
 from app.models import LLMInteraction, Show, ShowAction
 from app.playback import ShowPlayback
 
@@ -41,86 +44,6 @@ def _as_naive_utc(value: datetime) -> datetime:
     if value.tzinfo is not None:
         return value.astimezone(timezone.utc).replace(tzinfo=None)
     return value
-
-# Canonical recording format: the mixer emits stereo 16-bit PCM at 44.1kHz
-# (framework_mixer.py: `(pcm * 32767).astype('<i2').tobytes()`). The WAV header
-# written here must match so show/export recordings are valid, playable WAVs.
-_RECORD_SAMPLE_RATE = 44100
-_RECORD_CHANNELS = 2
-_RECORD_SAMPLE_WIDTH = 2  # bytes per sample (16-bit)
-_WAV_HEADER_SIZE = 44
-# data_size + 36 must fit in a 32-bit RIFF size field.
-_WAV_MAX_DATA_SIZE = 0xFFFFFFFF - 36
-
-
-def _write_wav_header(handle) -> None:
-    """Write a canonical 44-byte WAV header (PCM/16-bit/stereo/44.1kHz).
-
-    RIFF + data sizes are zero placeholders patched by ``_finalize_wav`` at close.
-    ``broadcast_audio`` then streams raw int16 LE PCM straight into the data chunk
-    via ``handle.write()``, so the file is a valid, playable WAV with no postprocess
-    (review C4 — show/export recordings were previously headerless raw PCM served
-    as ``audio/wav``).
-    """
-    byte_rate = _RECORD_SAMPLE_RATE * _RECORD_CHANNELS * _RECORD_SAMPLE_WIDTH
-    block_align = _RECORD_CHANNELS * _RECORD_SAMPLE_WIDTH
-    handle.write(b"RIFF")
-    handle.write(struct.pack("<I", 0))
-    handle.write(b"WAVE")
-    handle.write(b"fmt ")
-    handle.write(
-        struct.pack(
-            "<IHHIIHH",
-            16,
-            1,
-            _RECORD_CHANNELS,
-            _RECORD_SAMPLE_RATE,
-            byte_rate,
-            block_align,
-            _RECORD_SAMPLE_WIDTH * 8,
-        )
-    )
-    handle.write(b"data")
-    handle.write(struct.pack("<I", 0))
-
-
-def _finalize_wav(handle) -> None:
-    """Patch RIFF + data sizes from file length, then flush + close the handle."""
-    if handle is None:
-        return
-    try:
-        total = handle.tell()
-    except OSError:
-        total = _WAV_HEADER_SIZE
-    data_size = max(0, total - _WAV_HEADER_SIZE)
-    try:
-        if data_size <= _WAV_MAX_DATA_SIZE:
-            handle.seek(4)
-            handle.write(struct.pack("<I", 36 + data_size))
-            handle.seek(40)
-            handle.write(struct.pack("<I", data_size))
-        else:
-            # Round-3 D13: a >4 GiB recording cannot encode its real length in the
-            # 32-bit RIFF/data size fields. Leaving the zero placeholders made
-            # every size-honoring reader (including Python's own ``wave`` module,
-            # which validates the RIFF chunk) reject the WHOLE recording. Write the
-            # 0xFFFFFFFF sentinel used by mainstream wav writers instead, so the
-            # first 4 GiB stays playable/parseable.
-            log.warning("Recording exceeds 4GB WAV limit; writing 0xFFFFFFFF size sentinels")
-            handle.seek(4)
-            handle.write(struct.pack("<I", 0xFFFFFFFF))
-            handle.seek(40)
-            handle.write(struct.pack("<I", 0xFFFFFFFF))
-    except (OSError, struct.error) as exc:
-        log.warning("Could not finalize WAV header sizes: %r", exc)
-    try:
-        handle.flush()
-    except OSError:
-        pass
-    try:
-        handle.close()
-    except OSError:
-        pass
 
 
 def _file_holds_bytes(path: str) -> bool:
@@ -205,6 +128,74 @@ def _current_recording_show_id() -> int | None:
     """Show id currently owning the live recording (sync_lock-protected)."""
     with state.sync_lock:
         return state.current_show_id
+
+
+def _unlink_persisted_take(audio_file_path) -> int:
+    """Unlink the row-persisted take, if it looks like one of ours (REL-05).
+
+    The basename guard keeps a corrupted row (or a hand-edited path) from making
+    the delete route unlink an arbitrary file: only ``audio*.wav`` recordings
+    this module writes are eligible. Returns 0/1.
+    """
+    if not isinstance(audio_file_path, str) or not fnmatch.fnmatch(os.path.basename(audio_file_path), "audio*.wav"):
+        return 0
+    if not os.path.isfile(audio_file_path):
+        return 0
+    try:
+        os.unlink(audio_file_path)
+        return 1
+    except OSError as exc:
+        print(f"delete_show: could not unlink persisted take {audio_file_path}: {exc}")
+        return 0
+
+
+def _sweep_show_dir(show_id: int) -> int:
+    """Unlink every recording take under ``shows/{id}/`` (REL-05).
+
+    Stamped/uuid takes (round-3 D2) are never persisted anywhere, so the sweep
+    is the only way to reach them. Per-file OSError isolation: one bad inode
+    never prevents the remaining takes from being reclaimed. Returns the count
+    removed; a missing dir removes 0.
+    """
+    show_dir = os.path.join(recordings_dir(), str(show_id))
+    removed = 0
+    try:
+        entries = list(os.scandir(show_dir))
+    except OSError:
+        return 0  # never created, already gone, or unreadable — nothing to GC
+    for entry in entries:
+        if not entry.is_file(follow_symlinks=False):
+            continue
+        try:
+            os.unlink(entry.path)
+            removed += 1
+        except OSError as exc:
+            print(f"delete_show: could not unlink {entry.path}: {exc}")
+    if removed:
+        try:
+            os.rmdir(show_dir)  # best-effort: succeeds only when fully emptied
+        except OSError:
+            pass
+    return removed
+
+
+def _delete_show_audio_files(show_id: int, audio_file_path) -> int:
+    """Unlink every recording file owned by a deleted show (REL-05).
+
+    Two sources, unioned: the persisted ``audio_file_path`` (survives a
+    SHOWS_DIR change) and a sweep of ``shows/{id}/`` — stamped/uuid takes are
+    never persisted anywhere, so the sweep is the only way to reach them.
+    Per-file OSError isolation; a missing dir/None path removes 0. Returns the
+    file count removed.
+
+    Example: show 7 with audio.wav + audio_20240101T120000123456.wav on disk
+    and ``audio.wav`` persisted on the row → 2 removed, ``shows/7/`` pruned.
+    """
+    removed = _unlink_persisted_take(audio_file_path)
+    removed += _sweep_show_dir(show_id)
+    if removed:
+        print(f"delete_show {show_id}: removed {removed} audio file(s)")
+    return removed
 
 
 async def _release_show_started_flag_if_idle() -> None:
@@ -333,6 +324,7 @@ async def delete_show(show_id: int, request: Request):
     with db_manager.session() as session:
         show = require_show_owner(show_id, request, session)
         await _teardown_live_recording(show_id)
+        audio_file_path = show.audio_file_path  # read pre-commit; row expires after
         session.delete(show)
     # REL-14 (U4): buffered rows still referencing the deleted show can never
     # insert (its audit history was cascade-deleted) and would FK-poison every
@@ -340,6 +332,14 @@ async def delete_show(show_id: int, request: Request):
     # until restart. Deliberately drop ONLY this show's rows, loudly (invariant
     # 4: every drop is a counted, logged decision — never silent). After the
     # delete COMMIT so a failed delete never discards recoverable rows.
+    # REL-05a: the row is gone — its audio must go too, or 635 MB/hr of takes
+    # orphan on disk forever (stamped/uuid takes were reachable by nothing).
+    # Retire a live playback FIRST: unlinking under a zombie player would leave
+    # it looping a deleted file (stop_playback_route's executor-stop pattern).
+    player = _active_playbacks.pop(show_id, None)
+    if player is not None:
+        await asyncio.get_running_loop().run_in_executor(None, player.stop)
+    _delete_show_audio_files(show_id, audio_file_path)
     dropped = await drop_buffered_rows_for_show(show_id)
     if dropped:
         print(f"delete_show {show_id}: dropped {dropped} buffered audit rows referencing the deleted show")
@@ -380,7 +380,7 @@ async def start_show(show_id: int, request: Request):
             "vibe": state.user_override,
         }
 
-    shows_dir = os.environ.get("SHOWS_DIR", os.path.join(os.path.dirname(__file__), "..", "data", "shows"))
+    shows_dir = recordings_dir()  # SHOWS_DIR at call time (app.lib.paths)
     show_dir = os.path.join(shows_dir, str(show_id))
     os.makedirs(show_dir, exist_ok=True)
     started_at = _as_naive_utc(datetime.now(timezone.utc))
@@ -423,6 +423,9 @@ async def start_show(show_id: int, request: Request):
         state.current_show_id = show_id
         state.current_show_start_time = time.time()
         state.current_show_audio_file = audio_file
+        # REL-05c: a new recording starts from a clean per-sink fault slate.
+        state.recording_write_errors["show"] = 0
+        state.recording_stop_reasons["show"] = None
     async with state.lock:
         state.is_show_started = True
     return response
@@ -577,7 +580,7 @@ async def start_export(req: ExportStartRequest):
     win (A1/B8: is_recording/recording_file_handle are sync_lock-protected).
     """
     fmt = (req.format or "wav").lower()
-    export_dir = os.environ.get("EXPORT_DIR", "/exports")
+    export_dir = exports_dir()  # EXPORT_DIR at call time (app.lib.paths)
     os.makedirs(export_dir, exist_ok=True)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -598,6 +601,9 @@ async def start_export(req: ExportStartRequest):
             state.recording_format = fmt
             state.recording_file_path = file_path
             state.recording_start_time = time.time()
+            # REL-05c: a new recording starts from a clean per-sink fault slate.
+            state.recording_write_errors["export"] = 0
+            state.recording_stop_reasons["export"] = None
     if conflict:
         raise HTTPException(status_code=400, detail="Already recording")
 

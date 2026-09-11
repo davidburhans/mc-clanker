@@ -38,7 +38,6 @@ import asyncpg
 
 from app.aac_encoder import encode_aac, get_audio_duration
 from app.cleanup import (
-    CleanupConfig,
     JobExpirationCleanup,
     create_cleanup_config_from_env,
 )
@@ -521,14 +520,17 @@ class GeneratorWorker:
                 logger.warning("Job %s lost lease; skipping failure write", job_id)
 
     async def _cleanup_loop(self):
-        """Periodically clean up expired jobs."""
-        cleanup = JobExpirationCleanup(
-            CleanupConfig(
-                pg_dsn=self.config.pg_dsn,
-                garage=self.config.garage,
-                cleanup_interval=self.config.cleanup_interval,
-            )
-        )
+        """Periodically clean up expired jobs + run retention passes (U5).
+
+        The config comes from create_cleanup_config_from_env() (not a 3-field
+        CleanupConfig) so worker-side cleanup honors the same retention envs as
+        the dedicated compose cleanup service. The worker container ships none
+        of the file envs → those passes disable themselves there; production
+        retention is owned by the dedicated service (decision 2).
+        """
+        config = create_cleanup_config_from_env()
+        config.cleanup_interval = self.config.cleanup_interval
+        cleanup = JobExpirationCleanup(config)
         cleanup.db = self.db
         cleanup.garage = self.garage
 

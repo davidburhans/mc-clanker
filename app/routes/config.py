@@ -91,6 +91,28 @@ def _mixer_thread_liveness() -> bool | None:
     return None if mixer_thread is None else mixer_thread.is_alive()
 
 
+def _recording_sink_status() -> dict:
+    """Per-sink recording health for /api/health (REL-05c).
+
+    The ENOSPC state that used to be one WARNING line and a silently
+    "continuing" recording: consecutive write-failure counters and why a sink
+    auto-stopped. Copy under sync_lock, zero I/O — safe next to the audio tick.
+    """
+    with state.sync_lock:
+        return {
+            "show": {
+                "active": state.is_show_recording,
+                "write_errors": state.recording_write_errors["show"],
+                "stopped_reason": state.recording_stop_reasons["show"],
+            },
+            "export": {
+                "active": state.is_recording,
+                "write_errors": state.recording_write_errors["export"],
+                "stopped_reason": state.recording_stop_reasons["export"],
+            },
+        }
+
+
 async def _readiness_checks() -> dict:
     """Aggregate DB + object-store probes into a readiness verdict."""
     database, object_store = await asyncio.gather(
@@ -115,6 +137,7 @@ async def health_check():
         "status": "healthy",
         "is_running": is_running,
         "mixer_alive": _mixer_thread_liveness(),
+        "recording": _recording_sink_status(),
         "ready": checks["ready"],
         "checks": checks,
         "timestamp": int(time.time()),

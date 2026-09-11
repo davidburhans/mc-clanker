@@ -1,10 +1,91 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import relationship
 
 from ..db import Base
+
+# Every captured column — the single source for the retention SELECT (cleanup.py
+# builds its archive query from this tuple) and for the ORM delegate below
+# (REL-16/U5 decision 8: one shaper, no drift between SQLAlchemy and asyncpg rows).
+_DUMP_COLUMNS = (
+    "id",
+    "show_id",
+    "loop_index",
+    "timestamp",
+    "relative_time_ms",
+    "prompt_messages",
+    "parsed_response",
+    "applied_actions",
+    "reasoning",
+    "error",
+    "was_fallback",
+    "bpm",
+    "key",
+    "instruments",
+    "action_type",
+    "set_name",
+)
+
+# Columns stored as JSON: asyncpg delivers these as str, SQLAlchemy as
+# list/dict — llm_dump_row normalizes the str form.
+_JSON_COLUMNS = ("prompt_messages", "parsed_response", "applied_actions", "instruments")
+
+
+def _json_field(value):
+    """Normalize a JSON column value: str → parsed JSON, anything else unchanged.
+
+    A non-JSON str (legacy context-summary blobs) degrades to a raw passthrough
+    instead of crashing the retention pass.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
+
+
+def llm_dump_row(record: Mapping) -> dict:
+    """Training-corpus row (U4/REL-16) from a raw column Mapping (ORM row or asyncpg Record).
+
+    messages follows the {role, content} chat shape the unsloth converter
+    and dpo_pipeline consume; the assistant turn carries the response as a
+    JSON *string* (their canonical row format, see tests/test_dpo_pipeline.py).
+    Legacy rows whose prompt_messages is the old context-summary dict degrade
+    to an assistant-only row instead of raising (the unsloth converter inserts
+    the system message for assistant-only samples).
+
+    Example: ``llm_dump_row({"prompt_messages": [{...}], "parsed_response": {...}, ...})``
+    → ``{"messages": [...], "response": {...}, "meta": {...}}``.
+    """
+    pm = _json_field(record["prompt_messages"])
+    parsed = _json_field(record["parsed_response"])
+    chat = list(pm) if isinstance(pm, list) else []
+    if parsed:
+        chat = chat + [{"role": "assistant", "content": json.dumps(parsed)}]
+    result = {"messages": chat}
+    if parsed:
+        result["response"] = parsed
+    # meta carries every remaining captured column — "DPO export contains
+    # every captured field" (U4 acceptance); kept OUT of the top level so
+    # the dump stays chat+response only for the training tools.
+    result["meta"] = {
+        "loop_index": record["loop_index"],
+        "relative_time_ms": record["relative_time_ms"],
+        "bpm": record["bpm"],
+        "key": record["key"],
+        "set_name": record["set_name"],
+        "instruments": _json_field(record["instruments"]),
+        "action_type": record["action_type"],
+        "applied_actions": _json_field(record["applied_actions"]),
+        "reasoning": record["reasoning"],
+        "was_fallback": record["was_fallback"],
+        "error": record["error"],
+    }
+    return result
 
 
 class LLMInteraction(Base):
@@ -80,34 +161,7 @@ class LLMInteraction(Base):
     def to_llm_dump_dict(self):
         """Training-corpus row (U4): full chat + response + capture metadata.
 
-        messages follows the {role, content} chat shape the unsloth converter
-        and dpo_pipeline consume; the assistant turn carries the response as a
-        JSON *string* (their canonical row format, see tests/test_dpo_pipeline.py).
-        Legacy rows whose prompt_messages is the old context-summary dict degrade
-        to an assistant-only row instead of raising (the unsloth converter inserts
-        the system message for assistant-only samples).
+        Delegates to the pure ``llm_dump_row`` shaper over this row's columns —
+        the exact shape the asyncpg retention archive writes (REL-16/U5).
         """
-        pm = self.prompt_messages
-        chat = list(pm) if isinstance(pm, list) else []
-        if self.parsed_response:
-            chat = chat + [{"role": "assistant", "content": json.dumps(self.parsed_response)}]
-        result = {"messages": chat}
-        if self.parsed_response:
-            result["response"] = self.parsed_response
-        # meta carries every remaining captured column — "DPO export contains
-        # every captured field" (U4 acceptance); kept OUT of the top level so
-        # the dump stays chat+response only for the training tools.
-        result["meta"] = {
-            "loop_index": self.loop_index,
-            "relative_time_ms": self.relative_time_ms,
-            "bpm": self.bpm,
-            "key": self.key,
-            "set_name": self.set_name,
-            "instruments": self.instruments,
-            "action_type": self.action_type,
-            "applied_actions": self.applied_actions,
-            "reasoning": self.reasoning,
-            "was_fallback": self.was_fallback,
-            "error": self.error,
-        }
-        return result
+        return llm_dump_row({column: getattr(self, column) for column in _DUMP_COLUMNS})

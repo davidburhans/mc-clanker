@@ -722,7 +722,11 @@ class TestD12EnvInjection:
 
 class TestD13WavOverFourGiB:
     def test_oversized_recording_writes_the_riff_sentinel(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(shows_routes, "_WAV_MAX_DATA_SIZE", 0)  # force the >4 GiB branch
+        # REL-05/U5: the WAV finalize logic (and its max-data-size constant) moved
+        # to app.lib.wav — patch the constant at its new home to force the branch.
+        import app.lib.wav as wav_module
+
+        monkeypatch.setattr(wav_module, "WAV_MAX_DATA_SIZE", 0)  # force the >4 GiB branch
         path = tmp_path / "huge.wav"
         handle = open(path, "wb")
         shows_routes._write_wav_header(handle)

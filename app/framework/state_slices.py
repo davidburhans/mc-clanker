@@ -117,6 +117,9 @@ class RecordingState(_Slice):
             "llm_interaction_buffer",
             "action_buffer",
             "current_show_audio_file",
+            # REL-05c: per-sink consecutive write-failure counters + stop reasons.
+            "recording_write_errors",
+            "recording_stop_reasons",
         }
     )
 

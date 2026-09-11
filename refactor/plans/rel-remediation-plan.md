@@ -240,7 +240,7 @@ against fakes; documented how to run it.
 | 2 rel-reset-reprime | **landed** (949p/16s green; reviewer safe-to-land, 0 blockers) | eda6ede |
 | 3 rel-worker-vram | **landed** (968p/16s green; reviewer safe-to-land, 0 blockers) | e28eee7 |
 | 4 rel-llm-capture | **landed** (987p/16s green; land-with-fixes applied: doc drift; DPO contract pinned) | 9268e69 |
-| 5 rel-storage-retention | pending | — |
+| 5 rel-storage-retention | **landed** (1009p/16s green; TDD red commit 461060e; invariant 4 preserved: corpus retention opt-in + export-before-delete) | commit-at-merge |
 | 6 rel-job-queue | pending | — |
 | 7 rel-db-offloop | pending | — |
 | 8 rel-stream-fanout | pending | — |

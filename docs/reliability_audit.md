@@ -139,6 +139,23 @@ silently corrupt audio, then Garage/DB writes start failing too.
 `JobExpirationCleanup` for recordings/exports; surface recording-write
 failures to health, not a one-shot log line.
 
+**Status: fixed-in rel-05-storage** — `delete_show` now retires any live
+playback, then unlinks the persisted take AND sweeps `shows/{id}/` (stamped/
+uuid takes were reachable by nothing; per-file OSError isolation; pinned by
+`tests/test_storage_retention.py` T1–T4). Retention passes (mtime-based,
+config-gated) live in `app/retention.py` behind `JobExpirationCleanup`: show
+recordings (`SHOW_AUDIO_RETENTION_DAYS`, 14 d in compose) and exports
+(`EXPORT_RETENTION_DAYS`, 7 d in compose) — bare-env default OFF so upgrades
+delete nothing unasked; a dedicated compose `cleanup` service runs them
+decoupled from worker liveness (invariant 5). ENOSPC no longer "continues
+recording": `_write_recording_sink` counts consecutive failures per sink
+(`state.recording_write_errors`, surfaced in `/api/health` → `recording.*`)
+and auto-stops the sink cleanly past `RECORDING_WRITE_FAILURE_STOP_THRESHOLD =
+32` ticks (~1.5 s), setting `recording_stop_reasons[sink] =
+"write_failure_threshold"`; the show slot keeps `current_show_id` so the
+corpus keeps capturing (invariant 4). One success resets the consecutive
+counter, so transient hiccups never stack into a stop (F4).
+
 ---
 
 ## P1 — Degradation, leaks, and stalls (fix before trusting multi-day runs)
@@ -293,7 +310,7 @@ on lifespan startup when the env key is present. (Already an item in
 
 | ID | Finding | Evidence | Fix |
 |---|---|---|---|
-| REL-16 | No retention for `llm_interactions`/`show_actions`; `session_routing` reaper never built | `cleanup.py` (jobs only), `models/session_routing.py:13-14` | retention deletes in cleanup cycle + `last_heartbeat < NOW()-1d` reaper |
+| REL-16 | No retention for `llm_interactions`/`show_actions`; `session_routing` reaper never built | `cleanup.py` (jobs only), `models/session_routing.py:13-14` | retention deletes in cleanup cycle + `last_heartbeat < NOW()-1d` reaper — **fixed-in rel-05-storage** (invariant 4 first: corpus retention is OPT-IN — `LLM_RETENTION_DAYS=0` keeps everything forever and issues zero corpus SQL; enabled, rows are streamed to an fsync'd NDJSON archive in `AUDIT_ARCHIVE_DIR` in the exact `to_llm_dump_dict`/`to_dict` shape (shared pure shapers `llm_dump_row`/`show_action_row`) and only the archived ids are deleted; a failed archive keeps every row). Session reaper defaults ON (`SESSION_STALE_HOURS=24`, `0` disables) with a sargable `make_interval` predicate against `idx_session_routing_heartbeat`; pinned by `tests/test_storage_retention.py` T9–T14 |
 | REL-17 | Job-waiter holds PG conn across full 600 s wait; dead conn undetected until timeout; `pool max_size=10` coupling | `job_waiter.py` | poll event in 5 s slices + `conn.is_closed()` check, or asyncpg connection-loss callback |
 | REL-18 | Flat 2 s retry backoff, no escalation/jitter; full LLM call repeated every cycle during DB outage | `loop_orchestrator.py:307-313` | exponential backoff w/ cap; skip conductor call after N submit failures |
 | REL-19 | Loop startup failure calls whole-app `trigger_shutdown()` — poisons audience streams/recordings/YouTube relay | `loop_orchestrator.py:436-445` | set `is_running=False` only; reserve the kill switch for process shutdown |

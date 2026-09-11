@@ -80,6 +80,13 @@ DEFAULT_INSTRUMENTS = {
 # Maximum number of generated stems to keep in memory for download
 _MAX_STEM_CACHE = 16
 
+# REL-05c: consecutive failed recording-sink writes tolerated before the sink is
+# auto-stopped. 32 ticks ≈ 1.5 s of sustained failure at the mixer's audio tick
+# (blocksize 2048 @ 44.1 kHz ≈ 46.4 ms/tick ≈ 21.5 ticks/s): long enough to ride
+# out transient hiccups, short enough to stop long before another ~100 MB is
+# futilely written to a full disk (44.1 kHz s16 stereo ≈ 176 kB/s).
+RECORDING_WRITE_FAILURE_STOP_THRESHOLD = 32
+
 
 class GlobalState:
     def __init__(self):
@@ -185,6 +192,12 @@ class GlobalState:
         # distinct handle's failure at most once (review B9), so a multi-hour show
         # recording does not spam the log per PCM chunk.
         self._last_recording_error_handle = None
+
+        # REL-05c: consecutive failed writes per recording sink ("show"/"export")
+        # and why a sink auto-stopped. Mutated by the mixer thread (write path)
+        # and zeroed at recording start; snapshotted under sync_lock by /api/health.
+        self.recording_write_errors: dict[str, int] = {"show": 0, "export": 0}
+        self.recording_stop_reasons: dict[str, str | None] = {"show": None, "export": None}
 
         # Playback state
         self.currently_playing_show_id = None
@@ -312,6 +325,10 @@ class GlobalState:
         self.currently_playing_set_name = ""
         self.currently_playing_reasoning = ""
         self.loop_history = []
+        # REL-05c recording-health dicts back to a clean slate (test-fixture
+        # isolation; not a live resource, unlike youtube_relay/mixer_thread).
+        self.recording_write_errors = {"show": 0, "export": 0}
+        self.recording_stop_reasons = {"show": None, "export": None}
 
     # ------------------------------------------------------------------
     # Loop transition recording — called by main async loop when mixer
@@ -467,11 +484,14 @@ class GlobalState:
             self._write_recording_sink(export_handle, pcm_data, "export")
 
     def _write_recording_sink(self, handle, pcm_data: bytes, sink_name: str):
-        """Write PCM to one recording sink; log each distinct handle once on error.
+        """Write PCM to one recording sink; count failures, auto-stop past threshold.
 
         Replaces the prior ``except Exception: pass`` which silently corrupted
         recordings (disk full, bad handle). Logs at most once per distinct handle
-        object so a multi-hour show does not spam per PCM chunk.
+        object so a multi-hour show does not spam per PCM chunk. REL-05c: a
+        sustained failure now stops the sink cleanly instead of "continuing" a
+        corrupt recording at ~176 kB/s of futile writes (see
+        RECORDING_WRITE_FAILURE_STOP_THRESHOLD).
         """
         try:
             handle.write(pcm_data)
@@ -479,6 +499,67 @@ class GlobalState:
             if handle is not self._last_recording_error_handle:
                 log.warning("Recording write to %s sink failed: %r", sink_name, exc)
                 self._last_recording_error_handle = handle
+            self._note_sink_write_failure(handle, sink_name)
+            return
+        # Success resets the CONSECUTIVE counter. Guarded by a non-zero check so
+        # the per-tick hot path stays a bare dict read (no lock) when healthy.
+        if self.recording_write_errors[sink_name]:
+            self.recording_write_errors[sink_name] = 0
+
+    def _note_sink_write_failure(self, handle, sink_name: str) -> None:
+        """Count one failed sink write; auto-stop the sink past the threshold (REL-05c)."""
+        with self.sync_lock:
+            self.recording_write_errors[sink_name] += 1
+            exceeded = self.recording_write_errors[sink_name] >= RECORDING_WRITE_FAILURE_STOP_THRESHOLD
+        if exceeded:
+            self._stop_failing_recording_sink(handle, sink_name)
+
+    def _stop_failing_recording_sink(self, handle, sink_name: str) -> None:
+        """Cleanly stop one persistently-failing recording sink (REL-05c).
+
+        Detach under sync_lock (broadcast_audio snapshots handles under it); the
+        finalize runs OUTSIDE the lock — safe here because the caller IS the
+        mixer thread, so no concurrent tick can interleave a write (unlike
+        stop_show's CONC-4 cross-thread finalize-under-lock). The show slot
+        KEEPS ``current_show_id``: append_loop_audit gates on it, so the
+        fine-tuning corpus keeps capturing after the audio sink dies (invariant 4).
+        """
+        from app.lib.wav import finalize_wav
+
+        with self.sync_lock:
+            if not self._detach_failing_sink_locked(handle, sink_name):
+                return
+        finalize_wav(handle)
+        log.error(
+            "Recording %s sink auto-stopped after %d consecutive write failures",
+            sink_name,
+            RECORDING_WRITE_FAILURE_STOP_THRESHOLD,
+        )
+
+    def _detach_failing_sink_locked(self, handle, sink_name: str) -> bool:
+        """Detach ``handle`` from its sink slot; caller MUST hold sync_lock.
+
+        Returns False when the slot changed hands (a concurrent stop_show/
+        stop_export already detached it) — the stale threshold breach is then a
+        no-op: no finalize, no flag writes. Mirrors stop_export's clears exactly
+        for the export slot; the show slot clears everything EXCEPT
+        ``current_show_id`` (invariant 4).
+        """
+        if sink_name == "show":
+            if self.current_show_audio_file is not handle:
+                return False
+            self.is_show_recording = False
+            self.current_show_audio_file = None
+            self.current_show_start_time = None
+        else:
+            if self.recording_file_handle is not handle:
+                return False
+            self.is_recording = False
+            self.recording_file_handle = None
+            self.recording_file_path = None
+            self.recording_start_time = None
+        self.recording_stop_reasons[sink_name] = "write_failure_threshold"
+        return True
 
     # ------------------------------------------------------------------
     # Subprocess tracking
@@ -557,6 +638,10 @@ class GlobalState:
             setattr(self, handle_attr, None)
         # Reset the once-per-handle error log so a fresh recording logs cleanly.
         self._last_recording_error_handle = None
+        # Shutdown ends both sinks (cleanly or not) — clear the REL-05c health
+        # dicts so a restart inside the same process starts from a clean slate.
+        self.recording_write_errors = {"show": 0, "export": 0}
+        self.recording_stop_reasons = {"show": None, "export": None}
 
 
 state = GlobalState()

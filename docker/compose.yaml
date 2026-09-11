@@ -72,6 +72,43 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  cleanup:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    image: mcclanker/web:latest
+    # Dedicated storage-retention service (REL-05/REL-16): must keep running
+    # while the GPU worker is down circuit-broken (invariant 5), and the worker
+    # stays decoupled from audio storage. Runs the same app.cleanup module the
+    # worker's in-process loop uses; here the retention envs default ON.
+    command: ["/app/.venv/bin/python", "-m", "app.cleanup"]
+    env_file:
+      - ../.env
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://mcclanker:${POSTGRES_PASSWORD}@postgres:5432/mcclanker}
+      - GARAGE_ENDPOINT=${GARAGE_ENDPOINT}
+      - GARAGE_ACCESS_KEY=${GARAGE_ACCESS_KEY}
+      - GARAGE_SECRET_KEY=${GARAGE_SECRET_KEY}
+      - GARAGE_BUCKET=${GARAGE_BUCKET}
+      - GARAGE_BUCKET_REGION=${GARAGE_BUCKET_REGION:-garage}
+      - SHOWS_DIR=/exports/shows
+      - EXPORT_DIR=/exports
+      # REL-05: expire recordings after 14 d and exports after 7 d by default
+      # (override per var; unset env outside compose keeps retention disabled).
+      - SHOW_AUDIO_RETENTION_DAYS=${SHOW_AUDIO_RETENTION_DAYS:-14}
+      - EXPORT_RETENTION_DAYS=${EXPORT_RETENTION_DAYS:-7}
+      - SESSION_STALE_HOURS=${SESSION_STALE_HOURS:-24}
+      # REL-16/invariant 4: the fine-tuning corpus is KEEP-FOREVER unless you
+      # opt in; enabling archives rows to AUDIT_ARCHIVE_DIR before deleting.
+      - LLM_RETENTION_DAYS=${LLM_RETENTION_DAYS:-0}
+      - AUDIT_ARCHIVE_DIR=${AUDIT_ARCHIVE_DIR:-/exports/audit_archive}
+    volumes:
+      - ../exports:/exports:rw
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   worker:
     build:
       context: ..
