@@ -213,6 +213,11 @@ class GlobalState:
         # Framework task reference (set by lifespan)
         self.framework_task = None
 
+        # Mixer render thread (registered by Mixer.start, cleared by Mixer.stop) —
+        # exposes is_alive() liveness to /api/health (REL-01). Guarded by
+        # sync_lock; deliberately NOT cleared by reset() (see youtube_relay).
+        self.mixer_thread = None
+
     # ------------------------------------------------------------------
     # E3 pass-1 additive slice views (read-only, over the same __dict__).
     # Legacy ``state.X`` access is unchanged; ``state.<slice>.X`` is a typed

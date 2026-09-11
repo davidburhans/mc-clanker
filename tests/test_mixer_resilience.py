@@ -29,6 +29,10 @@ from app.framework.framework_state import state
 @pytest.fixture(autouse=True)
 def reset_state():
     state.reset()
+    # Pin the framework-alive flags the health payload reports: reset() and
+    # trigger_shutdown() in earlier tests leave is_running False, and the
+    # REL-01 scenario under test is "flags green WHILE the thread is dead".
+    state.is_running = True
     state.is_generating = True
     state.active_stems = [{"prompt": "stem0"}, {"prompt": "stem1"}]
     yield

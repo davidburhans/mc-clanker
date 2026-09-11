@@ -59,7 +59,9 @@ def _normalize_decoded_audio(audio: np.ndarray) -> np.ndarray:
         return audio.astype(np.float32) / 32768.0
     if audio.dtype == np.int32:
         return audio.astype(np.float32) / 2147483648.0
-    return audio.astype(np.float32)
+    # REL-21: float WAVs can carry NaN/Inf (corrupt stem); astype preserves
+    # them and downstream clip would too. Int branches cannot contain NaN.
+    return np.nan_to_num(audio.astype(np.float32), nan=0.0, posinf=1.0, neginf=-1.0)
 
 
 def encode_aac(audio: np.ndarray, sample_rate: int = 44100, bitrate: str = "192k") -> bytes:

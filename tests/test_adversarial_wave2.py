@@ -60,6 +60,12 @@ def reset_state():
     state.current_show_audio_file = None
     state.currently_playing_show_id = None
     state.is_playback_active = False
+    # Stop (not just forget) any player a test left running: a live
+    # ShowPlayback rewinds on EOF forever and broadcasts real PCM into every
+    # state.audio_clients queue for the rest of the suite (poisons e.g. the
+    # youtube relay stdin tests). .clear() alone leaked the thread.
+    for leaked_player in list(shows_routes._active_playbacks.values()):
+        leaked_player.stop()
     shows_routes._active_playbacks.clear()
 
 

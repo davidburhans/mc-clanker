@@ -148,6 +148,16 @@ class Mixer:
 
     ensure_stereo = _ensure_stereo  # public alias (P11-U2): same staticmethod object
 
+    @staticmethod
+    def _sanitize_pcm_block(outdata: np.ndarray) -> np.ndarray:
+        """NaN/Inf-safe float block, clamped to [-1, 1] (REL-21).
+
+        np.clip preserves NaN and astype("<i2") of NaN is platform-defined
+        garbage — sanitize first so one poisoned stem can't corrupt the
+        broadcast PCM. Vectorized O(blocksize); safe for the audio tick.
+        """
+        return np.clip(np.nan_to_num(outdata, nan=0.0, posinf=1.0, neginf=-1.0), -1.0, 1.0)
+
     def _extend_tracks_for_loop(self, loop_end_sample: int):
         """Extend current tracks to fill another loop iteration."""
         current_tracks = [
@@ -215,7 +225,7 @@ class Mixer:
         is_generating, soloed, muted, volumes = state.snapshot_mixer_state()
 
         if not is_generating:
-            pcm_out = np.clip(outdata, -1.0, 1.0)
+            pcm_out = self._sanitize_pcm_block(outdata)
             state.broadcast_audio((pcm_out * 32767).astype("<i2").tobytes())
             # R3-A1: the playhead is only ever advanced under self.lock, so a
             # clear()/prime_loop() cannot interleave with the increment.
@@ -383,7 +393,7 @@ class Mixer:
             )
 
         # Clip, convert, broadcast
-        pcm_out = np.clip(outdata, -1.0, 1.0)
+        pcm_out = self._sanitize_pcm_block(outdata)
         state.broadcast_audio((pcm_out * 32767).astype("<i2").tobytes())
 
     # ------------------------------------------------------------------
@@ -393,6 +403,11 @@ class Mixer:
     def start(self):
         self._running = True
         self._stream_thread = threading.Thread(target=self._stream_loop, daemon=True, name="Mixer")
+        # REL-01: register the render thread so /api/health can observe
+        # is_alive() liveness. start()/stop() run on the event-loop thread,
+        # never on the audio thread, so sync_lock here cannot stall a tick.
+        with state.sync_lock:
+            state.mixer_thread = self._stream_thread
         self._stream_thread.start()
         log.info("Audio stream loop started")
 
@@ -405,7 +420,15 @@ class Mixer:
         deadline = time.monotonic()
         while self._running:
             deadline += sleep_time
-            self._callback(outdata, self.blocksize, None, None)
+            # REL-01: one exploding tick must not kill the render thread —
+            # log, emit silence for this block, keep the deadline cadence.
+            # (No `continue`: skipping the sleep would busy-spin a
+            # persistently-failing callback at max log rate.)
+            try:
+                self._callback(outdata, self.blocksize, None, None)
+            except Exception:
+                log.exception("Mixer render tick failed; emitting silence")
+                outdata.fill(0)
             # Sleep only the *remaining* time until the next deadline.
             remaining = deadline - time.monotonic()
             if remaining > 0:
@@ -418,6 +441,11 @@ class Mixer:
         self._running = False
         if self._stream_thread is not None:
             self._stream_thread.join(timeout=2.0)
+        # Identity check: only clear the registration if it still points at
+        # this mixer's thread (keeps a racing new start() registration intact).
+        with state.sync_lock:
+            if state.mixer_thread is self._stream_thread:
+                state.mixer_thread = None
         with self.lock:
             self.tracks = []
         log.info("Mixer stopped")

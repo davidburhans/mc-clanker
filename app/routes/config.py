@@ -78,6 +78,19 @@ def _ping_object_store() -> str:
         return f"error: {exc}"
 
 
+def _mixer_thread_liveness() -> bool | None:
+    """Mixer render-thread liveness for /api/health (REL-01).
+
+    None = no thread registered (never started or cleanly stopped); False =
+    registered thread died without stop() — the silent-death state REL-01
+    makes observable. Copy the reference under sync_lock, then call
+    is_alive() outside it so the ~46 ms audio tick never waits on a probe.
+    """
+    with state.sync_lock:
+        mixer_thread = state.mixer_thread
+    return None if mixer_thread is None else mixer_thread.is_alive()
+
+
 async def _readiness_checks() -> dict:
     """Aggregate DB + object-store probes into a readiness verdict."""
     database, object_store = await asyncio.gather(
@@ -101,6 +114,7 @@ async def health_check():
     return {
         "status": "healthy",
         "is_running": is_running,
+        "mixer_alive": _mixer_thread_liveness(),
         "ready": checks["ready"],
         "checks": checks,
         "timestamp": int(time.time()),
