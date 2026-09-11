@@ -340,6 +340,26 @@ The async framework uses PostgreSQL as a job queue:
 4. **Completion**: Worker marks job complete and sends PostgreSQL NOTIFY
 5. **Collection**: Async framework waits for NOTIFY and fetches audio from MinIO
 
+#### Worker resilience (rel-03-worker)
+
+- **Pre-download**: every enabled model's weights are downloaded into the HF
+  cache at worker startup, outside the 600 s generation window (a cold-cache
+  download cannot fit inside it, and the abandoned thread would keep the
+  hf_hub lock). Per-model failures are logged and skipped.
+- **Generation-timeout circuit breaker**: a job's generate+upload pipeline
+  runs under a 600 s timeout. Two consecutive timeouts (the counter resets
+  only on a completed pipeline) log a structured `circuit_breaker_open` event
+  and `os._exit(1)`: the abandoned generation thread cannot be killed and
+  would otherwise keep holding VRAM and hf_hub locks. Docker
+  `restart=unless-stopped` brings the worker back into a fresh CUDA context;
+  the timed-out job row is reclaimed after its lease lapses.
+- **VRAM eviction**: between jobs, the worker LRU-evicts loaded non-default
+  models while `GPUMonitor` reports critical VRAM (each pass bounded to 30 s
+  so a zombie holding the registry lock cannot stall the loop).
+- **Serialization**: all GPU load/generate/unload goes through
+  `GeneratorRegistry._generation_lock` — a zombie escalates the next job to
+  the timeout path instead of racing it for 2× VRAM.
+
 ### Crossfade Timing
 
 The `next_loop_ready` Event coordinates framework task with mixer thread. Mixer waits for this signal before transitioning to new stems.
@@ -659,12 +679,20 @@ ffmpeg  # System binary (must be in PATH)
 | Infinite Pianos | ~4GB |
 | Vocal Textures | ~5GB |
 
+**Load behavior (rel-03-worker):** weights load CPU-first and move to the GPU
+once (`load_file(device="cpu")` / `torch.load(map_location="cpu")` + a single
+`.to(device)`), so a model load transiently holds ~1× model size, not ~2×.
+The worker pre-downloads all enabled model weights at startup (outside the
+generation window) and LRU-evicts loaded non-default models between jobs when
+VRAM is critical.
+
 ### Latency
 
 | Operation | Time |
 |-----------|------|
 | LLM Conductor call | 100ms – 10s |
 | Stem generation | 5s – 30s |
+| Worker generation timeout (hard cap) | 600s |
 | Loop crossfade | ~100ms |
 
 ---
