@@ -116,6 +116,7 @@ class FakeMixer:
         self.transition_fired_for: int | None = None
         self.consumed_tracks = None
         self.current_sample = 0
+        self.current_loop_end_sample = 0
         self.started = False
         self.stopped = False
 
@@ -127,6 +128,8 @@ class FakeMixer:
 
     def prime_loop(self, tracks, *, duration_samples):
         self.prime_loop_calls.append({"tracks": list(tracks), "duration_samples": duration_samples})
+        # REL-02: mirror the real boundary write so a boundary-less commit can re-prime.
+        self.current_loop_end_sample = self.current_sample + duration_samples
 
     def set_next_loop(self, tracks, next_loop_duration_samples=0, loop_idx=0):
         self.set_next_loop_calls.append(
@@ -146,7 +149,8 @@ class FakeMixer:
         return self.headroom_seconds
 
     def clear(self):
-        pass
+        # REL-02: mirror Mixer.clear — the musical reset closes the transition gate.
+        self.current_loop_end_sample = 0
 
 
 class AdvancingMixer(FakeMixer):
@@ -382,6 +386,7 @@ async def test_b2_pregen_done_does_not_drop_the_staged_loop(sleep_log):
     mixer = AdvancingMixer(headroom_seconds=8.0)
     loop = _make_loop(mixer)
     loop._loop_idx = 2
+    mixer.current_loop_end_sample = 44100 * 8  # loop 1 already primed (REL-02 force must not fire)
     loop._pregen_done.set()  # pre-gen for loop 3 finished before the boundary
     loop_state_before = mixer.next_loop_audio
 
@@ -406,6 +411,7 @@ async def test_b2_staged_wait_releases_when_the_playhead_is_frozen(sleep_log):
     mixer = FakeMixer(headroom_seconds=30.0)
     loop = _make_loop(mixer)
     loop._loop_idx = 3
+    mixer.current_loop_end_sample = 44100 * 8  # loop 1 already primed (REL-02 force must not fire)
     loop._pregen_done.set()
 
     await loop._step_commit_to_mixer(pregen_ready=False, prepared_tracks=[(_audio(), 0)], loop_duration_samples=44100)

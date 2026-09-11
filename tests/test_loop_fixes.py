@@ -241,6 +241,11 @@ class _FakeMixer:
     def clear(self):
         pass
 
+    def prime_loop(self, tracks, *, duration_samples):
+        # REL-02: P10 re-primes whenever the boundary is 0; mirror the real
+        # Mixer.prime_loop boundary write so later commits take set_next_loop.
+        self.current_loop_end_sample = self.current_sample + duration_samples
+
     def start(self):
         pass
 
