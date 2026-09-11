@@ -174,9 +174,46 @@ class GeneratorWorker:
             logger.info("Job %s completed: %s", job["id"], audio_path)
         except Exception as e:  # noqa: BLE001 - upload ok, DB commit failed -> orphan
             logger.error("Job %s DB-complete failed: %s; reclaiming audio", job["id"], e)
-            await self._delete_orphan_audio(audio_path)
+            # E1/Q2: the object key is deterministic (audio/{job_id}.aac), so a
+            # zombie whose lease lapsed would delete the object a reclaiming
+            # worker just completed with. Only reclaim while the row is ours.
+            if await self._still_own_job_row(job["id"]):
+                await self._delete_orphan_audio(audio_path)
+            else:
+                logger.warning(
+                    "Job %s no longer owned by %s; leaving %s for the current owner",
+                    job["id"],
+                    self.config.worker_id,
+                    audio_path,
+                )
             await self._mark_job_failed(job["id"], str(e))
             self.jobs_failed += 1
+
+    async def _still_own_job_row(self, job_id: uuid.UUID) -> bool:
+        """Whether ``audio/{job_id}.aac`` is still ours to delete (review E1/Q2).
+
+        True when the row is gone, or is still 'processing' owned by this worker;
+        False when another worker already terminalled/reclaimed it, or when the
+        row cannot be read (deleting blind is what destroyed the new owner's
+        audio). With no pool at all there is no competing owner, so fall back to
+        the pre-existing C5 orphan sweep.
+
+        Usage: ``if await self._still_own_job_row(job["id"]): await self._delete_orphan_audio(p)``
+        """
+        if self.db is None:
+            return True
+        try:
+            async with self.db.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT status, worker_id FROM generator_jobs WHERE id = $1",
+                    job_id,
+                )
+        except Exception as e:  # noqa: BLE001 - cannot prove ownership -> keep the object
+            logger.warning("Could not re-check ownership of job %s: %s", job_id, e)
+            return False
+        if row is None:
+            return True
+        return row["status"] == "processing" and row["worker_id"] == self.config.worker_id
 
     async def _claim_next_job(self) -> dict | None:
         """

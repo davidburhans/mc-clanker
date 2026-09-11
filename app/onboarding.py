@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
 from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
+
+# Hard bound for the docker-compose restart (review E5).
+_RESTART_TIMEOUT_SECONDS = 15
 
 
 class CheckResult(NamedTuple):
@@ -303,15 +307,25 @@ def restart_services() -> None:
 
     In docker-compose, this is done via:
     docker-compose restart web worker
+
+    The subprocess is hard-bounded (review E5): this runs from ``async def
+    save_setup_config`` on the event loop, and a wedged docker daemon used to
+    freeze the whole app indefinitely. On timeout the child is killed and the
+    failure is logged; the caller's config write has already succeeded.
     """
     try:
-        import subprocess
-
         compose_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docker")
         subprocess.run(
             ["docker", "compose", "-f", "compose.yaml", "restart", "web", "worker"],
             cwd=compose_dir,
             check=False,
+            timeout=_RESTART_TIMEOUT_SECONDS,
         )
-    except Exception:
-        pass
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "docker compose restart did not finish within %ss (wedged docker daemon?); "
+            "services may still be running the old config",
+            _RESTART_TIMEOUT_SECONDS,
+        )
+    except Exception as e:  # noqa: BLE001 - setup must not fail on a restart hiccup
+        logger.warning("docker compose restart failed: %s", e)

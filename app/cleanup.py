@@ -33,6 +33,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# asyncpg command timeout for every pool this module opens (review B3/Q3).
+_POOL_COMMAND_TIMEOUT = 60.0
+
+
 @dataclass
 class CleanupConfig:
     """Configuration for cleanup operations."""
@@ -58,28 +62,44 @@ class JobExpirationCleanup:
         self.config = config
         self.db: asyncpg.Pool | None = None
         self.garage: GarageClient | None = None
-        self.running = True
+        # E6: an Event (not a bool) so stop() interrupts the idle wait instead of
+        # being noticed only after up to cleanup_interval (300 s) of sleep.
+        self._shutdown = asyncio.Event()
+
+    @property
+    def running(self) -> bool:
+        """True until stop() is called (kept for the pre-Event public surface)."""
+        return not self._shutdown.is_set()
 
     async def start(self):
         """Start the cleanup loop."""
         logger.info("Starting job expiration cleanup...")
 
         # Create database connection pool
-        self.db = await asyncpg.create_pool(self.config.pg_dsn, min_size=1, max_size=5, command_timeout=60)
+        self.db = await asyncpg.create_pool(
+            self.config.pg_dsn,
+            min_size=1,
+            max_size=5,
+            command_timeout=_POOL_COMMAND_TIMEOUT,
+        )
         logger.info("Connected to PostgreSQL")
 
         # Create Garage client
         self.garage = create_garage_client_from_env()
         logger.info("Garage client initialized")
 
-        # Run cleanup loop
-        while self.running:
+        # Run cleanup loop; the idle wait is interruptible (E6) so a SIGTERM
+        # during the (usually 300 s) gap still reaches the graceful shutdown below.
+        while not self._shutdown.is_set():
             try:
                 await self._run_cleanup()
             except Exception as e:
                 logger.error(f"Cleanup error: {e}", exc_info=True)
 
-            await asyncio.sleep(self.config.cleanup_interval)
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=self.config.cleanup_interval)
+            except TimeoutError:
+                continue
 
         # Shutdown
         if self.db:
@@ -91,8 +111,9 @@ class JobExpirationCleanup:
         Run a single cleanup cycle.
 
         First reaps jobs orphaned in 'processing' by a dead worker (lapsed
-        lease), then atomically deletes expired terminal jobs and their audio
-        objects in one CTE so we never query rows already deleted.
+        lease), then deletes expired terminal jobs: Garage objects first, rows
+        afterwards (E2), so a storage failure can never leave an object that no
+        row references any more.
 
         Returns:
             Number of jobs acted on this cycle (reaped + deleted).
@@ -137,43 +158,73 @@ class JobExpirationCleanup:
         """
         Delete expired terminal jobs and their Garage audio objects.
 
-        Uses a single DELETE ... RETURNING CTE so the audio paths we delete from
-        Garage always correspond to rows that still existed at delete time.
+        Ordering is the whole point (review E2/Q4): objects are deleted FIRST and
+        the rows only afterwards. The old CTE deleted rows first and swallowed
+        object failures, so any Garage error produced an object that no row would
+        ever name again - a permanent orphan with no GC path. Rows whose object
+        could not be deleted are left in place (and counted) for a later cycle.
         """
         assert self.db is not None  # initialized in start() before cleanup runs
         async with self.db.acquire() as conn:
             rows = await conn.fetch("""
-                WITH deleted AS (
-                    DELETE FROM generator_jobs
-                    WHERE status IN ('completed', 'failed', 'expired')
-                      AND expires_at < NOW()
-                    RETURNING audio_path
-                )
-                SELECT audio_path FROM deleted WHERE audio_path IS NOT NULL
+                SELECT audio_path
+                FROM generator_jobs
+                WHERE status IN ('completed', 'failed', 'expired')
+                  AND expires_at < NOW()
             """)
+        if not rows:
+            return 0
 
-        deleted_audio_paths = [row["audio_path"] for row in rows]
-        if self.garage and deleted_audio_paths:
-            await self._delete_garage_objects(deleted_audio_paths)
+        audio_paths = [row["audio_path"] for row in rows if row["audio_path"]]
+        failed_paths = await self._delete_garage_objects(audio_paths)
+        await self._delete_expired_rows(failed_paths)
 
-        if rows:
-            logger.info("Cleaned up %d expired jobs", len(rows))
-        return len(rows)
+        deleted_count = len(rows) - len(failed_paths)
+        logger.info("Cleaned up %d expired jobs", deleted_count)
+        return deleted_count
 
-    async def _delete_garage_objects(self, audio_paths: list[str]) -> None:
-        """Best-effort delete of each audio object; failures are logged, not fatal."""
-        assert self.garage is not None  # caller guards on truthiness
+    async def _delete_expired_rows(self, keep_audio_paths: set[str]) -> None:
+        """Delete terminal rows past expiry, keeping those whose object is still there."""
+        assert self.db is not None
+        async with self.db.acquire() as conn:
+            await conn.execute(
+                """
+                DELETE FROM generator_jobs
+                WHERE status IN ('completed', 'failed', 'expired')
+                  AND expires_at < NOW()
+                  AND (audio_path IS NULL OR NOT (audio_path = ANY($1::text[])))
+                """,
+                list(keep_audio_paths),
+            )
+
+    async def _delete_garage_objects(self, audio_paths: list[str]) -> set[str]:
+        """Delete each audio object, returning the paths whose delete FAILED.
+
+        Failures are logged and counted but never raised: cleanup must stay
+        resilient, and the caller keeps the matching rows for a retry (E2).
+        """
+        if not self.garage or not audio_paths:
+            return set()
+        failed: set[str] = set()
         for audio_path in audio_paths:
             try:
                 await self.garage.delete_object(audio_path)
                 logger.debug("Deleted audio: %s", audio_path)
             except Exception as e:  # noqa: BLE001 - cleanup must be resilient
+                failed.add(audio_path)
                 logger.warning("Failed to delete audio %s: %s", audio_path, e)
+        if failed:
+            logger.warning(
+                "Garage delete failed for %d/%d expired audio objects; keeping their rows for retry",
+                len(failed),
+                len(audio_paths),
+            )
+        return failed
 
     def stop(self):
-        """Stop the cleanup loop."""
+        """Stop the cleanup loop (safe to call from a signal handler)."""
         logger.info("Shutdown requested...")
-        self.running = False
+        self._shutdown.set()
 
 
 async def cleanup_expired_jobs_once(pg_dsn: str) -> int:
@@ -200,7 +251,13 @@ async def cleanup_expired_jobs_once(pg_dsn: str) -> int:
     )
     cleanup = JobExpirationCleanup(config)
     cleanup.garage = create_garage_client_from_env()
-    cleanup.db = await asyncpg.create_pool(config.pg_dsn, min_size=1, max_size=5)
+    # Q3: this one-shot cron path had the only unbounded pool in the codebase.
+    cleanup.db = await asyncpg.create_pool(
+        config.pg_dsn,
+        min_size=1,
+        max_size=5,
+        command_timeout=_POOL_COMMAND_TIMEOUT,
+    )
     try:
         return await cleanup._run_cleanup()
     finally:

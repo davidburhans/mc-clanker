@@ -16,6 +16,9 @@ import time
 import wave
 from typing import Any
 
+# RIFF announces both the file and the data chunk size as a uint32 (review E8).
+_WAV_MAX_SIZE_FIELD = 0xFFFFFFFF
+
 
 def format_cue_time(seconds: float) -> str:
     """Format time as MM:SS:FF (CD frames, 75 frames per second)."""
@@ -47,26 +50,42 @@ def write_cue_sheet(
     """
     lines = []
     if title:
-        lines.append(f'TITLE "{title}"')
-    lines.append(f'PERFORMER "{performer}"')
-    lines.append(f'FILE "{audio_filename}" WAVE')
+        lines.append(f'TITLE "{_cue_text(title)}"')
+    lines.append(f'PERFORMER "{_cue_text(performer)}"')
+    lines.append(f'FILE "{_cue_text(audio_filename)}" WAVE')
 
     for chapter in chapters:
         idx = chapter["index"]
         ts = chapter["timestamp"]
         ctitle = chapter.get("title", f"Chapter {idx}")
         lines.append(f"  TRACK {idx:02d} AUDIO")
-        lines.append(f'    TITLE "{ctitle}"')
+        lines.append(f'    TITLE "{_cue_text(ctitle)}"')
         lines.append(f"    INDEX 01 {format_cue_time(ts)}")
         if chapter.get("reasoning"):
-            # CUE doesn't have a standard comment field for tracks, but we can use REM
-            reasoning = chapter["reasoning"].replace('"', "'")
+            # CUE doesn't have a standard comment field for tracks, but we can use REM.
+            # REM stays unquoted, so quotes are swapped and CR/LF collapsed (E9).
+            reasoning = _cue_comment(chapter["reasoning"])
             lines.append(f"    REM COMMENT {reasoning}")
 
     with open(cue_path, "w", encoding="utf-8") as f:
         f.write("\r\n".join(lines) + "\r\n")
 
     return cue_path
+
+
+def _cue_text(value: str) -> str:
+    """Escape free text for a quoted CUE field (TITLE/PERFORMER/FILE), review E9.
+
+    An unescaped double quote terminates the field early and a raw CR/LF splits
+    one CUE command into two, so hostile LLM-derived titles used to produce an
+    unparseable sheet. Usage: ``f'TITLE "{_cue_text(title)}"'``.
+    """
+    return " ".join(str(value).split()).replace('"', '\\"')
+
+
+def _cue_comment(value: str) -> str:
+    """Collapse CR/LF (and quote-swap) for an unquoted ``REM`` comment field (E9)."""
+    return " ".join(str(value).split()).replace('"', "'")
 
 
 def embed_wav_metadata(
@@ -118,18 +137,11 @@ def embed_wav_metadata(
     # Build a LIST/adtl chapter chunk (labels for cue points)
     chapter_list_chunk = _build_chapter_list_chunk(chapters) if chapters else b""
 
-    # Write the new WAV with metadata prepended
-    with wave.open(wav_path, "wb") as wf:
-        wf.setnchannels(n_channels)
-        wf.setsampwidth(sampwidth)
-        wf.setframerate(framerate)
-
-        # Get the raw bytes from the wave writer
-        # We need to write custom chunks before the data chunk.
-        # wave module doesn't support custom chunks, so we write manually.
-        pass
-
-    # Since wave module doesn't support custom chunks, we write the file manually
+    # The wave module doesn't support custom chunks, so the file is written by
+    # hand below. There used to be a vestigial ``wave.open(wav_path, "wb")`` here
+    # that only set parameters and ``pass``ed: it truncated the recording to a
+    # 44-byte header before the rewrite, destroying it on any failure in between
+    # (review E8).
     _write_wav_with_metadata(
         wav_path, n_channels, sampwidth, framerate, audio_data, list_chunk, cue_chunk, chapter_list_chunk
     )
@@ -205,25 +217,29 @@ def _build_cue_chunk(chapters: list[dict[str, Any]]) -> bytes:
     return header + data
 
 
+def _adtl_sub_chunk(fourcc: bytes, cue_id: int, text: str) -> bytes:
+    """Build one adtl sub-chunk: ``<fourcc><uint32 size><cue id><NUL text>[pad]``.
+
+    The size field counts the logical payload only; the RIFF word-alignment byte
+    is written but never announced (review E10).
+    """
+    payload = struct.pack("<I", cue_id) + text.encode("utf-8") + b"\x00"
+    padded = payload + b"\x00" if len(payload) % 2 else payload
+    return fourcc + struct.pack("<I", len(payload)) + padded
+
+
 def _build_chapter_list_chunk(chapters: list[dict[str, Any]]) -> bytes:
-    """Build a LIST/adtl chunk with labels for each cue point."""
+    """Build a LIST/adtl chunk of proper ``labl``/``note`` sub-chunks (review E10).
+
+    The previous layout emitted a bare ``<cue id><0>`` prefix ahead of an
+    *embedded* ``labl`` fourcc, so a strict RIFF walker read the 8-byte prefix as
+    a chunk header and desynced on the whole LIST/adtl payload.
+    """
     data = b""
     for i, chapter in enumerate(chapters):
-        title = chapter.get("title", f"Chapter {i + 1}").encode("utf-8") + b"\x00"
-        if len(title) % 2 != 0:
-            title += b"\x00"
-        # ltxt chunk
-        ltxt_data = struct.pack("<II", i + 1, 0)  # cue point id, purpose
-        ltxt_data += b"labl" + struct.pack("<I", len(title)) + title
-        data += ltxt_data
-
-        # Also write 'note' chunk for reasoning
+        data += _adtl_sub_chunk(b"labl", i + 1, chapter.get("title", f"Chapter {i + 1}"))
         if chapter.get("reasoning"):
-            reasoning = chapter["reasoning"].encode("utf-8") + b"\x00"
-            if len(reasoning) % 2 != 0:
-                reasoning += b"\x00"
-            note_data = struct.pack("<I", i + 1) + b"note" + struct.pack("<I", len(reasoning)) + reasoning
-            data += note_data
+            data += _adtl_sub_chunk(b"note", i + 1, chapter["reasoning"])
 
     if not data:
         return b""
@@ -242,50 +258,46 @@ def _write_wav_with_metadata(
     cue_chunk: bytes,
     chapter_list_chunk: bytes,
 ):
-    """Write a complete WAV file with custom metadata chunks."""
+    """Write a complete WAV file with custom metadata chunks.
+
+    Raises:
+        ValueError: when the result would overflow the 32-bit RIFF/data size
+            fields (>4 GiB) — review E8, mirroring routes/shows.py.
+    """
+    fmt_data = struct.pack(
+        "<HHIIHH",
+        1,  # PCM format
+        n_channels,
+        framerate,
+        framerate * n_channels * sampwidth,
+        n_channels * sampwidth,
+        sampwidth * 8,
+    )
+    head = b"fmt " + struct.pack("<I", len(fmt_data)) + fmt_data + list_chunk + cue_chunk + chapter_list_chunk
+    data_size = len(audio_data)
+    riff_size = 4 + len(head) + 8 + data_size  # 'WAVE' + fmt/metadata chunks + data header + data
+    _ensure_wav_sizes_fit(data_size, riff_size)
+
     with open(path, "wb") as f:
         # RIFF header
         f.write(b"RIFF")
-        # File size placeholder (filled later)
-        riff_size_pos = f.tell()
-        f.write(struct.pack("<I", 0))  # placeholder
+        f.write(struct.pack("<I", riff_size))
         f.write(b"WAVE")
-
-        # fmt chunk
-        f.write(b"fmt ")
-        fmt_data = struct.pack(
-            "<HHIIHH",
-            1,  # PCM format
-            n_channels,
-            framerate,
-            framerate * n_channels * sampwidth,
-            n_channels * sampwidth,
-            sampwidth * 8,
-        )
-        f.write(struct.pack("<I", len(fmt_data)))
-        f.write(fmt_data)
-
-        # LIST/INFO chunk
-        if list_chunk:
-            f.write(list_chunk)
-
-        # cue chunk
-        if cue_chunk:
-            f.write(cue_chunk)
-
-        # LIST/adtl chapter labels
-        if chapter_list_chunk:
-            f.write(chapter_list_chunk)
+        f.write(head)
 
         # data chunk
         f.write(b"data")
-        f.write(struct.pack("<I", len(audio_data)))
+        f.write(struct.pack("<I", data_size))
         f.write(audio_data)
 
-        # Go back and write the RIFF size
-        file_size = f.tell()
-        f.seek(riff_size_pos)
-        f.write(struct.pack("<I", file_size - 8))
+
+def _ensure_wav_sizes_fit(data_size: int, riff_size: int) -> None:
+    """Refuse to write a WAV whose uint32 size fields would overflow (review E8)."""
+    if data_size > _WAV_MAX_SIZE_FIELD or riff_size > _WAV_MAX_SIZE_FIELD:
+        raise ValueError(
+            f"WAV too large for the 32-bit RIFF header: data={data_size} bytes, "
+            f"riff_size={riff_size} bytes, max={_WAV_MAX_SIZE_FIELD} bytes (4 GiB)"
+        )
 
 
 def split_wav_by_chapters(

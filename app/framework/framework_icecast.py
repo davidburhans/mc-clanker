@@ -306,9 +306,11 @@ class IcecastStreamer:
                         break  # Poison pill
                     if self._ffmpeg_proc.poll() is not None:
                         log.warning(
-                            "Icecast ffmpeg exited with code %d",
+                            "Icecast ffmpeg exited with code %d; stream is over, restart required",
                             self._ffmpeg_proc.returncode,
                         )
+                        # E4: ffmpeg death ends the stream (single-process design).
+                        # _running is cleared in the finally block below.
                         break
                     self._ffmpeg_stdin().write(chunk)
                     self._ffmpeg_stdin().flush()
@@ -319,6 +321,11 @@ class IcecastStreamer:
                     break
         finally:
             self._cleanup()
+            # E4: every feed-loop exit means the pipeline is gone (ffmpeg died when
+            # Icecast dropped the source, or the pipe broke). Leaving _running True
+            # made is_running lie, start() refuse with "already running", and
+            # feed_pcm accept mixer PCM into a queue nobody drained.
+            self._running = False
 
     def _cleanup(self):
         """Clean up ffmpeg process."""
