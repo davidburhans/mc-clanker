@@ -239,7 +239,7 @@ against fakes; documented how to run it.
 | 1 rel-mixer-resilience | **landed** (939p/16s green; reviewer safe-to-land, 0 blockers) | 46e9d13 |
 | 2 rel-reset-reprime | **landed** (949p/16s green; reviewer safe-to-land, 0 blockers) | eda6ede |
 | 3 rel-worker-vram | **landed** (968p/16s green; reviewer safe-to-land, 0 blockers) | e28eee7 |
-| 4 rel-llm-capture | **landed** (987p/16s green; DPO capture contract pinned T1–T16) | — |
+| 4 rel-llm-capture | **landed** (987p/16s green; land-with-fixes applied: doc drift; DPO contract pinned) | 9268e69 |
 | 5 rel-storage-retention | pending | — |
 | 6 rel-job-queue | pending | — |
 | 7 rel-db-offloop | pending | — |
@@ -272,6 +272,10 @@ against fakes; documented how to run it.
   the timeout->non-timeout-failure->timeout breaker branch with a test;
   py3.11+ note — builtin TimeoutError aliases asyncio.TimeoutError so a
   socket/upload timeout would also feed the breaker (worker pins 3.10 today).
+
+- rel-04 (P2, report-only): during a sustained DB outage, audit buffers grow
+  without bound (retain-over-drop is the invariant-4-correct choice) —
+  surface a failed-flush/backlog counter in /api/health during U15.
 
 ## Decisions log
 
