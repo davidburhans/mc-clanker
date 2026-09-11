@@ -164,6 +164,8 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/routes/stems.py` | Stem volume/mute/solo control |
 | `app/routes/models.py` | Model loading/unloading |
 | `app/routes/config.py` | LLM config, generation params, instruments |
+| `app/routes/reasoning_logs.py` | Conductor reasoning NDJSON export |
+| `app/routes/youtube.py` | YouTube Live RTMP stream start/stop/status/config |
 | `app/auth.py` | JWT tokens, bcrypt password hashing |
 | `app/db.py` | SQLAlchemy DatabaseManager singleton (thread-safe) |
 | `app/models/` | SQLAlchemy ORM models (User, Show, GeneratorJob, etc.) |
@@ -175,6 +177,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/cleanup.py` | Periodic expired job/audio cleanup |
 | `app/onboarding.py` | Pre-flight configuration health checks |
 | `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage |
+| `app/youtube_relay.py` | `YouTubeRelay` — PCM→FFmpeg RTMP relay for YouTube Live (audio-client queue, bounded auto-restart); see `docs/youtube_live.md` |
 
 ---
 
@@ -210,6 +213,11 @@ state.stem_volumes  # dict[int, float] — index → gain (0.0–2.0)
 state.muted_stems  # set[int] — muted stem indices
 state.soloed_stems  # set[int] — soloed stem indices
 state.stem_ages  # dict[int, int] — index → loop count
+
+# YouTube Live relay (key is a secret — mask in responses, never log)
+state.youtube_stream_key  # str — from YOUTUBE_STREAM_KEY or PUT /api/youtube/config
+state.youtube_ingest_url  # str — default rtmp://a.rtmp.youtube.com/live2
+state.youtube_relay  # YouTubeRelay|None — active relay (NOT cleared by reset(); a musical reset must not kill a live broadcast)
 
 # Loop coordination
 state.loop_count  # int — Total loops completed
@@ -474,6 +482,7 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | `test_state.py` | GlobalState lock behavior |
 | `test_worker.py` | Job queue worker and job claiming |
 | `test_worker_fetch_audio.py` | Worker audio fetching from storage |
+| `test_youtube_relay.py` | RTMP relay argv/lifecycle/restarts + /api/youtube routes |
 
 ### Mocking Patterns
 

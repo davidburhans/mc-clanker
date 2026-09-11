@@ -83,3 +83,4 @@ instruments.json
 
 # pi sub-agent harness scratch (transcripts, artifacts) — never commit
 .pi-subagents/
+.pi/

@@ -103,6 +103,10 @@ The audience-facing web UI at `http://localhost:4400/listen` provides real-time 
 | `/api/llm-config` | GET/POST | Get/set LLM configuration |
 | `/api/export/start` | POST | Start recording session |
 | `/api/export/stop` | POST | Stop recording and save file |
+| `/api/youtube/stream/start` | POST | Go live on YouTube (RTMP + visualizer) |
+| `/api/youtube/stream/stop` | POST | Stop the YouTube stream |
+| `/api/youtube/stream/status` | GET | Relay health: restarts, drops, uptime |
+| `/api/youtube/config` | GET/PUT | Stream key + ingest URL (key masked) |
 | `/stream.mp3` | GET | Audio stream endpoint |
 
 ### Example API Usage

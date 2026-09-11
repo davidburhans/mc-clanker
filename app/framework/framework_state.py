@@ -115,6 +115,16 @@ class GlobalState:
         self.llm_api_key = "not-needed"
         self.llm_model = "local-model"
 
+        # YouTube Live relay — key is a secret: mask in API responses, never log.
+        # youtube_relay holds the active YouTubeRelay instance (route-managed);
+        # deliberately NOT reset by reset() — a musical reset must not kill a
+        # live broadcast.
+        self.youtube_stream_key = os.environ.get("YOUTUBE_STREAM_KEY", "")
+        self.youtube_ingest_url = os.environ.get(
+            "YOUTUBE_INGEST_URL", "rtmp://a.rtmp.youtube.com/live2"
+        )
+        self.youtube_relay = None
+
         self.is_generating = False
         self.is_show_started = False
 

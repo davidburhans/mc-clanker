@@ -10,6 +10,7 @@ from .stems import router as stems_router
 
 # Export utilities for tests
 from .utils import generate_audience_password, require_show_owner  # noqa: F401  re-exported route utilities
+from .youtube import router as youtube_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -20,3 +21,4 @@ api_router.include_router(models_router)
 api_router.include_router(config_router)
 api_router.include_router(stems_router)
 api_router.include_router(reasoning_logs_router)
+api_router.include_router(youtube_router)
