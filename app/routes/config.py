@@ -4,7 +4,7 @@ import logging
 import os
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.framework.framework_state import state
@@ -321,13 +321,36 @@ async def clear_audience_message():
     return {"status": "ok"}
 
 
+# Round-3 D9: GET /api/llm-config is reachable by anyone who clears the AUDIENCE
+# gate, so the conductor API key must not be serialized to that realm.
+_AUDIENCE_REALM = "audience"
+_MASKED_SECRET = "***redacted***"
+
+
+def _caller_realm(request: Request) -> str:
+    """Env-password realm that admitted this caller ('' = local dev, no auth)."""
+    return getattr(getattr(request, "state", None), "auth_realm", "") or ""
+
+
+def _mask_secret(value: str | None) -> str | None:
+    """Mask a non-empty secret; empty/None stays as-is so 'unset' stays visible."""
+    if not value:
+        return value
+    return _MASKED_SECRET
+
+
 @router.get("/llm-config")
-async def get_llm_config():
-    """Get current LLM conductor configuration."""
+async def get_llm_config(request: Request):
+    """Get current LLM conductor configuration.
+
+    The API key is masked for audience-gated callers (round-3 D9); DJ-authenticated
+    and unauthenticated local-dev callers keep seeing the real value.
+    """
+    mask_for_audience = _caller_realm(request) == _AUDIENCE_REALM
     async with state.lock:
         return {
             "base_url": state.llm_base_url,
-            "api_key": state.llm_api_key,
+            "api_key": _mask_secret(state.llm_api_key) if mask_for_audience else state.llm_api_key,
             "model": state.llm_model,
             "icecast_enabled": state.icecast_enabled,
             "audience_password": state.audience_password,

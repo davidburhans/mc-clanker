@@ -4,6 +4,7 @@ import logging
 import os
 import struct
 import time
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -98,7 +99,17 @@ def _finalize_wav(handle) -> None:
             handle.seek(40)
             handle.write(struct.pack("<I", data_size))
         else:
-            log.warning("Recording exceeds 4GB WAV limit; sizes left as placeholders")
+            # Round-3 D13: a >4 GiB recording cannot encode its real length in the
+            # 32-bit RIFF/data size fields. Leaving the zero placeholders made
+            # every size-honoring reader (including Python's own ``wave`` module,
+            # which validates the RIFF chunk) reject the WHOLE recording. Write the
+            # 0xFFFFFFFF sentinel used by mainstream wav writers instead, so the
+            # first 4 GiB stays playable/parseable.
+            log.warning("Recording exceeds 4GB WAV limit; writing 0xFFFFFFFF size sentinels")
+            handle.seek(4)
+            handle.write(struct.pack("<I", 0xFFFFFFFF))
+            handle.seek(40)
+            handle.write(struct.pack("<I", 0xFFFFFFFF))
     except (OSError, struct.error) as exc:
         log.warning("Could not finalize WAV header sizes: %r", exc)
     try:
@@ -109,6 +120,33 @@ def _finalize_wav(handle) -> None:
         handle.close()
     except OSError:
         pass
+
+
+def _file_holds_bytes(path: str) -> bool:
+    """True when ``path`` exists and is non-empty (a recording worth keeping)."""
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def _allocate_show_audio_path(show_dir: str, started_at: datetime) -> str:
+    """Return a path for THIS run's recording, never reusing a filled one (D2).
+
+    ``shows/{id}/audio.wav`` was reused by every take and opened with ``"wb"``, so
+    restarting a show (or reusing the id of a deleted one, SQLite reuses rowids)
+    O_TRUNC'd the previous recording before a single new sample existed. The first
+    take keeps the canonical name, a later take gets ``audio_<started_at>.wav``.
+
+    Example: second run of show 7 -> ``shows/7/audio_20250101T120000123456.wav``.
+    """
+    canonical = os.path.join(show_dir, "audio.wav")
+    if not _file_holds_bytes(canonical):
+        return canonical
+    stamped = os.path.join(show_dir, f"audio_{started_at.strftime('%Y%m%dT%H%M%S%f')}.wav")
+    if not _file_holds_bytes(stamped):
+        return stamped
+    return os.path.join(show_dir, f"audio_{uuid.uuid4().hex}.wav")
 
 
 def _transition_show_to_live(session, show_id, request, audio_file_path, started_at) -> None:
@@ -160,6 +198,46 @@ def _stop_show_recording(show_id: int):
         state.current_show_id = None
         state.current_show_start_time = None
         return show_file
+
+
+def _current_recording_show_id() -> int | None:
+    """Show id currently owning the live recording (sync_lock-protected)."""
+    with state.sync_lock:
+        return state.current_show_id
+
+
+async def _release_show_started_flag_if_idle() -> None:
+    """Clear the audience-facing "show started" flag only when no show records.
+
+    Round-3 D4: ``stop_show`` used to clear it unconditionally, so stopping a
+    stale 'live' row advertised "no show running" while a DIFFERENT show was still
+    recording and streaming to the audience.
+    """
+    if _current_recording_show_id() is not None:
+        return
+    async with state.lock:
+        state.is_show_started = False
+
+
+async def _teardown_live_recording(show_id: int) -> bool:
+    """Finalize + detach the live recording when ``show_id`` owns it (round-3 D1).
+
+    Required by the delete/archive paths: without it, removing or archiving the
+    LIVE show left ``state.current_show_id``/``is_show_recording`` set forever —
+    ``stop_show`` could no longer match the row, every later ``start_show`` 409'd,
+    and the mixer kept writing PCM into an orphaned handle. Only a restart
+    recovered.
+
+    Returns True when this show actually owned (and stopped) the recording.
+    """
+    show_file = _stop_show_recording(show_id)
+    owned = show_file is not None
+    if owned:
+        # Finalize under sync_lock, same precedent as stop_show (CONC-4).
+        with state.sync_lock:
+            _finalize_wav(show_file)
+    await _release_show_started_flag_if_idle()
+    return owned
 
 
 @router.get("/shows")
@@ -244,10 +322,16 @@ async def update_show(show_id: int, update: ShowUpdate, request: Request):
 
 @router.delete("/shows/{show_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_show(show_id: int, request: Request):
-    """Delete show + all related data."""
+    """Delete show + all related data.
+
+    Round-3 D1: tearing down the recording BEFORE deleting the row is mandatory —
+    otherwise the row that ``stop_show`` needs in order to clear the recording
+    state is gone and the recording subsystem stays wedged until a restart.
+    """
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
         show = require_show_owner(show_id, request, session)
+        await _teardown_live_recording(show_id)
         session.delete(show)
 
 
@@ -289,8 +373,9 @@ async def start_show(show_id: int, request: Request):
     shows_dir = os.environ.get("SHOWS_DIR", os.path.join(os.path.dirname(__file__), "..", "data", "shows"))
     show_dir = os.path.join(shows_dir, str(show_id))
     os.makedirs(show_dir, exist_ok=True)
-    audio_file_path = os.path.join(show_dir, "audio.wav")
     started_at = _as_naive_utc(datetime.now(timezone.utc))
+    # Round-3 D2: allocate a fresh path instead of O_TRUNC'ing the previous take.
+    audio_file_path = _allocate_show_audio_path(show_dir, started_at)
 
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
@@ -361,8 +446,9 @@ async def stop_show(show_id: int, request: Request):
         # precedent as framework_state._close_recording_handles_locked.
         with state.sync_lock:
             _finalize_wav(show_file)
-    async with state.lock:
-        state.is_show_started = False
+    # Round-3 D4: only clear the audience-facing flag when THIS show owned the
+    # recording (or nothing is recording at all).
+    await _release_show_started_flag_if_idle()
     # Flush any remaining audit buffers now that recording has stopped.
     from app.framework.framework_main_async import flush_recording_buffers
 
@@ -382,6 +468,9 @@ async def archive_show(show_id: int, request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot archive show with status '{show.status}'"
             )
 
+        # Round-3 D1: archiving a LIVE show used to leave the recording live with no
+        # reachable way back — stop_show then 400s on status != 'live' forever.
+        await _teardown_live_recording(show_id)
         show.status = "archived"
         return show.to_dict(include_audience_password=True)
 
@@ -474,25 +563,44 @@ async def start_export(req: ExportStartRequest):
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     file_path = os.path.join(export_dir, f"mc_clanker_{timestamp}.{fmt}")
 
-    file_handle = open(file_path, "wb")
-    if fmt == "wav":
-        _write_wav_header(file_handle)
-
+    # Round-3 D3: the conflict check must happen BEFORE the O_TRUNC open. The
+    # second-resolution filename means a duplicate (rejected) start resolved to the
+    # ACTIVE export's own path and truncated it before returning 400.
+    # The slot is claimed under sync_lock (handle stays None until the open wins),
+    # so check+set remains atomic while no rejected request ever touches a file.
     with state.sync_lock:
         if state.is_recording:
             conflict = True
         else:
             conflict = False
-            state.recording_file_handle = file_handle
+            state.recording_file_handle = None
             state.is_recording = True
             state.recording_format = fmt
             state.recording_file_path = file_path
             state.recording_start_time = time.time()
     if conflict:
-        file_handle.close()
         raise HTTPException(status_code=400, detail="Already recording")
 
+    try:
+        file_handle = open(file_path, "wb")
+    except OSError as exc:
+        _release_export_claim()
+        raise HTTPException(status_code=500, detail=f"Could not open export file {file_path}: {exc}") from exc
+    if fmt == "wav":
+        _write_wav_header(file_handle)
+    with state.sync_lock:
+        state.recording_file_handle = file_handle
+
     return {"status": "started", "file_path": file_path}
+
+
+def _release_export_claim() -> None:
+    """Roll back an export slot claimed under sync_lock when the open fails (D3)."""
+    with state.sync_lock:
+        state.is_recording = False
+        state.recording_file_handle = None
+        state.recording_file_path = None
+        state.recording_start_time = None
 
 
 @router.post("/export/stop")

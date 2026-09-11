@@ -1,6 +1,7 @@
 import asyncio
 import atexit
 import base64
+import logging
 import os
 import queue
 import re
@@ -19,6 +20,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.framework.framework_main_async import run_framework_loop_async
 from app.framework.framework_state import state
 from app.routes import api_router
+
+log = logging.getLogger(__name__)
+
+# A routing server id is interpolated into a 307 Location as the URL authority, so
+# only a bare host[:port] is ever allowed there (round-3 D7).
+_SAFE_SERVER_ID = re.compile(r"^[A-Za-z0-9._-]{1,253}(:\d{1,5})?$")
 
 
 # =============================================================================
@@ -94,11 +101,20 @@ async def lifespan(app: FastAPI):
     app_session_id = uuid.uuid4()
     print(f"SESSION AFFINITY: App session ID: {app_session_id}")
 
-    # Start the async framework loop as a background task
-    framework_task = asyncio.create_task(run_framework_loop_async(app_session_id))
+    # Start the async framework loop as a background task.
+    # Round-3 D11: a framework loop that fails to start (or dies right after) used
+    # to leave state.is_running=True, so /api/health kept reporting a healthy,
+    # running framework forever. Route both paths through the shutdown cleanup.
+    try:
+        framework_task = asyncio.create_task(run_framework_loop_async(app_session_id))
+    except Exception as exc:
+        log.error("FRAMEWORK LOOP FAILED TO START: %r", exc, exc_info=True)
+        _run_framework_failure_cleanup()
+        raise
 
     # Store the task for proper shutdown
     state.framework_task = framework_task
+    framework_task.add_done_callback(_on_framework_task_done)
 
     yield
     # Shutdown logic
@@ -117,6 +133,31 @@ async def lifespan(app: FastAPI):
 
     with suppress(Exception):
         await close_asyncpg_pool()
+
+
+def _run_framework_failure_cleanup() -> None:
+    """Run the shutdown/cleanup path after a framework failure (round-3 D11).
+
+    ``trigger_shutdown`` clears is_running/is_generating, closes the recording
+    sinks and poisons the audio clients, so /api/health stops claiming the
+    framework is running and no orphaned mixer keeps writing.
+    """
+    try:
+        state.trigger_shutdown()
+    except Exception as cleanup_exc:  # noqa: BLE001 - cleanup must not mask the cause
+        log.warning("cleanup after framework failure failed: %r", cleanup_exc)
+    state.is_running = False
+
+
+def _on_framework_task_done(task: asyncio.Task) -> None:
+    """Done-callback: a crashed framework loop must be visible to /api/health (D11)."""
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is None:
+        return
+    log.error("FRAMEWORK LOOP TERMINATED: %r", exception, exc_info=exception)
+    _run_framework_failure_cleanup()
 
 
 def cleanup():
@@ -207,7 +248,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # The route's env password must actually MATCH. The old gate only
             # fired when NO password was sent, so any Basic value — even a wrong
             # one — was accepted without verification (review SEC-3).
-            if (is_dj_route and dj_pass and provided_pass != dj_pass) or (
+            # Round-3 D9: "auth is configured" means EITHER password. Requiring
+            # dj_pass to be truthy left every DJ write route (POST /api/llm-config,
+            # /api/state, /api/stems/*, …) anonymous in an AUDIENCE_PASSWORD-only
+            # deployment, while the GET twin of the same path was 401-gated.
+            auth_configured = bool(dj_pass or aud_pass)
+            # Writes fail CLOSED as soon as EITHER password is configured. Reads keep
+            # the historical "gated only while DJ_PASSWORD exists" behaviour, so an
+            # AUDIENCE_PASSWORD-only deployment can still read DJ-tagged GETs (whose
+            # secrets are masked route-side, see routes/config.get_llm_config).
+            is_write_method = request.method not in ("GET", "HEAD", "OPTIONS")
+            dj_gate_active = bool(dj_pass) or (auth_configured and is_write_method)
+            if (is_dj_route and dj_gate_active and provided_pass != dj_pass) or (
                 is_audience_route and aud_pass and provided_pass != aud_pass
             ):
                 return Response(
@@ -231,6 +283,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             request.state.user = CompatUser()
             current_user = CompatUser()
+            # Round-3 D9: remember WHICH realm admitted the caller. Routes withhold
+            # DJ-only secrets (conductor API key) from callers that merely cleared
+            # the audience gate.
+            request.state.auth_realm = "dj" if dj_pass and provided_pass == dj_pass else "audience"
 
         def needs_auth(realm="Restricted"):
             return Response(
@@ -371,6 +427,13 @@ class SessionAffinityMiddleware(BaseHTTPMiddleware):
                 routing_server_id = result[0]
 
                 # If this server is not the routing server, redirect
+                if routing_server_id != current_server_id and not _SAFE_SERVER_ID.match(str(routing_server_id)):
+                    # Round-3 D7: never build a redirect from an arbitrary stored
+                    # value — a poisoned row must degrade to local handling, not send
+                    # the victim's request (and body) to an attacker-chosen host.
+                    log.warning("SESSION AFFINITY: ignoring unsafe routing server_id %r", routing_server_id)
+                    return await call_next(request)
+
                 if routing_server_id != current_server_id:
                     # Build redirect URL
                     # Use the scheme from the request, or default to http
@@ -461,6 +524,22 @@ SETUP_ENV_KEYS = frozenset(
 )
 
 
+# Round-3 D12: values are appended to .env as `KEY=value` lines, so a newline or
+# NUL inside a value injects arbitrary extra directives (e.g. JWT_SECRET=...).
+_UNSAFE_ENV_VALUE = re.compile(r"[\r\n\x00]")
+
+
+def _unsafe_env_key(values: dict) -> str | None:
+    """First key whose value carries a newline/NUL injection, else None.
+
+    Example: ``{"LLM_MODEL": "m\nJWT_SECRET=x"}`` -> ``"LLM_MODEL"``.
+    """
+    for key, value in values.items():
+        if _UNSAFE_ENV_VALUE.search(str(value)):
+            return key
+    return None
+
+
 @app.post("/api/setup/config")
 async def save_setup_config(request: Request):
     """Persist config to /app/.env and restart services."""
@@ -481,6 +560,13 @@ async def save_setup_config(request: Request):
     if not values:
         return JSONResponse({"status": "ok", "restarting": False})
 
+    injected_key = _unsafe_env_key(values)
+    if injected_key is not None:
+        return JSONResponse(
+            {"status": "error", "message": f"Value for {injected_key} must not contain newlines or NUL bytes"},
+            status_code=422,
+        )
+
     try:
         write_env_file(values)
     except Exception as e:
@@ -488,6 +574,33 @@ async def save_setup_config(request: Request):
 
     restart_services()
     return JSONResponse({"status": "ok", "restarting": True})
+
+
+def _discard_stream_client(client_q, process) -> None:
+    """Tear down a stream that failed during setup (round-3 D10).
+
+    Without this, a Popen/pre-feed failure leaked the spawned ffmpeg (never
+    killed/reaped) and — when the failure happened before the streaming
+    ``try/finally`` was reached — left ``client_q`` registered in
+    ``state.audio_clients`` forever, so the mixer kept queueing PCM into a queue
+    nobody drains.
+    """
+    if process is not None:
+        try:
+            process.kill()
+        except Exception as exc:  # noqa: BLE001 - best-effort teardown
+            print(f"Warning: could not kill stream ffmpeg: {exc}")
+        try:
+            process.wait(timeout=2)
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            pass
+        for pipe in (getattr(process, "stdin", None), getattr(process, "stdout", None)):
+            try:
+                if pipe is not None:
+                    pipe.close()
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                pass
+    state.remove_audio_client(client_q)
 
 
 def audio_stream_generator():
@@ -544,24 +657,26 @@ def audio_stream_generator():
     ]
 
     print(f"Starting audio stream with ffmpeg: {' '.join(ffmpeg_cmd)}")
-    # Use DEVNULL for stderr to prevent pipe buffer deadlocks (fix 3.4).
-    # FFmpeg writes metadata/stats to stderr; with a pipe the buffer can fill
-    # and deadlock the encoder if no one drains it.  We don't need stderr output.
-    process = subprocess.Popen(
-        ffmpeg_cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-
-    # Pre-feed the first chunk we already received
+    # Round-3 D10: Popen AND the pre-feed are wrapped so any failure kills + reaps
+    # the process, closes its pipes and unregisters client_q before returning.
+    process = None
     try:
+        # Use DEVNULL for stderr to prevent pipe buffer deadlocks (fix 3.4).
+        # FFmpeg writes metadata/stats to stderr; with a pipe the buffer can fill
+        # and deadlock the encoder if no one drains it.  We don't need stderr output.
+        process = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        # Pre-feed the first chunk we already received
         process.stdin.write(first_chunk)
         process.stdin.flush()
         print("DEBUG: Pre-fed first audio chunk to ffmpeg")
     except Exception as e:
-        print(f"Warning: Could not pre-feed first chunk to ffmpeg: {e}")
-        state.remove_audio_client(client_q)
+        print(f"Warning: Could not start ffmpeg stream / pre-feed first chunk: {e}")
+        _discard_stream_client(client_q, process)
         return
 
     def feeder():

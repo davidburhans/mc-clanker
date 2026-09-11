@@ -1,3 +1,6 @@
+import os
+import re
+import socket
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -12,18 +15,89 @@ from .schemas import JobSubmission, SessionHeartbeatRequest, SessionServerRespon
 
 router = APIRouter()
 
+# A routing server id is used as the HTTP authority of a 307 redirect target, so
+# only a bare host[:port] may ever be stored (round-3 D7).
+_SERVER_ID_SHAPE = re.compile(r"^[A-Za-z0-9._-]{1,253}(:\d{1,5})?$")
+
+
+def _require_authenticated(request: Request) -> None:
+    """SEC-4 route-level gate for the mutating job routes (round-3 D5).
+
+    The sibling GETs have carried this gate since round 2; without it a JWT-only
+    deployment (no DJ_PASSWORD env) let anonymous peers flood the queue and cancel
+    other users' pending jobs.
+    """
+    if get_current_user_from_request(request) is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+def _own_server_ids() -> set[str]:
+    """Server ids that name THIS deployment (round-3 D7 anti-poisoning list).
+
+    ``SessionAffinityMiddleware`` 307-redirects every session-scoped request to
+    ``{scheme}://{server_id}/...``, so a heartbeat must only ever be able to store
+    this instance's own identity — never an arbitrary host supplied by the caller.
+    """
+    known: set[str] = set()
+    for raw in (os.environ.get("SERVER_ID"), os.environ.get("HOSTNAME")):
+        if raw:
+            known.update({raw, f"server-{raw}"})
+    try:
+        hostname = socket.gethostname()
+    except OSError:
+        hostname = ""
+    if hostname:
+        known.update({hostname, f"server-{hostname}"})
+    try:
+        # Lazy import: app_ui imports this module (via app.routes) at module load.
+        from app import app_ui
+
+        known.add(getattr(app_ui, "current_server_id", ""))
+    except Exception:  # pragma: no cover - app_ui always importable in practice
+        pass
+    known.discard("")
+    return known
+
+
+def _validate_server_id(server_id: str) -> str:
+    """Reject server ids that are not this deployment's own identity (round-3 D7).
+
+    Example: ``evil.example`` -> 422, ``server-host1`` (own id) -> accepted.
+    """
+    candidate = (server_id or "").strip()
+    if not _SERVER_ID_SHAPE.match(candidate):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid server_id {server_id!r}: expected a bare host[:port] naming this server",
+        )
+    own = _own_server_ids()
+    if own and candidate not in own:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"server_id {server_id!r} does not match this deployment's server identity "
+                f"(expected one of: {', '.join(sorted(own))})"
+            ),
+        )
+    return candidate
+
 
 @router.post("/jobs", status_code=201)
-async def submit_job(job: JobSubmission):
+async def submit_job(job: JobSubmission, request: Request):
     """
     Submit a stem generation job to the queue.
+
+    Authentication required (review SEC-4 / round-3 D5).
     """
+    _require_authenticated(request)
     db_manager = DatabaseManager.get_instance()
     expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
     with db_manager.session() as session:
         new_job = GeneratorJob(
-            session_id=job.session_id,
+            # str() on purpose: the SQLite fallback stores uuids in VARCHAR(36)
+            # and sqlite3 cannot bind a uuid.UUID object (round-3 D6, POST 500'd).
+            session_id=str(job.session_id),
             instrument=job.instrument,
             prompt=job.prompt,
             major_family=job.major_family,
@@ -50,11 +124,12 @@ async def get_job(job_id: uuid.UUID, request: Request):
     Authentication required (review SEC-4): job rows carry prompts and queue
     contents that must not be enumerable by anonymous peers.
     """
-    if get_current_user_from_request(request) is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    _require_authenticated(request)
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
-        job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
+        # str comparison: the id column is VARCHAR(36) on the SQLite fallback, so a
+        # uuid.UUID comparand never matched and existing rows 404'd (round-3 D6).
+        job = session.query(GeneratorJob).filter(GeneratorJob.id == str(job_id)).first()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         return job.to_dict()
@@ -66,11 +141,10 @@ async def get_audio(job_id: uuid.UUID, request: Request):
 
     Authentication required (review SEC-4).
     """
-    if get_current_user_from_request(request) is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    _require_authenticated(request)
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
-        job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
+        job = session.query(GeneratorJob).filter(GeneratorJob.id == str(job_id)).first()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         if job.status != "completed":
@@ -89,11 +163,16 @@ async def get_audio(job_id: uuid.UUID, request: Request):
 
 
 @router.delete("/jobs/{job_id}")
-async def cancel_job(job_id: uuid.UUID):
-    """Cancel a pending job."""
+async def cancel_job(job_id: uuid.UUID, request: Request):
+    """Cancel a pending job.
+
+    Authentication required (review SEC-4 / round-3 D5): anonymous callers could
+    otherwise cancel anybody's queued job.
+    """
+    _require_authenticated(request)
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
-        job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
+        job = session.query(GeneratorJob).filter(GeneratorJob.id == str(job_id)).first()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         if job.status != "pending":
@@ -122,7 +201,8 @@ async def list_jobs(
     with db_manager.session() as session:
         query = session.query(GeneratorJob)
         if session_id:
-            query = query.filter(GeneratorJob.session_id == session_id)
+            # str comparison for the VARCHAR(36) SQLite column (round-3 D6).
+            query = query.filter(GeneratorJob.session_id == str(session_id))
         if status:
             query = query.filter(GeneratorJob.status == status)
 
@@ -138,7 +218,14 @@ async def list_jobs(
 
 @router.post("/sessions/{session_id}/heartbeat")
 async def session_heartbeat(session_id: uuid.UUID, request: SessionHeartbeatRequest):
-    """Update session routing heartbeat."""
+    """Update session routing heartbeat.
+
+    The id is validated against this deployment's own identity first (round-3 D7):
+    an arbitrary client-supplied ``server_id`` used to be upserted verbatim, and
+    ``SessionAffinityMiddleware`` then 307-redirected every request of that session
+    (method + body included) to the attacker's host.
+    """
+    server_id = _validate_server_id(request.server_id)
     db_manager = DatabaseManager.get_instance()
     dialect = db_manager.engine.dialect.name
 
@@ -152,7 +239,7 @@ async def session_heartbeat(session_id: uuid.UUID, request: SessionHeartbeatRequ
                     server_id = EXCLUDED.server_id,
                     last_heartbeat = NOW()
             """),
-                {"session_id": str(session_id), "server_id": request.server_id},
+                {"session_id": str(session_id), "server_id": server_id},
             )
         else:
             # SQLite fallback
@@ -164,7 +251,7 @@ async def session_heartbeat(session_id: uuid.UUID, request: SessionHeartbeatRequ
             """),
                 {
                     "session_id": str(session_id),
-                    "server_id": request.server_id,
+                    "server_id": server_id,
                     "heartbeat": datetime.now(timezone.utc),
                 },
             )
@@ -176,7 +263,7 @@ async def session_heartbeat(session_id: uuid.UUID, request: SessionHeartbeatRequ
                 """),
                     {
                         "session_id": str(session_id),
-                        "server_id": request.server_id,
+                        "server_id": server_id,
                         "heartbeat": datetime.now(timezone.utc),
                     },
                 )

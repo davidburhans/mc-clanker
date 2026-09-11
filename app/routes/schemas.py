@@ -75,7 +75,10 @@ class GenerationConfig(BaseModel):
 
 
 class StemVolumeUpdate(BaseModel):
-    volume: float
+    # Round-3 D8: a bare float accepted NaN/±Inf/1e308, and one such request poisoned
+    # the whole mix (NaN gain collapses the stem to silence, huge gains to
+    # full-scale garbage) with a 200 OK. 0.0–2.0 is the documented range.
+    volume: float = Field(ge=0.0, le=2.0, allow_inf_nan=False)
 
 
 class ExportStartRequest(BaseModel):
@@ -102,7 +105,11 @@ class AudienceMessage(BaseModel):
 
 
 class JobSubmission(BaseModel):
-    session_id: uuid.UUID
+    # Coerced to str at the boundary (round-3 D6): the documented SQLite dev
+    # fallback stores uuids in VARCHAR(36) and sqlite3 raises ProgrammingError when
+    # binding a uuid.UUID object, so POST /api/jobs 500'd. Input is still validated
+    # as a UUID — non-UUID bodies keep returning 422.
+    session_id: str
     instrument: str
     prompt: str
     major_family: str | None = None
@@ -111,6 +118,12 @@ class JobSubmission(BaseModel):
     bpm: int | None = None
     timbre_tags: list[str] = []
     bars: int = Field(default=4, ge=1, le=32)
+
+    @field_validator("session_id", mode="before")
+    @classmethod
+    def validate_session_id(cls, v: object) -> str:
+        """Canonicalize the session id to its str form, rejecting non-UUIDs."""
+        return _as_uuid_str(v)
 
     @field_validator("bpm")
     @classmethod
@@ -125,6 +138,22 @@ class JobSubmission(BaseModel):
         if v is not None and v not in VALID_KEYS:
             raise ValueError(f"Invalid key. Must be one of: {VALID_KEYS}")
         return v
+
+
+def _as_uuid_str(value: object) -> str:
+    """Return the canonical UUID string for ``value`` or raise ValueError.
+
+    Example: ``"550e8400-e29b-41d4-a716-446655440000"`` and the equivalent
+    ``uuid.UUID`` both yield the lowercase hyphenated string; ``"nope"`` raises.
+    """
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if not isinstance(value, str):
+        raise ValueError(f"Expected a UUID string, got {type(value).__name__}: {value!r}")
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as exc:
+        raise ValueError(f"Invalid UUID {value!r}: expected e.g. 550e8400-e29b-41d4-a716-446655440000") from exc
 
 
 class JobResponse(BaseModel):
