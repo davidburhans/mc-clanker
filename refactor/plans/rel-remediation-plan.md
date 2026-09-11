@@ -237,7 +237,7 @@ against fakes; documented how to run it.
 |------|--------|--------|
 | baseline | landed | e125167 |
 | 1 rel-mixer-resilience | **landed** (939p/16s green; reviewer safe-to-land, 0 blockers) | 46e9d13 |
-| 2 rel-reset-reprime | pending | — |
+| 2 rel-reset-reprime | **landed** (949p/16s green; reviewer safe-to-land, 0 blockers) | eda6ede |
 | 3 rel-worker-vram | pending | — |
 | 4 rel-llm-capture | pending | — |
 | 5 rel-storage-retention | pending | — |
@@ -258,6 +258,13 @@ against fakes; documented how to run it.
   failure) but not rate-limited — consider a consecutive-failure counter in
   /api/health during U15 soak. routes/stems.py:86 third clip site feeds only
   sanitized decode output now — fold into U14/REL-31 touch.
+
+- rel-02 (P2, report-only): post-reset numbering revisits indices, so a stale
+  in-flight pregen result for a pre-reset loop M can be accepted once (one
+  loop of stale audio, self-heals; no silence/crash/leak). Clean fix later:
+  monotonic generation/epoch counter on pregen results instead of loop_idx.
+  Also: post-reset audit rows keep pre-force loop_index → duplicates within
+  a show (cosmetic, disclosed).
 
 ## Decisions log
 
