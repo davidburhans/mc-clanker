@@ -110,6 +110,14 @@ async def lifespan(app: FastAPI):
     with suppress(asyncio.CancelledError):
         await framework_task
 
+    # Close the LISTEN/NOTIFY pool: B14 added this closer but nothing ever
+    # called it, so the 2-10 pooled connections leaked on every shutdown
+    # (review ASYNC-4). Suppressed so pool teardown cannot fail shutdown.
+    from app.job_waiter import close_asyncpg_pool
+
+    with suppress(Exception):
+        await close_asyncpg_pool()
+
 
 def cleanup():
     print("Application exiting, cleaning up...")
@@ -130,6 +138,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         auth_header = request.headers.get("Authorization")
         current_user = None
+        # Plain scalar captured while the JWT session is open: current_user is a
+        # detached ORM instance after its session closes, so later attribute
+        # access (is_show_owner below) would raise DetachedInstanceError.
+        current_user_id = None
 
         # Try JWT Bearer token first
         if auth_header and auth_header.startswith("Bearer "):
@@ -141,9 +153,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 with db_manager.session() as session:
                     user = session.query(User).filter(User.id == user_id).first()
                     if user and user.is_active:
+                        # Expunge before the session's commit expires the
+                        # instance — request.state.user is read after this
+                        # session closes (review SEC-5).
+                        session.expunge(user)
                         # Attach user to request state
                         request.state.user = user
                         current_user = user
+                        current_user_id = user.id
 
         # If not JWT, try HTTP Basic auth with env vars (backwards compatibility)
         dj_pass = getattr(state, "dj_password", "")
@@ -230,7 +247,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
             db_manager = DatabaseManager.get_instance()
             with db_manager.session() as session:
                 show = session.query(Show).filter(Show.id == show_id).first()
-                if show and show.audience_password_hash:
+                # The show's authenticated owner is already authorized for these
+                # routes (require_show_owner in routes/utils.py); the audience
+                # gate used to 401 them because a Bearer header never yields a
+                # Basic password (review SEC-5). CompatUser.id is 0 and never
+                # matches a real show.user_id, so Basic-compat callers still hit
+                # the gate below.
+                is_show_owner = current_user_id is not None and show is not None and show.user_id == current_user_id
+                if show and show.audience_password_hash and not is_show_owner:
                     # Extract password from Basic auth
                     provided_pass = None
                     if auth_header and auth_header.startswith("Basic "):

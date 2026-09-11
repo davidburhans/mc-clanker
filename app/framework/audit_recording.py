@@ -137,7 +137,11 @@ def _audit_action_row(show_id, loop_idx, ts, relative_ms, action, active_stems) 
         "action_type": a_type,
         "stem_index": idx,
         "stem_details": _audit_stem_details(a_type, idx, action, active_stems),
-        "action_description": _audit_action_description(a_type, idx, action, active_stems),
+        # Clamped to the String(500) column: one oversized LLM free-text row
+        # used to raise StringDataRightTruncation for the whole bulk insert,
+        # and the failed batch was re-prepended, so every later flush failed
+        # identically and the entire audit trail was lost (review DATA-6).
+        "action_description": _audit_action_description(a_type, idx, action, active_stems)[:500],
     }
 
 
@@ -168,7 +172,8 @@ async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
     interleave with ``flush_recording_buffers``.
     """
     actions = conductor_response.get("actions", []) or []
-    reasoning = conductor_response.get("reasoning", "")
+    # Clamped to the String(1000) column — see DATA-6 note in _audit_action_row.
+    reasoning = (conductor_response.get("reasoning") or "")[:1000]
     is_fallback = conductor_response.get("name") == "Fallback State"
     now = datetime.now(timezone.utc)
     async with state.lock:

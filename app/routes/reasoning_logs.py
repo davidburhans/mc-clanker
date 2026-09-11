@@ -36,6 +36,16 @@ def _column(name: str):
     return getattr(LLMInteraction, name, None)
 
 
+def _instrument_containment(inst_col, instrument: str):
+    """Postgres JSON-containment filter binding for the instruments column.
+
+    json.dumps, not an f-string: an instrument containing a quote or backslash
+    used to build invalid JSON (e.g. ["x""]) and 500 the endpoint with
+    'invalid input syntax for type json' (review SEC-7).
+    """
+    return inst_col.op("@>")(json.dumps([instrument]))
+
+
 def _eq_filter(query, name: str, value):
     """Equality-filter on a column only when both the column and value exist."""
     col = _column(name)
@@ -88,7 +98,7 @@ async def search_reasoning_logs(
         inst_col = _column("instruments")
         if instrument is not None and inst_col is not None:
             if db_manager.is_postgres:
-                query = query.filter(inst_col.op("@>")(f'["{instrument}"]'))
+                query = query.filter(_instrument_containment(inst_col, instrument))
             else:
                 query = query.filter(inst_col.like(f"%{instrument}%"))
         reasoning_col = _column("reasoning")
@@ -137,7 +147,7 @@ async def export_reasoning_logs(
         inst_col = _column("instruments")
         if instrument is not None and inst_col is not None:
             if db_manager.is_postgres:
-                query = query.filter(inst_col.op("@>")(f'["{instrument}"]'))
+                query = query.filter(_instrument_containment(inst_col, instrument))
             else:
                 query = query.filter(inst_col.like(f"%{instrument}%"))
         interactions = query.order_by(LLMInteraction.loop_index).all()

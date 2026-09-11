@@ -177,6 +177,19 @@ class IcecastStreamer:
         encoded = base64.b64encode(credentials.encode()).decode()
         return f"Basic {encoded}"
 
+    @staticmethod
+    def _log_safe_argv(ffmpeg_cmd: list[str]) -> list[str]:
+        """Return a copy of the ffmpeg argv with the Icecast credentials redacted.
+
+        The base64 Basic blob decodes trivially, so logging the raw argv wrote
+        ICECAST_PASSWORD to the logs on every stream start (review SEC-6).
+        """
+        redacted = list(ffmpeg_cmd)
+        for i, value in enumerate(redacted):
+            if value == "-icy_header" and i + 1 < len(redacted) and redacted[i + 1].startswith("Authorization:"):
+                redacted[i + 1] = "Authorization: Basic ***"
+        return redacted
+
     def _build_icecast_headers(self) -> list:
         """Build ffmpeg icy_headers for Icecast metadata."""
         headers = []
@@ -240,7 +253,7 @@ class IcecastStreamer:
         icecast_url = f"http://{self.host}:{self.port}{self.mount}"
         ffmpeg_cmd.append(icecast_url)
 
-        log.info("Icecast ffmpeg command: %s", " ".join(ffmpeg_cmd))
+        log.info("Icecast ffmpeg command: %s", " ".join(self._log_safe_argv(ffmpeg_cmd)))
 
         # Wait for first PCM data before starting ffmpeg
         # (avoids connecting to Icecast with no audio)

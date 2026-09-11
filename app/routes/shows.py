@@ -302,14 +302,21 @@ async def start_show(show_id: int, request: Request):
     # sync_lock-protected recording flags (A1/B8). Nothing is leaked on commit fail.
     audio_file = open(audio_file_path, "wb")
     _write_wav_header(audio_file)
+    # Reset the audit buffers BEFORE enabling recording (CONC-2): the old order
+    # cleared them in a separate state.lock section AFTER current_show_id went
+    # live, so an append_loop_audit landing in that gap — or rows re-queued by a
+    # previously failed flush — was silently discarded by the rebinding. No await
+    # sits between this reset and the sync_lock enable below, so no append can
+    # run in between on the event loop.
+    async with state.lock:
+        state.llm_interaction_buffer = []
+        state.action_buffer = []
     with state.sync_lock:
         state.is_show_recording = True
         state.current_show_id = show_id
         state.current_show_start_time = time.time()
         state.current_show_audio_file = audio_file
     async with state.lock:
-        state.llm_interaction_buffer = []
-        state.action_buffer = []
         state.is_show_started = True
     return response
 
@@ -347,7 +354,13 @@ async def stop_show(show_id: int, request: Request):
     # COMMIT succeeded — finalize/close the WAV + clear recording flags (A1/B8/C4).
     show_file = _stop_show_recording(show_id)
     if show_file is not None:
-        _finalize_wav(show_file)
+        # Finalize under sync_lock (CONC-4): the mixer thread snapshots this
+        # handle under the same lock, so finalizing unlocked could interleave a
+        # stale tick's pcm write between the header seeks and silently corrupt
+        # the RIFF sizes. One-shot stop path — same lock-across-file-I/O
+        # precedent as framework_state._close_recording_handles_locked.
+        with state.sync_lock:
+            _finalize_wav(show_file)
     async with state.lock:
         state.is_show_started = False
     # Flush any remaining audit buffers now that recording has stopped.

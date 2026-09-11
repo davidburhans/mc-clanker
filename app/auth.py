@@ -158,6 +158,10 @@ def get_current_user_from_request(request) -> object | None:
             with db_manager.session() as session:
                 user = session.query(User).filter(User.id == user_id).first()
                 if user and user.is_active:
+                    # Expunge before the session context's commit expires the
+                    # instance: callers read attributes (user.id, ...) on this
+                    # detached object after the session has closed (review SEC-5).
+                    session.expunge(user)
                     return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
