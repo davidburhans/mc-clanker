@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.auth import get_current_user_from_request, hash_password
 from app.db import DatabaseManager
+from app.framework.audit_recording import drop_buffered_rows_for_show, flush_recording_buffers
 from app.framework.framework_state import state
 from app.models import LLMInteraction, Show, ShowAction
 from app.playback import ShowPlayback
@@ -333,6 +334,15 @@ async def delete_show(show_id: int, request: Request):
         show = require_show_owner(show_id, request, session)
         await _teardown_live_recording(show_id)
         session.delete(show)
+    # REL-14 (U4): buffered rows still referencing the deleted show can never
+    # insert (its audit history was cascade-deleted) and would FK-poison every
+    # future flush — the failed batch re-prepends, so flushes fail identically
+    # until restart. Deliberately drop ONLY this show's rows, loudly (invariant
+    # 4: every drop is a counted, logged decision — never silent). After the
+    # delete COMMIT so a failed delete never discards recoverable rows.
+    dropped = await drop_buffered_rows_for_show(show_id)
+    if dropped:
+        print(f"delete_show {show_id}: dropped {dropped} buffered audit rows referencing the deleted show")
 
 
 @router.post("/show/stop")
@@ -387,15 +397,27 @@ async def start_show(show_id: int, request: Request):
     # sync_lock-protected recording flags (A1/B8). Nothing is leaked on commit fail.
     audio_file = open(audio_file_path, "wb")
     _write_wav_header(audio_file)
-    # Reset the audit buffers BEFORE enabling recording (CONC-2): the old order
-    # cleared them in a separate state.lock section AFTER current_show_id went
-    # live, so an append_loop_audit landing in that gap — or rows re-queued by a
-    # previously failed flush — was silently discarded by the rebinding. No await
-    # sits between this reset and the sync_lock enable below, so no append can
-    # run in between on the event loop.
+    # REL-14 (amended, U4): persist the previous show's pending rows instead of
+    # silently discarding them — the buffers ARE the fine-tuning corpus
+    # (invariant 4). Buffered rows carry their own show_id, so they flush even
+    # though current_show_id is still unset here. A successful flush empties
+    # both buffers (append_loop_audit no-ops while no show records), so the old
+    # unconditional clear would be a no-op on success — but after a FAILED
+    # flush it re-deleted the rows the flush had just re-queued (recreating the
+    # silent-discard bug this code replaces). Rows surviving a failed flush
+    # still reference an existing show, so they are RETAINED (loudly) for the
+    # next periodic/stop flush. No await sits between this point and the
+    # sync_lock enable below (CONC-2): appends cannot land in the gap because
+    # append_loop_audit no-ops while current_show_id is None.
+    await flush_recording_buffers()
     async with state.lock:
-        state.llm_interaction_buffer = []
-        state.action_buffer = []
+        retained_llm = len(state.llm_interaction_buffer)
+        retained_actions = len(state.action_buffer)
+    if retained_llm or retained_actions:
+        print(
+            f"start_show: retaining {retained_llm} buffered llm rows + {retained_actions} action rows "
+            f"after a failed flush (they will persist on the next flush)"
+        )
     with state.sync_lock:
         state.is_show_recording = True
         state.current_show_id = show_id
@@ -450,8 +472,6 @@ async def stop_show(show_id: int, request: Request):
     # recording (or nothing is recording at all).
     await _release_show_started_flag_if_idle()
     # Flush any remaining audit buffers now that recording has stopped.
-    from app.framework.framework_main_async import flush_recording_buffers
-
     await flush_recording_buffers()
     return response
 

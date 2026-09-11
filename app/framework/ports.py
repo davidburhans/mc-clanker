@@ -18,10 +18,10 @@ Design notes:
   (``jobs=...`` / ``audio=...`` / ``audit=...``; see U2-jobs + U4-await +
   U1-audio + U3-audit). R14 is complete: all five ports are ctor-injected AND
   reached through their port abstraction. ``AuditSinkPort`` ``flush`` routing
-  remains a documented contract, reached through the module
-  ``flush_recording_buffers`` via ``shows.py`` (the loop never calls flush —
-  zero behavior change; dual-ownership preserved), which tests exercise via
-  ``patch.object``.
+  is now wired per the U4 contract: the loop flushes past
+  ``AUDIT_FLUSH_THRESHOLD_ROWS`` via the port; routes keep the stop/shutdown
+  flushes through the module function — both serialized on the shared module
+  ``_flush_lock``, so dual ownership is preserved without interleaving.
 - ``MixerController`` is declared for documentation/typing only in this pass:
   the concrete ``Mixer`` is NOT yet fully behind it (the orchestrator still
   reaches a few private members at P10/P13 — see refactor/plan.md Phase 11,
@@ -53,7 +53,15 @@ class ConductorPort(Protocol):
         available_models: list[dict[str, Any]] | None = None,
         extra_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the conductor's decision (master_bpm/key/actions/reasoning/...)."""
+        """Return the conductor's decision (master_bpm/key/actions/reasoning/...).
+
+        U4 transport-key convention: implementations MAY attach underscore-
+        prefixed metadata keys to the returned dict (``ConductorLLMAsync`` adds
+        ``_request_messages`` — the exact system+user chat it sent). Consumers
+        must not treat underscore-prefixed keys as model output: the audit layer
+        stores them in dedicated columns and strips them from the persisted
+        ``parsed_response`` so the stored schema stays model-output-only.
+        """
         ...
 
 
@@ -122,11 +130,13 @@ class AuditSinkPort(Protocol):
     module-level, so there is no lazy/env path to preserve), and
     ``_append_loop_audit`` routes through ``self._audit.append_loop`` (delegating
     to the module ``append_loop_audit``), so the real append path is byte-for-byte
-    unchanged. Mirrors the U1-audio + U2-jobs + Phase 11 U4 seams. NOTE: only the
-    append path is wired into the loop — ``flush`` remains ``shows.py``-routed by
-    design (U4 confirmed the loop never calls flush; structurally complete via
-    ``AuditAdapter.flush`` → ``flush_recording_buffers`` — dual-ownership preserved
-    via the shared module ``_flush_lock``). The concrete ``AuditAdapter`` takes NO
+    unchanged. Mirrors the U1-audio + U2-jobs + Phase 11 U4 seams. U4 (REL-04)
+    UPDATE: ``flush`` is NOW wired into the loop too — the loop calls it from
+    P12 past ``AUDIT_FLUSH_THRESHOLD_ROWS`` (loop_steps.py) while routes keep
+    the stop/shutdown flushes. Ownership stays dual but serialized: every path
+    funnels through the same module functions, whose shared module-level
+    ``_flush_lock`` makes the flushes mutually exclusive. The concrete
+    ``AuditAdapter`` takes NO
     lock of its own; the
     ``_flush_lock`` + ``state.lock`` semantics live in the wrapped module
     functions (B13).

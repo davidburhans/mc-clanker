@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String
@@ -16,6 +17,11 @@ class LLMInteraction(Base):
     relative_time_ms = Column(Integer, nullable=False)
     prompt_messages = Column(JSON, nullable=False)
     parsed_response = Column(JSON, nullable=True)
+    # U4 (REL-04 + DPO field audit): the post-dedupe stem set actually enacted
+    # this loop, with per-stem outcome ("generated" | "cached" | "failed") —
+    # distinct from parsed_response.actions (requested). Additive; see
+    # migrations/003_llm_capture_additive.sql for existing deployments.
+    applied_actions = Column(JSON, nullable=True)
     reasoning = Column(String(1000), nullable=True)
     error = Column(String(500), nullable=True)
     was_fallback = Column(Boolean, default=False)
@@ -40,6 +46,7 @@ class LLMInteraction(Base):
             "relative_time_ms": self.relative_time_ms,
             "prompt_messages": self.prompt_messages,
             "parsed_response": self.parsed_response,
+            "applied_actions": self.applied_actions,
             "reasoning": self.reasoning,
             "error": self.error,
             "was_fallback": self.was_fallback,
@@ -71,8 +78,36 @@ class LLMInteraction(Base):
         }
 
     def to_llm_dump_dict(self):
-        """Format for LLM dump export (prompt + response only)."""
-        result = {"messages": self.prompt_messages}
+        """Training-corpus row (U4): full chat + response + capture metadata.
+
+        messages follows the {role, content} chat shape the unsloth converter
+        and dpo_pipeline consume; the assistant turn carries the response as a
+        JSON *string* (their canonical row format, see tests/test_dpo_pipeline.py).
+        Legacy rows whose prompt_messages is the old context-summary dict degrade
+        to an assistant-only row instead of raising (the unsloth converter inserts
+        the system message for assistant-only samples).
+        """
+        pm = self.prompt_messages
+        chat = list(pm) if isinstance(pm, list) else []
+        if self.parsed_response:
+            chat = chat + [{"role": "assistant", "content": json.dumps(self.parsed_response)}]
+        result = {"messages": chat}
         if self.parsed_response:
             result["response"] = self.parsed_response
+        # meta carries every remaining captured column — "DPO export contains
+        # every captured field" (U4 acceptance); kept OUT of the top level so
+        # the dump stays chat+response only for the training tools.
+        result["meta"] = {
+            "loop_index": self.loop_index,
+            "relative_time_ms": self.relative_time_ms,
+            "bpm": self.bpm,
+            "key": self.key,
+            "set_name": self.set_name,
+            "instruments": self.instruments,
+            "action_type": self.action_type,
+            "applied_actions": self.applied_actions,
+            "reasoning": self.reasoning,
+            "was_fallback": self.was_fallback,
+            "error": self.error,
+        }
         return result

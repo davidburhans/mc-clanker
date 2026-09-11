@@ -115,6 +115,18 @@ flush failure rows are re-prepended and compound (`audit_recording.py:64-69`).
 `len(state.llm_interaction_buffer) > 200` (`AuditAdapter.flush` exists and is
 lock-serialized); keep stop-flush; flush in lifespan shutdown.
 
+**Status: fixed-in rel-04-capture** — P12 (`_step_post_commit`) now flushes via
+the ctor-injected audit port past `AUDIT_FLUSH_THRESHOLD_ROWS = 200`
+(loop_steps.py), after the pregen spawn so a slow flush never eats pre-generation
+lead time; the flush's bulk insert runs in a worker thread (`asyncio.to_thread`)
+so the per-loop cadence never blocks the event loop. `stop_show`'s flush is kept,
+and lifespan shutdown adds a best-effort flush bounded by
+`FLUSH_SHUTDOWN_FLUSH_TIMEOUT_SECONDS = 10` (a timed-out flush loses at most the
+unflushed tail — the same bound a crash has; documented residual). Same unit
+amended REL-14's start/delete paths (see below) so flush failures re-queue
+without discarding, and capture gained the real chat + `applied_actions` (U4/DPO
+field audit). Pinned by `tests/test_llm_capture.py` (T1–T4, T8, T16).
+
 ### REL-05 [Critical] Recordings grow unbounded — 15.2 GB/day per live show; ENOSPC in 1–3 days, then silent corruption
 Recordings write 44.1 kHz stereo 16-bit PCM = 635 MB/hr (`shows.py:51-56`;
 the >4 GiB RIFF overflow handling shows multi-GB files are an *expected*
@@ -245,6 +257,22 @@ future flush fails identically while appends continue: unbounded growth +
 error-per-flush until restart.
 **Fix:** drop buffered rows for the deleted `show_id` in the teardown path
 (or flush-then-delete).
+
+**Status: fixed-in rel-04-capture (amended finding)** — the 2026-09-11 U4
+verification found the FK-poison loop already unreachable: `start_show` cleared
+both buffers first, but that clearing *silently discarded* captured rows —
+itself an invariant-4 violation (the buffers ARE the fine-tuning corpus). The
+landing: `start_show` now flushes BEFORE the recording flags go live and
+RETAINS (logs) any rows a failed flush re-queued instead of discarding them
+(buffered rows carry their own `show_id`, so they flush even with
+`current_show_id` unset); `delete_show` deliberately drops ONLY the deleted
+show's buffered rows after the delete commits, logging the count
+(`drop_buffered_rows_for_show`). Documented residual: a process death in the
+milliseconds between the delete commit and the buffer drop can still leave
+FK-poisoned rows until restart; a self-healing flush (per-row isolation on
+IntegrityError) was considered and rejected as scope creep. Pinned by
+`tests/test_llm_capture.py` T5/T5b/T6/T7 + the U4-amended CONC-2 test in
+`tests/test_adversarial_leftovers.py`.
 
 ### REL-15 [High] YouTube relay gives up permanently after 3 restarts; no watchdog; no auto-arm on boot **[×2 — mixer lane + parent code read]**
 `youtube_relay.py:70,344-380` — `_give_up()` unregisters and deactivates

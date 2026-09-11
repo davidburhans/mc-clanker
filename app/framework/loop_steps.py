@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from app.framework.audit_recording import _audit_applied_actions
 from app.framework.conductor_interaction import (
     build_fallback_response,
     format_action_log,
@@ -91,6 +92,13 @@ STEM_CACHE_TTL_SECONDS = 300.0
 # ~5-6 MB per 8-bar 44.1 kHz stereo stem => ~180 MB worst case (sibling
 # state.cache_stem LRU caps at 16).
 STEM_CACHE_MAX_ENTRIES = 32
+
+# REL-04: the in-RAM audit buffers must not grow for the whole show — past this
+# many buffered LLMInteraction rows, P12 flushes via the audit port (the module
+# flush serializes on _flush_lock and re-queues on failure). At ~1 interaction
+# per loop this flushes every ~200 loops: crash loss bounded to the unflushed
+# tail, RAM bounded at ~1 MB. Module attr so tests can monkeypatch it.
+AUDIT_FLUSH_THRESHOLD_ROWS = 200
 
 
 def sanitize_master_bpm(candidate: Any, fallback: int | None) -> int:
@@ -350,6 +358,9 @@ class _LoopSteps:
                 "name": self._pregen_results.get("set_name", "Unknown Set"),
                 "reasoning": self._pregen_results.get("reasoning", "No reasoning provided."),
                 "actions": self._pregen_results.get("actions", []),
+                # U4/DPO: the exact chat the pregen conductor sent (transport key;
+                # absent on fabricated loop-1 results -> legacy context fallback).
+                "_request_messages": self._pregen_results.get("_request_messages"),
             }
             prepared_tracks = self._pregen_results["prepared_tracks"]
             loop_duration_samples = self._pregen_results["loop_duration_samples"]
@@ -557,13 +568,18 @@ class _LoopSteps:
 
         return pending_jobs
 
-    async def _step_await_jobs_fetch(self, pending_jobs, local_next_stems) -> None:
+    async def _step_await_jobs_fetch(self, pending_jobs, local_next_stems) -> dict[int, str]:
         """P8: wait for jobs, fetch audio, populate stem_cache + state.cache_stem.
 
         B7: fetched audio is routed through ``state.cache_stem`` (under lock) so
         the 16-entry LRU cap is enforced — the background pregen path never
         calls it (brief-01 risk #4 divergence).
+
+        U4 (DPO field audit): returns ``{orig_idx: "generated" | "failed"}`` for
+        the submitted jobs; stems absent from the map were cache hits (the
+        applied-actions builder defaults them to "cached").
         """
+        outcomes: dict[int, str] = {}
         if pending_jobs:
             job_ids = [job_id for job_id, _, _ in pending_jobs]
             print(f"[AsyncLoop-{self._loop_idx}] Waiting for {len(job_ids)} jobs to complete...")
@@ -586,8 +602,13 @@ class _LoopSteps:
                         self.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
                         async with state.lock:
                             state.cache_stem(local_next_stems[orig_idx]["prompt"], audio_data)
+                        outcomes[orig_idx] = "generated"
+                    else:
+                        outcomes[orig_idx] = "failed"
                 else:
                     print(f"Job {job_id} failed or timed out")
+                    outcomes[orig_idx] = "failed"
+        return outcomes
 
     async def _reawait_late_completions(
         self,
@@ -615,8 +636,14 @@ class _LoopSteps:
         )
         return prepared_tracks, loop_duration_samples
 
-    async def _step_append_audit(self, conductor_response, active_stems) -> None:
-        """C1: buffer this loop's conductor decision + actions for the audit trail."""
+    async def _step_append_audit(self, conductor_response, active_stems, next_stems, outcomes) -> None:
+        """C1: buffer this loop's conductor decision + actions for the audit trail.
+
+        U4: the post-dedupe enacted stems + per-stem outcome ride the response
+        dict under a transport key so the port-level ``_append_loop_audit``
+        signature (patched across the test suite) stays unchanged.
+        """
+        conductor_response["_applied_actions"] = _audit_applied_actions(next_stems, outcomes)
         await self._append_loop_audit(conductor_response, active_stems, self._loop_idx)
 
     async def _step_commit_to_mixer(
@@ -829,6 +856,18 @@ class _LoopSteps:
                 f"[AsyncLoop-{self._loop_idx}] Pre-gen for a later loop still running; "
                 f"leaving loop {self._loop_idx + 1} to the fresh conductor path"
             )
+
+        # REL-04: keep the in-RAM audit buffers bounded — flush past the row
+        # threshold instead of holding the whole show until stop_show. Routed
+        # through the audit port; the module flush serializes on _flush_lock and
+        # re-queues its rows on failure, so the loop just retries next iteration.
+        # len() is a GIL-atomic read; the mixer thread is never involved (this is
+        # the async loop task, post-commit — the DB I/O is threaded off-loop).
+        try:
+            if len(state.llm_interaction_buffer) > AUDIT_FLUSH_THRESHOLD_ROWS:
+                await self._audit.flush()
+        except Exception as e:  # noqa: BLE001  # flush re-queues internally; guard is belt-and-braces
+            print(f"[AsyncLoop-{self._loop_idx}] Audit flush failed (will retry next loop): {e}")
 
     def _prune_stem_cache(self) -> None:
         """REL-06: drop stale-then-overflow stem-cache entries (TTL + cap).

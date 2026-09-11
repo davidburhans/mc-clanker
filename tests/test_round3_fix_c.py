@@ -333,7 +333,10 @@ def test_c5_unknown_master_key_logs_a_warning(caplog) -> None:
 async def test_c5_get_next_state_async_survives_a_bricked_current_key(monkeypatch) -> None:
     conductor, fake = _wire_conductor(monkeypatch, '{"actions": [], "reasoning": "ok"}')
     response = await conductor.get_next_state_async(current_bpm=120, current_key="Potato", active_stems=[])
-    assert response == {"actions": [], "reasoning": "ok"}
+    # U4: get_next_state_async attaches the _request_messages transport key
+    # (the exact chat it sent) alongside the parsed model output — compare the
+    # model output only (the transport key itself is pinned by test_llm_capture T9).
+    assert {k: v for k, v in response.items() if not k.startswith("_")} == {"actions": [], "reasoning": "ok"}
     prompt = fake.calls[0]["messages"][-1]["content"]
     assert "Master Key: Potato" in prompt
 

@@ -25,9 +25,41 @@ from app.framework.framework_state import state
 # lock IDENTITY is shared with callers that import it (tests, routes/shows.py).
 _flush_lock = asyncio.Lock()
 
+# U4 (REL-04): best-effort bound for the lifespan-shutdown flush (app_ui.py).
+# A DB unreachable within this window costs at most the unflushed tail (<= the
+# P12 threshold + one loop's rows) — never a hung shutdown. Module-level so
+# tests can pin/monkeypatch it.
+FLUSH_SHUTDOWN_FLUSH_TIMEOUT_SECONDS = 10.0
+
+
+def _insert_audit_batches(llm_buffer: list[dict[str, Any]], action_buffer: list[dict[str, Any]]) -> None:
+    """Sync bulk-insert of one flush's copied buffers (U4: runs in a worker thread).
+
+    Raises on DB failure so ``flush_recording_buffers`` can re-queue the rows.
+    """
+    # Import here to avoid circular imports.
+    from app.db import DatabaseManager
+    from app.models import LLMInteraction, ShowAction
+
+    db_manager = DatabaseManager.get_instance()
+    with db_manager.session() as session:
+        if llm_buffer:
+            session.bulk_insert_mappings(LLMInteraction, llm_buffer)
+        if action_buffer:
+            session.bulk_insert_mappings(ShowAction, action_buffer)
+
 
 async def flush_recording_buffers() -> None:
-    """Batch-write buffered interactions/actions to DB; re-queue on failure."""
+    """Batch-write buffered interactions/actions to DB; re-queue on failure.
+
+    U4 (REL-04): the flush is now on the loop hot path (P12 threshold), so the
+    DB I/O runs in a worker thread (``asyncio.to_thread``) — sync SQLAlchemy on
+    the event loop would stall every route/WS for the duration of a slow DB
+    (REL-09 class). Semantics unchanged for every caller: same copy-under-lock,
+    same ``_flush_lock`` serialization, same re-prepend-on-failure. Test fakes
+    patching ``DatabaseManager.get_instance`` keep working (module attr is
+    resolved at call time, thread or no thread).
+    """
     async with _flush_lock:
         async with state.lock:
             if not state.llm_interaction_buffer and not state.action_buffer:
@@ -49,17 +81,8 @@ async def flush_recording_buffers() -> None:
         if not llm_buffer and not action_buffer:
             return
 
-        # Import here to avoid circular imports.
-        from app.db import DatabaseManager
-        from app.models import LLMInteraction, ShowAction
-
-        db_manager = DatabaseManager.get_instance()
         try:
-            with db_manager.session() as session:
-                if llm_buffer:
-                    session.bulk_insert_mappings(LLMInteraction, llm_buffer)
-                if action_buffer:
-                    session.bulk_insert_mappings(ShowAction, action_buffer)
+            await asyncio.to_thread(_insert_audit_batches, llm_buffer, action_buffer)
             print("Flushed recording buffers to DB")
         except Exception as e:  # noqa: BLE001  # intentional: restore buffers + keep the show alive on DB blip
             print(f"Error flushing recording buffers: {e}")
@@ -73,6 +96,54 @@ def _relative_show_ms() -> int:
     """Milliseconds since the current show started (0 if not started)."""
     start = state.current_show_start_time
     return int((time.time() - start) * 1000) if start else 0
+
+
+async def drop_buffered_rows_for_show(show_id: int) -> int:
+    """Deliberately drop buffered audit rows referencing a deleted show (REL-14).
+
+    The show row (and its audit history, by cascade) is gone, so these rows can
+    never insert — they would FK-fail every future flush, and the failed batch
+    re-prepends, poisoning flushes until restart. Caller logs the count
+    (invariant 4: the drop must be loud, never silent). Lock section is pure
+    list filtering — no I/O.
+
+    Example::
+
+        dropped = await drop_buffered_rows_for_show(show_id)  # -> 4
+    """
+    async with state.lock:
+        llm_keep = [r for r in state.llm_interaction_buffer if r.get("show_id") != show_id]
+        act_keep = [r for r in state.action_buffer if r.get("show_id") != show_id]
+        dropped = (len(state.llm_interaction_buffer) - len(llm_keep)) + (
+            len(state.action_buffer) - len(act_keep)
+        )
+        state.llm_interaction_buffer = llm_keep
+        state.action_buffer = act_keep
+    return dropped
+
+
+def _audit_applied_actions(next_stems: list[dict[str, Any]], outcomes: dict[int, str]) -> list[dict[str, Any]]:
+    """Build the per-stem U4 capture rows for the stems ACTUALLY enacted this loop.
+
+    ``next_stems`` is the post-dedupe set (process_actions output), so this is
+    what played — distinct from ``parsed_response.actions`` (what was requested).
+    ``outcomes`` maps orig_idx -> "generated" | "failed" (P8 result); stems
+    absent from the map were cache hits -> "cached".
+    """
+    rows: list[dict[str, Any]] = []
+    for i, stem in enumerate(next_stems):
+        details = stem.get("_original_details", {}) or {}
+        rows.append(
+            {
+                "sub_family": details.get("sub_family"),
+                "major_family": details.get("major_family"),
+                "model_id": stem.get("model_id", details.get("model_id")),
+                "bars": stem.get("bars", details.get("bars")),
+                "age": stem.get("_age", details.get("_age")),
+                "outcome": outcomes.get(i, "cached"),
+            }
+        )
+    return rows
 
 
 def _audit_prompt_context(
@@ -165,6 +236,47 @@ def _audit_loop_meta(conductor_response: dict[str, Any], active_stems: list[dict
     }
 
 
+def _audit_interaction_row(
+    show_id: int,
+    loop_idx: int,
+    ts: datetime,
+    relative_ms: int,
+    conductor_response: dict[str, Any],
+    active_stems: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Shape one LLMInteraction dict for bulk-insert, incl. the U4 capture fields.
+
+    Transport keys (underscore-prefixed, see the ports.py convention) are
+    persisted in their dedicated columns and stripped from parsed_response so
+    the stored response stays schema-pure model output. Rows without them
+    (fallback paths, test fakes) keep the legacy context-summary prompt.
+    """
+    request_messages = conductor_response.get("_request_messages")
+    applied = conductor_response.get("_applied_actions")
+    parsed = {k: v for k, v in conductor_response.items() if not k.startswith("_")}
+    # Clamped to the String(1000) column — see DATA-6 note in _audit_action_row.
+    reasoning = (conductor_response.get("reasoning") or "")[:1000]
+    return {
+        "show_id": show_id,
+        "loop_index": loop_idx,
+        "timestamp": ts,
+        "relative_time_ms": relative_ms,
+        # U4: the exact system+user chat when the conductor attached it; the
+        # legacy 5-key context summary stays as the fallback-path shape.
+        "prompt_messages": request_messages
+        if request_messages
+        else _audit_prompt_context(conductor_response, active_stems, loop_idx),
+        "parsed_response": parsed,
+        # U4 (REL-04 + DPO field audit): the post-dedupe enacted stems + their
+        # generation outcome; additive column, see migrations/003.
+        "applied_actions": applied,
+        "reasoning": reasoning,
+        "error": None,
+        "was_fallback": conductor_response.get("name") == "Fallback State",
+        **_audit_loop_meta(conductor_response, active_stems),
+    }
+
+
 async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
     """Buffer one LLMInteraction + N ShowAction rows for later DB flush (C1).
 
@@ -172,9 +284,6 @@ async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
     interleave with ``flush_recording_buffers``.
     """
     actions = conductor_response.get("actions", []) or []
-    # Clamped to the String(1000) column — see DATA-6 note in _audit_action_row.
-    reasoning = (conductor_response.get("reasoning") or "")[:1000]
-    is_fallback = conductor_response.get("name") == "Fallback State"
     now = datetime.now(timezone.utc)
     async with state.lock:
         show_id = state.current_show_id
@@ -182,18 +291,7 @@ async def append_loop_audit(conductor_response, active_stems, loop_idx) -> None:
             return
         relative_ms = _relative_show_ms()
         state.llm_interaction_buffer.append(
-            {
-                "show_id": show_id,
-                "loop_index": loop_idx,
-                "timestamp": now,
-                "relative_time_ms": relative_ms,
-                "prompt_messages": _audit_prompt_context(conductor_response, active_stems, loop_idx),
-                "parsed_response": conductor_response,
-                "reasoning": reasoning,
-                "error": None,
-                "was_fallback": is_fallback,
-                **_audit_loop_meta(conductor_response, active_stems),
-            }
+            _audit_interaction_row(show_id, loop_idx, now, relative_ms, conductor_response, active_stems)
         )
         for action in actions:
             state.action_buffer.append(_audit_action_row(show_id, loop_idx, now, relative_ms, action, active_stems))
@@ -214,10 +312,14 @@ class AuditAdapter:
     ``_flush_lock`` + ``state.lock`` semantics (B13). Delegation is safe
     precisely because the lock lives in the module functions, not the adapter.
 
-    Only ``append_loop`` is wired into the loop (via ``_append_loop_audit``);
-    ``flush`` is included for structural completeness against ``AuditSinkPort``
-    and will be wired in U4 (routes flush still calls the module
-    ``flush_recording_buffers`` directly today — dual-ownership preserved).
+    Only ``append_loop`` used to be wired into the loop; U4 (REL-04) also wires
+    ``flush`` — the loop calls it from P12 past ``AUDIT_FLUSH_THRESHOLD_ROWS``
+    (loop_steps.py) while routes keep the stop/shutdown flushes. Both paths
+    serialize on the shared module ``_flush_lock``, so ownership stays dual but
+    lock-serialized. The adapter takes NO lock of its own — the module functions
+    already own the ``_flush_lock`` + ``state.lock`` semantics (B13). Delegation
+    is safe precisely because the lock lives in the module functions, not the
+    adapter.
     """
 
     async def append_loop(

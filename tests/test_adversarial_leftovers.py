@@ -270,28 +270,58 @@ class TestSec7InstrumentJsonFilter:
 
 
 class TestConc2BufferResetOrder:
-    """CONC-2: start_show reset the audit buffers AFTER enabling recording, so
-    rows appended in the gap (or re-queued by a failed flush) were discarded."""
+    """CONC-2 (U4-amended, REL-14): start_show used to CLEAR the audit buffers,
+    so rows appended in the gap — or re-queued by a failed flush — were silently
+    discarded. U4 replaces the clear with flush-first: rows that can persist ARE
+    persisted before recording starts (invariant 4: the buffers ARE the
+    fine-tuning corpus), and anything a failing flush re-queues is retained
+    loudly (never discarded — pinned by test_llm_capture.py::T5b). The
+    no-loss-in-the-gap property survives: appends cannot land between the flush
+    and the sync_lock enable (append_loop_audit no-ops while current_show_id is
+    None)."""
 
-    def test_start_show_clears_stale_rows_and_keeps_live_appends(
+    def test_start_show_flushes_stale_rows_and_keeps_live_appends(
         self, app_client, db_user, tmp_path, monkeypatch
     ):
+        from app.db import DatabaseManager
         from app.framework import audit_recording
+        from app.models import LLMInteraction
 
         monkeypatch.setenv("SHOWS_DIR", str(tmp_path))
+        prev_show_id = _make_show(db_user.id, status="ended")
         show_id = _make_show(db_user.id, status="draft")
-        state.llm_interaction_buffer = [{"stale": "previous-show"}]
-        state.action_buffer = [{"stale": "previous-show"}]
+        state.llm_interaction_buffer = [
+            {
+                "show_id": prev_show_id,
+                "loop_index": 1,
+                "relative_time_ms": 0,
+                "prompt_messages": {"stub": "legacy context-summary dict"},
+            }
+        ]
+        state.action_buffer = [
+            {
+                "show_id": prev_show_id,
+                "loop_index": 1,
+                "relative_time_ms": 0,
+                "action_type": "retain",
+            }
+        ]
 
         with patch_owner(db_user):
             resp = app_client.post(f"/api/shows/{show_id}/start")
 
         assert resp.status_code == 200, resp.text
-        # Stale rows from before the show are gone...
+        # Stale rows from before the show were PERSISTED (flush-before-start),
+        # not silently discarded...
+        db = DatabaseManager.get_instance()
+        with db.session() as session:
+            assert (
+                session.query(LLMInteraction).filter(LLMInteraction.show_id == prev_show_id).count() == 1
+            )
         assert state.llm_interaction_buffer == []
         assert state.action_buffer == []
         assert state.current_show_id == show_id
-        # ...while a row appended while the show is live must survive the reset.
+        # ...while a row appended while the show is live must survive the start.
         asyncio.run(audit_recording.append_loop_audit({"actions": [], "reasoning": "live"}, [], 0))
         assert len(state.llm_interaction_buffer) == 1
         assert state.llm_interaction_buffer[0]["reasoning"] == "live"

@@ -260,6 +260,18 @@ class AsyncFrameworkLoop(_LoopSteps):
 
                 snap = await self._step_read_state()
 
+                # U4 (REL-04/DPO): audit capture inputs — the enacted stems +
+                # per-stem generation outcome. Pregen path: carried on the pregen
+                # results; fresh path: captured below from P6/P8. The fabricated
+                # loop-1 result carries no outcomes (empty dict is fine: the
+                # applied-actions builder defaults missing stems to "cached").
+                audit_stems: list = []
+                audit_outcomes: dict[int, str] = {}
+                if pregen_ready:
+                    assert self._pregen_results is not None  # pregen_ready gate (P2)
+                    audit_stems = self._pregen_results.get("next_stems", [])
+                    audit_outcomes = self._pregen_results.get("stem_outcomes") or {}
+
                 # P4-P9 run only on the fresh path: pregen already has
                 # conductor_response + prepared_tracks from P2 (review A1).
                 if not pregen_ready:
@@ -283,12 +295,13 @@ class AsyncFrameworkLoop(_LoopSteps):
                         deduped_tracks,
                     )
                     pending_jobs = await self._step_submit_jobs(local_next_stems, local_current_bpm, local_current_key)
-                    await self._step_await_jobs_fetch(pending_jobs, local_next_stems)
+                    stem_outcomes = await self._step_await_jobs_fetch(pending_jobs, local_next_stems)
                     prepared_tracks, loop_duration_samples = await self._step_tile_audio(
                         local_next_stems, local_current_bpm, local_current_key, deduped_tracks
                     )
+                    audit_stems, audit_outcomes = local_next_stems, stem_outcomes
 
-                await self._step_append_audit(conductor_response, snap.active_stems)
+                await self._step_append_audit(conductor_response, snap.active_stems, audit_stems, audit_outcomes)
                 tracks_to_use, duration_samples = await self._step_commit_to_mixer(
                     pregen_ready, prepared_tracks, loop_duration_samples
                 )

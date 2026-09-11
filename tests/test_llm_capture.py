@@ -344,6 +344,10 @@ def _reset_capture_state():
     state.shutdown_event.clear()
     state.is_running = True
     state.is_generating = False
+    # loop_count is NOT cleared by state.reset(); a foreign suite (e.g.
+    # test_api.py) can leave it non-zero, so the harness zeroes it to keep the
+    # "exactly N committed loops" contract absolute.
+    state.loop_count = 0
     state.dj_password = ""
     state.audience_password = ""
     state.current_show_id = None

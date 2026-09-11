@@ -32,6 +32,7 @@ _LLM_INTERACTION_COLS = {
     "relative_time_ms",
     "prompt_messages",
     "parsed_response",
+    "applied_actions",  # U4 (REL-04/DPO): enacted stems + generation outcome
     "reasoning",
     "error",
     "was_fallback",

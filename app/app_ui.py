@@ -126,6 +126,20 @@ async def lifespan(app: FastAPI):
     with suppress(asyncio.CancelledError):
         await framework_task
 
+    # REL-04 (U4): last-chance audit flush so shutdown doesn't lose the unflushed
+    # tail of the capture buffers (invariant 4: the buffers ARE the fine-tuning
+    # corpus). Best-effort and bounded: a DB unreachable within the timeout costs
+    # at most the unflushed tail (<= threshold + one loop's rows), never a hung
+    # shutdown. Imported at call time so tests can monkeypatch the function and
+    # the timeout constant on the module.
+    from app.framework.audit_recording import (
+        FLUSH_SHUTDOWN_FLUSH_TIMEOUT_SECONDS,
+        flush_recording_buffers,
+    )
+
+    with suppress(Exception):
+        await asyncio.wait_for(flush_recording_buffers(), timeout=FLUSH_SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+
     # Close the LISTEN/NOTIFY pool: B14 added this closer but nothing ever
     # called it, so the 2-10 pooled connections leaked on every shutdown
     # (review ASYNC-4). Suppressed so pool teardown cannot fail shutdown.

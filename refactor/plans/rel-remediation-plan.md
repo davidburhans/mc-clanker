@@ -239,7 +239,7 @@ against fakes; documented how to run it.
 | 1 rel-mixer-resilience | **landed** (939p/16s green; reviewer safe-to-land, 0 blockers) | 46e9d13 |
 | 2 rel-reset-reprime | **landed** (949p/16s green; reviewer safe-to-land, 0 blockers) | eda6ede |
 | 3 rel-worker-vram | **landed** (968p/16s green; reviewer safe-to-land, 0 blockers) | e28eee7 |
-| 4 rel-llm-capture | pending | — |
+| 4 rel-llm-capture | **landed** (987p/16s green; DPO capture contract pinned T1–T16) | — |
 | 5 rel-storage-retention | pending | — |
 | 6 rel-job-queue | pending | — |
 | 7 rel-db-offloop | pending | — |

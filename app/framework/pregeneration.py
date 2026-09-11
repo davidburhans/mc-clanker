@@ -112,6 +112,9 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
 
         # Wait for jobs + fetch audio. NOTE: writes ONLY loop.stem_cache here —
         # state.cache_stem is foreground-only (brief-01 risk #4 divergence).
+        # U4: stem_outcomes mirrors the foreground P8 tri-state so both loop
+        # paths capture identical applied_actions data.
+        stem_outcomes: dict[int, str] = {}
         if pending_jobs:
             job_ids = [job_id for job_id, _, _ in pending_jobs]
             # B3: same batch budget as the foreground path — one worker drains a
@@ -128,6 +131,11 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
                     audio_data = await loop._fetch_audio(audio_path)
                     if audio_data is not None:
                         loop.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
+                        stem_outcomes[orig_idx] = "generated"
+                    else:
+                        stem_outcomes[orig_idx] = "failed"
+                else:
+                    stem_outcomes[orig_idx] = "failed"
 
         # Tile to loop duration (Phase 2 helper; replaces the inline copy).
         prepared_tracks, loop_duration_samples = tile_to_loop(
@@ -154,6 +162,11 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
             "set_name": conductor_response.get("name", "Unknown Set"),
             "reasoning": conductor_response.get("reasoning", "No reasoning provided."),
             "actions": conductor_response.get("actions", []),
+            # U4/DPO capture: the exact conductor chat + the enacted stems'
+            # generation outcome, so the pregen path captures identically to the
+            # fresh path (P2 reconstructs _request_messages into its response).
+            "_request_messages": conductor_response.get("_request_messages"),
+            "stem_outcomes": stem_outcomes,
         }
         loop._pregen_done.set()
         print(f"[AsyncFrameworkLoop] Pre-generation for loop {for_loop_idx} complete!")

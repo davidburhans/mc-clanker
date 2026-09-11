@@ -313,7 +313,18 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             user_prompt += f"\nOVERRIDE: {user_override}"
 
         # Call LLM async
-        return await self.call_async(user_prompt, llm_config, extra_body=extra_body)
+        response = await self.call_async(user_prompt, llm_config, extra_body=extra_body)
+        # U4/REL-04: attach the exact chat sent to the LLM so the audit trail can
+        # persist the real user turn — the corpus previously captured only a 5-key
+        # context summary, leaving llm-dump user turns near-empty (invariant 4).
+        # Underscore-prefixed keys are transport metadata (see ports.py): the audit
+        # layer stores them in dedicated fields and strips them from parsed_response,
+        # so the persisted response stays model-output-only.
+        response["_request_messages"] = [
+            {"role": "system", "content": self.system_instruction},
+            {"role": "user", "content": user_prompt},
+        ]
+        return response
 
 
 class ConductorPromptBuilder:
