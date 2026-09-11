@@ -8,6 +8,7 @@ This is the async version of framework_conductor.py
 """
 
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -16,42 +17,91 @@ from openai import AsyncOpenAI
 
 from app.lib.constants import get_response_format_schema
 
+log = logging.getLogger(__name__)
+
+# Key used for the harmonic-neighbour hint when the live master key is not one of
+# the 24 Camelot keys (see harmonic_neighbor_prompt_text).
+FALLBACK_HARMONIC_KEY = "A minor"
+
+
+def _json_candidate_stream(content: str) -> list[str]:
+    """Ordered parse attempts for a raw LLM message: direct, fenced, then embedded."""
+    candidates = [content]
+
+    fence_pattern = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+    match = fence_pattern.search(content)
+    if match:
+        candidates.append(match.group(1).strip())
+
+    # Extract the JSON object embedded in prose (first { … last }).
+    first_brace = content.find("{")
+    last_brace = content.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        candidates.append(content[first_brace : last_brace + 1])
+
+    return candidates
+
 
 def parse_llm_json_response(content: str) -> dict[str, Any]:
-    """Parse JSON from LLM response, handling markdown wrapping.
+    """Parse a JSON *object* from an LLM response, handling markdown wrapping.
 
     Tries direct json.loads first, then strips common markdown patterns:
     - ```json ... ``` code fences
     - Trailing text after the JSON block
     - Leading text before the JSON block
+
+    Round-3 fix C1 (review 08 §1): a top-level JSON array/scalar (`[{...}]`, `null`,
+    `5`, `"keep the pads"`) IS valid JSON but is not a Conductor response. It used to
+    be returned verbatim and blow up on ``conductor_response.get("actions")`` OUTSIDE
+    the P4 fallback try, so the loop hot-retried the LLM forever. A non-object now
+    raises the same ``ValueError`` the P4 fallback already turns into retain-all.
     """
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        pass
+    last_error: Exception = ValueError("empty LLM response content")
 
-    # Try stripping markdown code fences
-    fence_pattern = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
-    match = fence_pattern.search(content)
-    if match:
+    for candidate in _json_candidate_stream(content):
         try:
-            return json.loads(match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+        last_error = ValueError(
+            f"Expected a top-level JSON object from the LLM, got {type(parsed).__name__}: {candidate[:200]}"
+        )
+        # Valid JSON of the wrong shape is decisive: digging an inner object out of
+        # `[{...}]` would silently turn the whole decision into one bare action.
+        break
 
-    # Try extracting first JSON object from content
-    # Find the first { and last } and try to parse that substring
-    first_brace = content.find("{")
-    last_brace = content.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        candidate = content[first_brace : last_brace + 1]
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
+    log.warning({"event": "conductor_response_unparseable", "error": str(last_error)[:300]})
+    raise ValueError(f"Could not parse JSON from LLM response: {content}") from last_error
 
-    # If all recovery attempts fail, raise the original error
-    raise ValueError(f"Could not parse JSON from LLM response: {content}")
+
+def harmonic_neighbor_prompt_text(current_key: str) -> str:
+    """Camelot transition-key hint for the Conductor prompt; never raises.
+
+    Round-3 fix C5 (review 08 §5): an LLM-authored ``master_key`` that is not one of
+    the 24 harmonic keys made ``get_harmonic_neighbors`` raise ``ValueError`` out of
+    the prompt builder, so EVERY later Conductor call died and the set was bricked in
+    silent fallback. An unknown key now keeps the previous behaviour for valid keys
+    and degrades to the fallback key's neighbours (with a warning) otherwise.
+
+    >>> harmonic_neighbor_prompt_text("A minor").count(", ")
+    2
+    """
+    from app.lib.harmonic import HarmonicHelper
+
+    effective_key = current_key if current_key in HarmonicHelper.KEY_TO_CAMELOT else FALLBACK_HARMONIC_KEY
+    if effective_key != current_key:
+        log.warning(
+            {
+                "event": "conductor_master_key_not_harmonic",
+                "master_key": current_key,
+                "using_key_for_neighbors": effective_key,
+            }
+        )
+    neighbors = HarmonicHelper.get_harmonic_neighbors(effective_key)
+    return f"{neighbors[0]}, {neighbors[1]}, or {neighbors[2]}"
 
 
 class ConductorLLMAsync:
@@ -115,7 +165,7 @@ Instead of generating a full tracklist, you must define an array of `actions`:
 - `remove`: Stop an active stem from playing. Provide its `stem_index`.
 
 To keep the groove flowing, you SHOULD `retain` most of the 'Active Stems'. You should never have complete turn over of stems.
-CRITICAL: If the music needs rhythm, ensure you explicitly `add` a 'Drums' stem if one are not already playing!
+CRITICAL: If the music needs rhythm, ensure you explicitly `add` a 'Drums' stem if one is not already playing!
 DENSITY RULE: There are currently {stem_count} active stems. {density_directive}
 STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Prefer removing older stems to keep the mix fresh.
 
@@ -245,10 +295,7 @@ Analyze the Active Stems and History considering the Frequency Balancing and DJ 
             else "The mix density is good. Maintain 4-6 stems for a full sound."
         )
 
-        from app.lib.harmonic import HarmonicHelper
-
-        neighbors = HarmonicHelper.get_harmonic_neighbors(current_key)
-        neighbors_str = f"{neighbors[0]}, {neighbors[1]}, or {neighbors[2]}"
+        neighbors_str = harmonic_neighbor_prompt_text(current_key)
 
         user_prompt = self.user_message_template.format(
             bpm=current_bpm,
@@ -351,10 +398,7 @@ STEM FRESHNESS: Stems with higher age values (5-10+ loops) are getting stale. Pr
 Analyze the Active Stems and History considering the Frequency Balancing and DJ rules, then output the JSON now.
 """  # noqa: E501 — LLM DJ prompt; reflow alters model input
 
-        from app.lib.harmonic import HarmonicHelper
-
-        neighbors = HarmonicHelper.get_harmonic_neighbors(current_key)
-        neighbors_str = f"{neighbors[0]}, {neighbors[1]}, or {neighbors[2]}"
+        neighbors_str = harmonic_neighbor_prompt_text(current_key)
 
         prompt = template.format(
             bpm=current_bpm,
