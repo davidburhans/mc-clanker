@@ -152,6 +152,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `framework_conductor_async.py` | `ConductorLLMAsync`, `ConductorPromptBuilder` | Async LLM client, prompt construction, JSON parsing |
 | `framework_generator.py` | `GeneratorRegistry`, `generate_stem()` | Audio model management (Foundation-1, ACE-Step) |
 | `framework_mixer.py` | `Mixer` | Real-time mixing thread, MP3 broadcasting via FFmpeg; exposes the public `MixerController` surface (`prime_loop`, `loop_position_seconds`) |
+| `audit_recording.py` | `AuditAdapter`, `flush_recording_buffers`, `append_loop_audit` | Audit capture (LLMInteraction/ShowAction buffers) + DB flush — see "Audit capture & flush (rel-04-capture)" under Framework Loop |
 
 ### API Layer
 
@@ -360,6 +361,31 @@ The async framework uses PostgreSQL as a job queue:
   `GeneratorRegistry._generation_lock` — a zombie escalates the next job to
   the timeout path instead of racing it for 2× VRAM.
 
+#### Audit capture & flush (rel-04-capture)
+
+- **Buffers**: `append_loop_audit` appends one `LLMInteraction` + N
+  `ShowAction` dicts per loop to `state.llm_interaction_buffer` /
+  `state.action_buffer` (REL-04: these previously sat unflushed for the whole
+  show — a crash lost the entire audit trail and RAM grew unbounded).
+- **Periodic flush**: the loop (P12 `_step_post_commit`) flushes through the
+  ctor-injected `AuditSinkPort` once the buffer exceeds
+  `AUDIT_FLUSH_THRESHOLD_ROWS = 200` (`loop_steps.py`) — crash loss is bounded
+  to the unflushed tail, RAM to ~1 MB. The bulk insert runs in a worker thread
+  (`asyncio.to_thread`) so the DB never blocks the event loop.
+- **Stop/shutdown**: `stop_show` keeps its flush; lifespan shutdown adds a
+  best-effort flush bounded by `FLUSH_SHUTDOWN_FLUSH_TIMEOUT_SECONDS = 10`
+  (a timed-out flush loses at most the unflushed tail — the same bound a
+  crash has).
+- **Serialization**: every flush path funnels through the same module
+  functions, mutually exclusive via the shared `_flush_lock`; failed flushes
+  re-prepend their rows (invariant 4 — capture is never silently dropped).
+  Deleting a show drops only that show's buffered rows, logging the count
+  (`drop_buffered_rows_for_show`).
+- **Applied actions**: each interaction also captures the post-dedupe stems
+  actually enacted with per-stem outcome (`"generated" | "cached" |
+  "failed"`) in `applied_actions` — distinct from `parsed_response.actions`,
+  which is what the conductor *requested*.
+
 ### Crossfade Timing
 
 The `next_loop_ready` Event coordinates framework task with mixer thread. Mixer waits for this signal before transitioning to new stems.
@@ -453,11 +479,24 @@ created_at: datetime
 id: int (PK)
 show_id: int (FK → Show)
 loop_index: int
-prompt: str
-response: str
-raw_json: dict
-created_at: datetime
+timestamp: datetime  # UTC
+relative_time_ms: int
+prompt_messages: JSON  # exact [{role, content}] chat the conductor sent (legacy rows: context-summary dict)
+parsed_response: JSON  # model output only — underscore transport keys are stripped into dedicated columns
+applied_actions: JSON|null  # rel-04/U4: post-dedupe stems actually enacted + per-stem outcome ("generated"|"cached"|"failed") — distinct from parsed_response.actions (requested)
+reasoning: str(1000)|null
+error: str(500)|null
+was_fallback: bool
+bpm: float|null
+key: str(50)|null
+instruments: JSON|null
+action_type: str(50)|null
+set_name: str(255)|null
 ```
+
+Existing PostgreSQL deployments gain `applied_actions` only via
+`migrations/003_llm_capture_additive.sql` (`Base.metadata.create_all()` does
+not add columns to existing tables).
 
 ---
 
