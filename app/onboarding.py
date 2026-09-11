@@ -297,6 +297,18 @@ def write_env_file(values: dict[str, str]) -> None:
     # Override with new values
     merged.update(values)
 
+    # Round-3 fix 06/1 (defense in depth behind the route's 422): a value
+    # containing a newline used to terminate its line early and inject
+    # arbitrary KEY=value pairs into the host .env, re-entering exactly the
+    # variables the SEC-2 key allowlist was meant to gate (proven:
+    # "qwen\nDJ_PASSWORD=pwn123" produced a top-level DJ_PASSWORD line).
+    for key, val in merged.items():
+        if "\n" in val or "\r" in val or "\x00" in val:
+            raise ValueError(
+                f"env value for {key!r} contains a line-break or NUL "
+                f"(len={len(val)}); refusing to write {env_path}"
+            )
+
     with open(env_path, "w") as f:
         for key, val in merged.items():
             f.write(f"{key}={val}\n")

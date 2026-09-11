@@ -570,3 +570,28 @@ def test_adtl_sizes_are_read_at_end_of_file():
     """Sanity: struct.pack('<I') on a >4GiB length is what E8 replaced with ValueError."""
     with pytest.raises(struct.error):
         struct.pack("<I", 2**32)
+
+
+class TestWriteEnvFileRejectsLineBreaks:
+    """06/1 defense-in-depth: the writer itself must never emit injected lines."""
+
+    def test_newline_value_is_rejected(self, tmp_path, monkeypatch):
+        import pytest
+
+        from app.onboarding import write_env_file
+
+        env_path = tmp_path / ".env"
+        env_path.write_text("LLM_MODEL=orig\n")
+        monkeypatch.setenv("ENV_FILE_PATH", str(env_path))
+        with pytest.raises(ValueError, match="line-break or NUL"):
+            write_env_file({"LLM_MODEL": "qwen\nDJ_PASSWORD=pwn123"})
+        assert env_path.read_text() == "LLM_MODEL=orig\n"
+
+    def test_clean_values_still_write(self, tmp_path, monkeypatch):
+        from app.onboarding import write_env_file
+
+        env_path = tmp_path / ".env"
+        env_path.write_text("LLM_MODEL=orig\n")
+        monkeypatch.setenv("ENV_FILE_PATH", str(env_path))
+        write_env_file({"LLM_MODEL": "qwen"})
+        assert env_path.read_text() == "LLM_MODEL=qwen\n"
