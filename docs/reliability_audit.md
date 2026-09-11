@@ -64,6 +64,21 @@ hears nothing, forever.
 `mixer.current_loop_end_sample == 0`, force `self._loop_idx = 0` so the next
 commit takes the `prime_loop` path.
 
+**Status: fixed-in rel-02-reset** — force landed in the commit step
+(`_step_commit_to_mixer`, immediately before the branch), not the reset
+branch: at P3 a `_loop_idx = 0` write still lets the current iteration stage
+dead audio through `set_next_loop` (P2's pregen decision is already made);
+normalizing in P10 primes the same iteration, wasting nothing. Value is
+`_loop_idx = 1` (not the sketch's 0), so the prime path is taken now and the
+post-reset flow replays the production loop-1→loop-2 sequence; the `<= 0`
+guard also covers the second boundary-zeroing site (`Mixer._callback`
+no-future-tracks fallback). Post-reset, show-audit `loop_index` restarts at
+1 while `state.loop_count` stays monotonic. Pinned by
+`tests/test_reset_reprime.py` (reset-then-restart end-to-end on a real
+`Mixer`, prime-path force, live-boundary no-over-force, accepted-pregen
+reset) plus boundary-mirroring fakes in `tests/test_round3_fix_b.py` and
+`tests/test_loop_fixes.py`.
+
 ### REL-03 [Critical] Worker generation-timeout leaks non-killable threads holding VRAM; wedged CUDA never self-heals
 `worker.py:275-285` — `asyncio.wait_for(..., timeout=600)` around generation
 in a private `ThreadPoolExecutor`; on timeout `shutdown(wait=False,
@@ -116,6 +131,15 @@ needless GPU load. During an LLM outage the retain-all fallback converts this
 into a permanent full-set regeneration cycle.
 **Fix:** one line — refresh `last_used` on hit (and in pregeneration's hit
 path); consider an entry cap in addition to TTL.
+
+**Status: fixed-in rel-02-reset** — hit refresh landed in both hit paths
+(`_step_submit_jobs` foreground and `run_pregeneration` pregen; a
+`loop.stem_cache`-only write). The "entry cap considered" became
+`STEM_CACHE_MAX_ENTRIES = 32` alongside the named
+`STEM_CACHE_TTL_SECONDS`, with maintenance extracted to `_prune_stem_cache()`
+(stale-then-oldest-`last_used` overflow, called from P12 only — single async
+owner, no lock). Pinned by `tests/test_reset_reprime.py` (foreground + pregen hit
+refresh, retained stem survives the TTL prune, TTL window, entry cap).
 
 ### REL-07 [High] No concurrency guard in `GeneratorRegistry` — zombie threads race model loads
 `framework_generator.py` contains zero `threading`/`Lock`/`no_grad`/
