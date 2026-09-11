@@ -115,7 +115,12 @@ def tile_to_loop(
             # Tile to loop duration
             if len(audio_data) < loop_duration_samples:
                 repeats = (loop_duration_samples // len(audio_data)) + 1
-                audio_data = np.tile(audio_data, (repeats, 1))[:loop_duration_samples, :]
+                audio_data = np.tile(audio_data, (repeats, 1))
+            # R3-A2: hand the mixer AT MOST one loop's worth of audio. A cached stem
+            # longer than the loop (e.g. cached from a longer `bars` value) used to
+            # straddle the boundary, and the mixer's extension fallback then tiled its
+            # head under the still-playing tail (+6 dB phasing).
+            audio_data = audio_data[:loop_duration_samples, :]
             tracks_data[i] = audio_data
 
     # Step 9: assemble mixer tracks, filling silence for any missing stem.

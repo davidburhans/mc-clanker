@@ -160,6 +160,12 @@ class Mixer:
             if track_end > loop_end_sample:
                 samples_remaining = track_end - loop_end_sample
                 src_audio = track.audio_data[:samples_remaining]
+                # R3-A2: cut the straddling track at the boundary before tiling its
+                # head there. Without the cut, [loop_end_sample, track_end) carried the
+                # original tail AND the offset tiled copy → same stem twice, +6 dB
+                # phasing. Slice only, so the caller's array is never mutated.
+                track.audio_data = track.audio_data[: track.length - samples_remaining]
+                track.length = len(track.audio_data)
                 repeated_audio = np.tile(src_audio, (2, 1))
                 self._add_track_internal(repeated_audio, loop_end_sample, track.stem_index)
             elif track_end == loop_end_sample:
@@ -211,7 +217,10 @@ class Mixer:
         if not is_generating:
             pcm_out = np.clip(outdata, -1.0, 1.0)
             state.broadcast_audio((pcm_out * 32767).astype("<i2").tobytes())
-            self.current_sample += frames
+            # R3-A1: the playhead is only ever advanced under self.lock, so a
+            # clear()/prime_loop() cannot interleave with the increment.
+            with self.lock:
+                self.current_sample += frames
             return
 
         with self.lock:
@@ -232,7 +241,12 @@ class Mixer:
                             self.current_sample,
                         )
                         for audio_data, stem_index in self.next_loop_audio:
-                            self._add_track_internal(audio_data.copy(), transition_sample, stem_index)
+                            # R3-A3: coerce channel shape on the loop>1 transition path
+                            # too (same helper prime_loop uses); a (N,1) array used to
+                            # reach the mixer unchanged and play left-channel only.
+                            self._add_track_internal(
+                                self._ensure_stereo(audio_data.copy()), transition_sample, stem_index
+                            )
                         self.next_loop_audio = []
                         # Set the NEW loop's end boundary instead of resetting to 0
                         if self._next_loop_duration > 0:
@@ -351,7 +365,11 @@ class Mixer:
                         track.audio_data[in_start:in_end, :mix_channels] * total_gain
                     )
 
-        self.current_sample += frames
+            # R3-A1: advance the playhead INSIDE the same lock that produced this
+            # block. Incrementing after the `with` let a clear()/prime_loop() land
+            # in the release→increment window, where the (stale) increment clobbered
+            # the reset and left the head frames into the freshly primed loop.
+            self.current_sample += frames
 
         # Periodic debug log
         self._debug_count += 1
