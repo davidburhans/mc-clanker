@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -51,6 +52,94 @@ if TYPE_CHECKING:
 # Backoff between loop retries after a transient body error (review B1 watchdog).
 # Kept short so the set recovers quickly; overridable by tests / config.
 LOOP_RETRY_BACKOFF_SECONDS = 2.0
+
+# Round-3 fix B3 (review 03/Q1): ONE worker drains a 4-6 stem batch strictly
+# SEQUENTIALLY at 5-30 s/stem (30-90 s for the first job while the weights load),
+# so the old flat 120 s batch wait lost every job queued behind a slow one. A
+# lost job meant silence for that stem AND an unconditional re-submit on every
+# later loop. 10 minutes covers a full cold batch; the wait stays bounded.
+JOB_WAIT_TIMEOUT_SECONDS = 600.0
+
+# Round-3 fix B3: the waiter's final status check happens AT the deadline, so a
+# completion landing a fraction of a second late used to be lost forever.
+# One extra, much shorter pass recovers those late completions; genuinely
+# failed jobs return immediately, so the grace only ever costs still-pending work.
+JOB_LATE_COMPLETION_GRACE_SECONDS = 30.0
+
+# Round-3 fix B5 (review 08/6): an explicit JSON ``null`` for master_bpm /
+# master_key slipped past ``.get(default)`` (the default only fires on a MISSING
+# key) and poisoned state.current_bpm/current_key, every generation prompt
+# ("… None BPM …"), the stem cache key and the persisted job row.
+BPM_PLAUSIBLE_MIN = 40
+BPM_PLAUSIBLE_MAX = 300
+FALLBACK_MASTER_BPM = 128
+FALLBACK_MASTER_KEY = "A minor"
+
+# Round-3 fix B2: the mixer fires the loop transition with a ~1 s lookahead, so
+# staged audio is still live while the boundary is further away than this. Below
+# it the P13 break must win, exactly as before this fix.
+BOUNDARY_BREAK_SECONDS = 0.5
+
+
+def sanitize_master_bpm(candidate: Any, fallback: int | None) -> int:
+    """Coalesce a missing/null/out-of-range conductor BPM to a usable value.
+
+    Example::
+
+        sanitize_master_bpm({"master_bpm": None}.get("master_bpm"), 128)  # -> 128
+    """
+    if not isinstance(candidate, bool) and isinstance(candidate, int):
+        if BPM_PLAUSIBLE_MIN <= candidate <= BPM_PLAUSIBLE_MAX:
+            return candidate
+    if not isinstance(fallback, bool) and isinstance(fallback, int):
+        if BPM_PLAUSIBLE_MIN <= fallback <= BPM_PLAUSIBLE_MAX:
+            return fallback
+    return FALLBACK_MASTER_BPM
+
+
+def sanitize_master_key(candidate: Any, fallback: str | None) -> str:
+    """Coalesce a missing/null/blank conductor key to a usable non-empty string."""
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+    if isinstance(fallback, str) and fallback.strip():
+        return fallback.strip()
+    return FALLBACK_MASTER_KEY
+
+
+async def reawait_late_job_completions(
+    await_jobs: Callable[[list[Any], float], Awaitable[dict[Any, str | None]]],
+    job_ids: list[Any],
+    results: dict[Any, str | None],
+    *,
+    label: str = "",
+    grace_seconds: float = JOB_LATE_COMPLETION_GRACE_SECONDS,
+) -> dict[Any, str | None]:
+    """B3: one bounded extra wait for jobs the first batch pass reported as None.
+
+    Shared by the foreground path (``_step_await_jobs_fetch``) and the background
+    path (``pregeneration.run_pregeneration``) — a completion landing just after
+    the batch deadline used to be a permanent ``None``: silence for that stem plus
+    an identical re-submit on every following loop. Failed jobs report ``None``
+    immediately, so the grace only ever delays genuinely pending work.
+
+    Example::
+
+        results = await reawait_late_job_completions(self._await_jobs, job_ids, results)
+    """
+    missing = [job_id for job_id in job_ids if not results.get(job_id)]
+    if not missing:
+        return results
+
+    print(
+        f"[AsyncLoop-{label}] {len(missing)} job(s) still unfinished after the batch wait; "
+        f"waiting a further {grace_seconds:.0f}s grace..."
+    )
+    late_results = await await_jobs(missing, timeout=grace_seconds)
+    merged = dict(results)
+    for job_id, audio_path in late_results.items():
+        if audio_path:
+            merged[job_id] = audio_path
+    return merged
 
 
 class _StepResult(enum.Enum):
@@ -124,6 +213,9 @@ class _LoopSteps:
     _pregen_results: dict[str, Any] | None
     _pregen_task: asyncio.Task | None
     _pregen_done: asyncio.Event
+    # Round-3 fix B2: loop index whose audio P10 handed to Mixer.set_next_loop and
+    # which the mixer has NOT yet consumed at its boundary (0 = nothing staged).
+    _staged_loop_idx: int
 
     def _build_prompt(self, track: dict, key: str, bpm: int) -> str:
         """Delegate provided by ``AsyncFrameworkLoop``."""
@@ -217,6 +309,16 @@ class _LoopSteps:
         )
 
         if pregen_ready:
+            # Round-3 fix B1(b): the pre-gen branch used to PROCEED without ever
+            # re-reading state.is_generating (P1's check is bypassed once a result
+            # is queued), so a stale result kept replaying + re-committing loops
+            # that a UI stop could not interrupt.
+            async with state.lock:
+                generating_with_pregen = state.is_generating
+            if not generating_with_pregen:
+                print(f"[AsyncLoop-{self._loop_idx}] Stop detected with a pre-gen result queued, returning to wait")
+                return _PregenDecision(_StepResult.RESTART_ITER, False, None, [], 0)
+
             assert self._pregen_results is not None  # pregen_ready gate (P2 predicate)
             print(f"[AsyncLoop-{self._loop_idx}] Using pre-generated audio from background task")
             print(
@@ -273,19 +375,19 @@ class _LoopSteps:
                 self.stem_cache.clear()
                 state.should_reset = False
 
-            # Check for active overrides
+            # Round-3 fix B4 (review 08/3): the override used to be applied AND
+            # cleared here. On the pre-generated path P11 then overwrote
+            # current_bpm/current_key with the pre-gen decision's master_bpm /
+            # master_key — a decision taken from the PREVIOUS loop's snapshot —
+            # so the DJ's tempo/key change was consumed and silently thrown away,
+            # and the P11 "apply pending overrides" net was dead because the flag
+            # was already None. The override is now only mirrored into this
+            # loop's prompt snapshot; the single clearer stays P11.
             bpm_override = state.target_bpm_override
             key_override = state.target_key_override
 
-            if bpm_override:
-                state.current_bpm = bpm_override
-                state.target_bpm_override = None
-            if key_override:
-                state.current_key = key_override
-                state.target_key_override = None
-
-            current_bpm = state.current_bpm
-            current_key = state.current_key
+            current_bpm = sanitize_master_bpm(bpm_override or state.current_bpm, state.current_bpm)
+            current_key = sanitize_master_key(key_override or state.current_key, state.current_key)
             active_stems = list(state.active_stems)
             user_override = state.user_override
             available_instruments = list(state.available_instruments)
@@ -367,14 +469,15 @@ class _LoopSteps:
         """P6: write state.next_stems (bpm/key/set_name/reasoning) under lock; capture locals."""
         async with state.lock:
             if bpm_override:
-                state.current_bpm = bpm_override
+                state.current_bpm = sanitize_master_bpm(bpm_override, current_bpm)
             else:
-                state.current_bpm = conductor_response.get("master_bpm", current_bpm)
+                # B5: `.get(default)` does NOT fire on a present-but-null key.
+                state.current_bpm = sanitize_master_bpm(conductor_response.get("master_bpm"), current_bpm)
 
             if key_override:
-                state.current_key = key_override
+                state.current_key = sanitize_master_key(key_override, current_key)
             else:
-                state.current_key = conductor_response.get("master_key", current_key)
+                state.current_key = sanitize_master_key(conductor_response.get("master_key"), current_key)
 
             state.current_set_name = conductor_response.get("name", "Unknown Set")
             state.llm_reasoning = conductor_response.get("reasoning", "No reasoning provided.")
@@ -451,13 +554,16 @@ class _LoopSteps:
             print(f"[AsyncLoop-{self._loop_idx}] Waiting for {len(job_ids)} jobs to complete...")
             wait_start = time.time()
 
-            results = await self._await_jobs(job_ids, timeout=120.0)
+            results = await self._await_jobs(job_ids, timeout=JOB_WAIT_TIMEOUT_SECONDS)
+            results = await self._reawait_late_completions(job_ids, results)
 
             wait_duration = time.time() - wait_start
             print(f"[AsyncLoop-{self._loop_idx}] Jobs completed in {wait_duration:.2f}s")
 
-            # Process results
-            for (job_id, orig_idx, cache_key), audio_path in zip(pending_jobs, results.values()):
+            # Process results (keyed lookup: a short/None result for one job must
+            # never shift the audio of the jobs after it)
+            for job_id, orig_idx, cache_key in pending_jobs:
+                audio_path = results.get(job_id)
                 if audio_path:
                     # Fetch audio from Garage
                     audio_data = await self._fetch_audio(audio_path)
@@ -467,6 +573,14 @@ class _LoopSteps:
                             state.cache_stem(local_next_stems[orig_idx]["prompt"], audio_data)
                 else:
                     print(f"Job {job_id} failed or timed out")
+
+    async def _reawait_late_completions(
+        self,
+        job_ids: list[uuid.UUID],
+        results: dict[uuid.UUID, str | None],
+    ) -> dict[uuid.UUID, str | None]:
+        """B3: foreground hook to the shared late-completion grace pass."""
+        return await reawait_late_job_completions(self._await_jobs, job_ids, results, label=str(self._loop_idx))
 
     async def _step_tile_audio(
         self,
@@ -509,6 +623,15 @@ class _LoopSteps:
         else:
             tracks_to_use = prepared_tracks
             duration_samples = loop_duration_samples
+
+        # B2: loop>1 hands its audio to the mixer's single next_loop_audio slot.
+        # Remember the index so P13 refuses to return before the boundary consumes
+        # it (the next iteration's set_next_loop would otherwise overwrite a loop
+        # that never started playing). Loop 1 primes directly: nothing is staged.
+        # Assigned here rather than inside the else because the AST pin
+        # test_step_commit_to_mixer_loop1_is_single_prime_loop_call requires that
+        # else-branch to stay a single statement.
+        self._staged_loop_idx = self._loop_idx if self._loop_idx > 1 else 0
 
         if self._loop_idx == 1:
             # First loop: add tracks at the mixer's CURRENT position (not 0),
@@ -566,9 +689,10 @@ class _LoopSteps:
 
             if pregen_ready:
                 assert self._pregen_results is not None  # pregen_ready gate (P2)
-                # Update BPM, key, etc. from pre-gen results
-                state.current_bpm = self._pregen_results.get("master_bpm", state.current_bpm)
-                state.current_key = self._pregen_results.get("master_key", state.current_key)
+                # Update BPM, key, etc. from pre-gen results (B5: coalesce an
+                # explicit null so a bad conductor field can never reach state).
+                state.current_bpm = sanitize_master_bpm(self._pregen_results.get("master_bpm"), state.current_bpm)
+                state.current_key = sanitize_master_key(self._pregen_results.get("master_key"), state.current_key)
                 state.current_set_name = self._pregen_results.get("set_name", "Unknown Set")
                 state.llm_reasoning = self._pregen_results.get("reasoning", "No reasoning provided.")
 
@@ -653,36 +777,60 @@ class _LoopSteps:
             self._pregen_done.clear()
             self._pregen_results = None
             self._pregen_task = asyncio.create_task(self._pre_generate_next_loop(next_loop_idx, commit.state_snapshot))
-        else:
+        elif self._loop_idx == 1:
             print(f"[AsyncLoop-{self._loop_idx}] Loop {self._loop_idx + 1} already queued, skipping pre-gen")
             # Signal that pre-gen is "done" - the loop is queued in the mixer
             self._pregen_done.set()
             # Update _pregen_results to reflect the queued loop.
             # Use active_stems (state.next_stems was already cleared to [] above).
+            # Loop 1 only: there is no in-flight pre-gen task whose flags/ownership
+            # this could clobber (that is what made the loop>=2 case unsafe below).
             self._pregen_results = {
                 "loop_idx": self._loop_idx + 1,
                 "prepared_tracks": tracks_to_use,
                 "loop_duration_samples": duration_samples,
                 "next_stems": list(state.active_stems),
             }
+        else:
+            # Round-3 fix B1 (review 01/1): a STILL-RUNNING pre-gen task used to be
+            # papered over here by setting _pregen_done and fabricating a result for
+            # loop_idx+1. The next iteration's P2 gate accepted that fabrication,
+            # so the iteration replayed the same audio with ZERO suspension points
+            # (P13 broke before its only sleep) -> permanent event-loop starvation
+            # plus runaway loop_count/audit inflation. Nothing is fabricated and the
+            # pending task's own flags are left untouched: the next iteration simply
+            # runs the fresh conductor path.
+            print(
+                f"[AsyncLoop-{self._loop_idx}] Pre-gen for a later loop still running; "
+                f"leaving loop {self._loop_idx + 1} to the fresh conductor path"
+            )
 
     async def _step_await_pregen(self) -> None:
         """P13: await pre-generation completion, recording mixer transitions meanwhile.
 
-        The inner ``while self.running:`` is kept verbatim: both breaks are LOCAL
-        (they end this iteration, not the outer loop — the outer while re-checks
-        ``self.running and state.is_running`` after this returns).
-        ``record_loop_transition`` snapshots under ``state.lock`` then runs
-        OUTSIDE it (it acquires the blocking sync_lock).
+        Both breaks are LOCAL (they end this iteration, not the outer loop — the
+        outer while re-checks ``self.running and state.is_running`` after this
+        returns). ``record_loop_transition`` snapshots under ``state.lock`` then
+        runs OUTSIDE it (it acquires the blocking sync_lock).
+
+        Round-3 changes: the pre-gen-done break now (a) yields once so no code
+        path can return from P13 without ever suspending (B1), and (b) is held
+        while P10-staged audio is still waiting for its boundary, so the next
+        iteration cannot overwrite a loop that has not started playing yet (B2).
         """
         assert self.mixer is not None  # set in start() before _run_loop spawns
         # Step 11: Wait until we need to generate next loop.
         # Wait for pre-generation to complete (it runs the LLM call for us)
         if self.running and not state.shutdown_event.is_set():
+            previous_ahead: float | None = None
             while self.running:
                 # Check if mixer transitioned to a new loop and record it
                 transitioned_loop_idx = self.mixer.pop_transition_event()
                 if transitioned_loop_idx is not None and transitioned_loop_idx > 0:
+                    # B2: the boundary fired, so the audio P10 staged for this
+                    # loop is now playing and it is safe to queue the next one.
+                    if self._staged_loop_idx and transitioned_loop_idx == self._staged_loop_idx:
+                        self._staged_loop_idx = 0
                     # A3: record_loop_transition acquires the blocking sync_lock;
                     # snapshot under state.lock, then call it OUTSIDE the lock so
                     # the event loop is never stalled by the Mixer thread.
@@ -692,21 +840,41 @@ class _LoopSteps:
                         t_reason = state.llm_reasoning
                     state.record_loop_transition(transitioned_loop_idx, t_stems, t_set, t_reason)
 
-                # Check if pre-gen is done first
-                if self._pregen_done.is_set():
-                    print(f"[AsyncLoop-{self._loop_idx}] Pre-generation complete, using results")
-                    break
-
                 # Read current boundary via the public delegation (the mixer
                 # takes its own lock internally so we see transitions that may
                 # have already fired).
                 current_ahead = self.mixer.loop_position_seconds()
+                playhead_moving = previous_ahead is None or current_ahead < previous_ahead
+                previous_ahead = current_ahead
+
+                # Check if pre-gen is done first
+                if self._pregen_done.is_set():
+                    # B2: with audio still staged for THIS loop and the boundary
+                    # still ahead of us, returning here lets the next iteration's
+                    # set_next_loop replace it -> a fully generated loop is never
+                    # played. Wait for the boundary instead. A playhead that stops
+                    # advancing (stopped/dead mixer) releases the hold so this can
+                    # never wait indefinitely.
+                    if playhead_moving and self._staged_audio_pending(current_ahead):
+                        await asyncio.sleep(0.25)
+                        continue
+                    print(f"[AsyncLoop-{self._loop_idx}] Pre-generation complete, using results")
+                    # B1(a): guarantee a suspension point on this path. Every lock
+                    # acquisition on a replay iteration is uncontended, so without
+                    # this yield a fast path could monopolise the event loop.
+                    await asyncio.sleep(0)
+                    break
+
                 if self._loop_idx > 1:
                     print(
                         f"[AsyncLoop-{self._loop_idx}] DEBUG: "
                         f"current_ahead={current_ahead:.2f}s, waiting for pre-gen..."
                     )
-                if current_ahead < 0.5:
+                if current_ahead < BOUNDARY_BREAK_SECONDS:
                     # Still waiting for pre-gen, but we need to break to avoid missing the loop transition
                     break
                 await asyncio.sleep(0.25)
+
+    def _staged_audio_pending(self, current_ahead: float) -> bool:
+        """B2: True while P10-staged audio may still be replaced before it plays."""
+        return self._staged_loop_idx != 0 and current_ahead >= BOUNDARY_BREAK_SECONDS

@@ -144,6 +144,9 @@ class AsyncFrameworkLoop(_LoopSteps):
         self._pregen_done = asyncio.Event()  # Signaled when pre-gen is complete
         self._pregen_loop_idx = 0  # Which loop we're pre-generating for
         self._pregen_results: dict[str, Any] | None = None  # Results from pre-generation
+        # Round-3 fix B2: loop index whose audio P10 queued via set_next_loop and
+        # which the mixer has not consumed at its boundary yet (0 = nothing staged).
+        self._staged_loop_idx = 0
         self._loop_idx = 0  # Advanced by _step_wait_for_start (P1) on each PROCEED iteration
 
     @property
@@ -174,7 +177,13 @@ class AsyncFrameworkLoop(_LoopSteps):
         self._audio_adapter = value
 
     async def start(self):
-        """Start the mixer thread + the async generation loop task."""
+        """Start the mixer thread + the async generation loop task.
+
+        Round-3 fix B6: mixer construction / ``mixer.start()`` failures now leave
+        ``self.running`` False and the mixer cleanly stopped, so the caller
+        (``run_framework_loop_async``) can run its own failure path instead of
+        stranding a half-started loop.
+        """
         from concurrent.futures import ThreadPoolExecutor
 
         # Mixer needs its own thread; construct it in an executor so the event
@@ -183,7 +192,18 @@ class AsyncFrameworkLoop(_LoopSteps):
         with ThreadPoolExecutor(max_workers=1) as ex:
             self.mixer = await asyncio.get_running_loop().run_in_executor(ex, self._mixer_factory)
         assert self.mixer is not None  # just assigned above (run_in_executor returns Any)
-        self.mixer.start()
+        try:
+            self.mixer.start()
+        except Exception:
+            # B6: never leave a started-but-broken mixer running with the loop
+            # task never spawned; stop the half-built mixer, then re-raise so the
+            # caller logs + shuts down rather than reporting a healthy set.
+            self.running = False
+            try:
+                self.mixer.stop()
+            except Exception as stop_error:  # noqa: BLE001 - report the original failure
+                print(f"[AsyncFrameworkLoop] Mixer stop after failed start also failed: {stop_error}")
+            raise
         self.running = True
         self.loop_task = asyncio.create_task(self._run_loop())
 
@@ -220,6 +240,7 @@ class AsyncFrameworkLoop(_LoopSteps):
         control-flow jumps via ``_StepResult``.
         """
         self._loop_idx = 0
+        self._staged_loop_idx = 0  # B2: nothing staged until P10 queues it
 
         while self.running and state.is_running:
             try:
@@ -274,6 +295,10 @@ class AsyncFrameworkLoop(_LoopSteps):
                 commit = await self._step_commit_state(pregen_ready, tracks_to_use, duration_samples)
                 await self._step_post_commit(commit, tracks_to_use, duration_samples)
                 await self._step_await_pregen()
+                # B1 (round 3): unconditional suspension point per iteration, so no
+                # combination of fast paths can ever turn the driver into a busy
+                # spin that starves the event loop (routes, WS, the pre-gen task).
+                await asyncio.sleep(0)
 
             except asyncio.CancelledError:
                 # Cancellation (stop/shutdown): clean up, then propagate.
@@ -398,7 +423,27 @@ async def run_framework_loop_async(session_id: uuid.UUID):
         session_id: UUID of the session to run
     """
     loop = AsyncFrameworkLoop(session_id)
-    await loop.start()
+
+    try:
+        # Round-3 fix B6 (review 01/4): ``await loop.start()`` used to sit OUTSIDE
+        # this try, so a mixer init/thread-spawn failure escaped with the framework
+        # task finished + an unretrieved exception, state.is_running still True
+        # (/api/health lied) and the B1 watchdog (inside _run_loop) never spawned.
+        await loop.start()
+    except asyncio.CancelledError:
+        await loop.stop()
+        raise
+    except Exception as e:
+        import traceback
+
+        print(f"[AsyncFrameworkLoop] Framework startup failed, music loop never started: {e}")
+        traceback.print_exc()
+        await loop.stop()
+        # Flip is_running so /api/health stops claiming a live framework. The
+        # exception is NOT re-raised: the lifespan awaits framework_task on
+        # shutdown and must not blow up on an already-handled startup failure.
+        state.trigger_shutdown()
+        return
 
     try:
         while loop.running:

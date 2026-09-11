@@ -27,6 +27,12 @@ from app.framework.conductor_interaction import (
     process_actions,
 )
 from app.framework.domain_audio import make_cache_key, tile_to_loop
+from app.framework.loop_steps import (
+    JOB_WAIT_TIMEOUT_SECONDS,
+    reawait_late_job_completions,
+    sanitize_master_bpm,
+    sanitize_master_key,
+)
 
 
 async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, Any]) -> None:
@@ -104,7 +110,13 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
         # state.cache_stem is foreground-only (brief-01 risk #4 divergence).
         if pending_jobs:
             job_ids = [job_id for job_id, _, _ in pending_jobs]
-            results = await loop._await_jobs(job_ids, timeout=120.0)
+            # B3: same batch budget as the foreground path — one worker drains a
+            # 4-6 stem batch sequentially, so the old flat 120 s lost the stems
+            # queued behind a slow job (silence + identical re-submit forever).
+            results = await loop._await_jobs(job_ids, timeout=JOB_WAIT_TIMEOUT_SECONDS)
+            results = await reawait_late_job_completions(
+                loop._await_jobs, job_ids, results, label=f"pregen-{for_loop_idx}"
+            )
 
             for job_id, orig_idx, cache_key in pending_jobs:
                 audio_path = results.get(job_id)
@@ -123,14 +135,18 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
             deduped_tracks=deduped_tracks,
         )
 
-        # Store results for the main loop to consume.
+        # Store results for the main loop to consume. B5: an explicit JSON null
+        # for master_bpm/master_key must not poison state / prompts / job rows,
+        # so both fields are coalesced here exactly like the foreground commit.
+        pregen_master_bpm = sanitize_master_bpm(conductor_response.get("master_bpm"), current_bpm)
+        pregen_master_key = sanitize_master_key(conductor_response.get("master_key"), current_key)
         loop._pregen_results = {
             "prepared_tracks": prepared_tracks,
             "loop_duration_samples": loop_duration_samples,
             "loop_idx": for_loop_idx,
             "next_stems": next_stems,
-            "master_bpm": conductor_response.get("master_bpm", current_bpm),
-            "master_key": conductor_response.get("master_key", current_key),
+            "master_bpm": pregen_master_bpm,
+            "master_key": pregen_master_key,
             "set_name": conductor_response.get("name", "Unknown Set"),
             "reasoning": conductor_response.get("reasoning", "No reasoning provided."),
             "actions": conductor_response.get("actions", []),
