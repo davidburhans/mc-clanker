@@ -44,6 +44,14 @@ Recovery: process restart.
 **Fix:** wrap the `_callback` call in `try/except Exception: log.exception();
 outdata.fill(0); continue` + expose `mixer thread alive` in `/api/health`.
 
+**Status: fixed-in rel-01-mixer** — guard landed without the sketch's literal
+`continue` (falls through to the deadline/sleep bookkeeping instead, so a
+persistently-failing callback cannot busy-spin); `state.mixer_thread` is
+registered in `Mixer.start()/stop()` and `/api/health` gained
+`mixer_alive: bool | null` (`None` = no thread registered, `False` = died
+without `stop()`). Pinned by `tests/test_mixer_resilience.py` and
+`tests/test_api.py::test_health_check`.
+
 ### REL-02 [Critical] Reset after loop ≥ 2 = permanent silence
 `loop_steps.py:372-375` — reset branch calls `self.mixer.clear()` →
 `current_loop_end_sample = 0`. Re-priming exists **only** on the loop-1 path
@@ -213,7 +221,7 @@ on lifespan startup when the env key is present. (Already an item in
 | REL-18 | Flat 2 s retry backoff, no escalation/jitter; full LLM call repeated every cycle during DB outage | `loop_orchestrator.py:307-313` | exponential backoff w/ cap; skip conductor call after N submit failures |
 | REL-19 | Loop startup failure calls whole-app `trigger_shutdown()` — poisons audience streams/recordings/YouTube relay | `loop_orchestrator.py:436-445` | set `is_running=False` only; reserve the kill switch for process shutdown |
 | REL-20 | `sync_lock` held across `instruments.json` disk write — stalls every audio tick | `framework_state.py:367-373` | mutate under lock, write outside |
-| REL-21 | No NaN/Inf sanitization: `np.clip` preserves NaN; one bad stem poisons the whole mix for a loop | `aac_encoder.py:52-62`, `framework_mixer.py:375-377` | `np.nan_to_num` in decode/normalize |
+| REL-21 | No NaN/Inf sanitization: `np.clip` preserves NaN; one bad stem poisons the whole mix for a loop | `aac_encoder.py:52-62`, `framework_mixer.py:375-377` | `np.nan_to_num` in decode/normalize — **fixed-in rel-01-mixer** (`Mixer._sanitize_pcm_block` at both broadcast sites + AAC float branch) |
 | REL-22 | Unclean shutdown never finalizes WAV headers (sizes stay 0; show row stays `live`) | `framework_state.py` close path | finalize from file length in shutdown close |
 | REL-23 | Worker never evicts models; `GPUMonitor` offload is dead code | `worker.py` (no unload refs) | LRU-evict non-default model when VRAM critical between jobs |
 | REL-24 | Upload runs before lease-ownership check — zombie worker can overwrite completed audio or orphan Garage objects | `worker.py:340-341` | re-check `_still_own_job_row` after generation, before upload |
