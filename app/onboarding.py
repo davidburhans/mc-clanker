@@ -151,7 +151,9 @@ async def check_garage_s3() -> CheckResult:
         )
 
     try:
-        config = Config(connect_timeout=5, read_timeout=10)
+        # retries=1: botocore's default retries multiply the connect+read timeout
+        # window several times over; one attempt is enough for a health probe.
+        config = Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 1})
         client = boto3.client(
             "s3",
             endpoint_url=endpoint,
@@ -159,8 +161,11 @@ async def check_garage_s3() -> CheckResult:
             aws_secret_access_key=secret_key,
             config=config,
         )
-        # Just try to list buckets to verify connectivity
-        client.list_buckets()
+        # Just try to list buckets to verify connectivity. botocore is blocking,
+        # so run the probe off the event loop — a down Garage used to freeze every
+        # API request and the framework loop for the full timeout window (ASYNC-1).
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, client.list_buckets)
         return CheckResult(
             passed=True,
             category="required",

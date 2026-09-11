@@ -32,10 +32,13 @@ async def flush_recording_buffers() -> None:
         async with state.lock:
             if not state.llm_interaction_buffer and not state.action_buffer:
                 return
-            if state.current_show_id is None:
-                state.llm_interaction_buffer.clear()
-                state.action_buffer.clear()
-                return
+
+            # Buffered rows carry their own show_id, so they are persisted even
+            # when current_show_id was already cleared by the caller. The old
+            # discard-on-no-show branch deleted a whole show's audit trail here:
+            # stop_show cleared the flag (shows.py _stop_show_recording) BEFORE
+            # calling this flush, so every buffered row was dropped unflushed
+            # (review DATA-2/CONC-1 — show_actions/llm_interactions stayed empty).
 
             # Copy buffers under lock, then release lock before DB I/O.
             llm_buffer = state.llm_interaction_buffer[:]
@@ -145,7 +148,10 @@ def _audit_loop_meta(conductor_response: dict[str, Any], active_stems: list[dict
     active stem names; action_type is a single rollup (add > remove > retain)
     since one loop carries N actions but one interaction row.
     """
-    action_types = {a.get("action") for a in (conductor_response.get("actions") or [])}
+    # The conductor's strict json_schema only emits 'action_type' (see
+    # app/lib/constants.py action schemas) — reading 'action' yielded {None}
+    # for every loop, so llm_interactions.action_type was always NULL (DATA-3).
+    action_types = {a.get("action_type") for a in (conductor_response.get("actions") or [])}
     return {
         "bpm": conductor_response.get("master_bpm"),
         "key": conductor_response.get("master_key"),

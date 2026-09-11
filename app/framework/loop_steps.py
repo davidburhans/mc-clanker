@@ -572,6 +572,18 @@ class _LoopSteps:
                 state.current_set_name = self._pregen_results.get("set_name", "Unknown Set")
                 state.llm_reasoning = self._pregen_results.get("reasoning", "No reasoning provided.")
 
+                # Mirror the pregen audio into the download LRU (review AUDIO-3):
+                # the background pregen path writes ONLY loop.stem_cache
+                # (brief-01 risk #4), so state.last_generated_stems froze after
+                # loop 1 and stem downloads 404'd for every later loop. The
+                # FOREGROUND loop owns LRU routing (same as P8's cache_stem
+                # call), so recording what became audible here preserves the
+                # pinned divergence. cache_stem is a capped dict op — safe in-lock.
+                _pregen_stems = self._pregen_results.get("next_stems", [])
+                for _track_audio, _stem_idx in self._pregen_results.get("prepared_tracks", []):
+                    if 0 <= _stem_idx < len(_pregen_stems):
+                        state.cache_stem(_pregen_stems[_stem_idx].get("prompt", ""), _track_audio)
+
                 # Build action log for pre-generated loop (shared shaper)
                 state.last_actions = format_action_log(self._pregen_results.get("actions", []), state.previous_stems)
 

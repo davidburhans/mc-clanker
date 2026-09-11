@@ -28,6 +28,7 @@ import logging
 import os
 import signal
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -63,6 +64,19 @@ async def _silently_cancel(task: "asyncio.Task") -> None:
         await task
     except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 - intentional teardown swallow
         pass
+
+
+def _update_rowcount(command_tag: object) -> int:
+    """Parse an asyncpg command tag like 'UPDATE 3' into its rowcount.
+
+    Returns 1 for unparseable tags: asyncpg always sends 'UPDATE n' for UPDATE
+    statements, so the fallback only triggers for test doubles, where the
+    legacy behavior (assume the update landed) is the safe default.
+    """
+    try:
+        return int(str(command_tag).split()[-1])
+    except (ValueError, IndexError):
+        return 1
 
 
 @dataclass
@@ -215,15 +229,23 @@ class GeneratorWorker:
         job is not reaped; the timeout (review B6) prevents a hung model from
         wedging a worker slot forever.
         """
+        # Generation runs in a PRIVATE single-thread pool per job: cancelling the
+        # await on timeout cannot interrupt an already-running thread, so a hung
+        # generation would otherwise keep holding the SHARED default executor
+        # until every run_in_encoder slot queued forever and the worker wedged
+        # again (review ASYNC-2). We abandon at most one private thread per
+        # timed-out job instead of starving encode/upload.
+        gen_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"gen-{job['id']}")
         heartbeat = asyncio.create_task(self._heartbeat_loop(job["id"]))
         try:
             return await asyncio.wait_for(
-                self._generate_and_upload(job),
+                self._generate_and_upload(job, gen_pool),
                 timeout=GENERATION_TIMEOUT_SECONDS,
             )
         finally:
             heartbeat.cancel()
             await _silently_cancel(heartbeat)
+            gen_pool.shutdown(wait=False, cancel_futures=True)
 
     async def _heartbeat_loop(self, job_id: uuid.UUID) -> None:
         """Periodically extend the lease while generation runs."""
@@ -249,9 +271,13 @@ class GeneratorWorker:
                 job_id,
             )
 
-    async def _generate_and_upload(self, job: dict) -> tuple[str, float]:
+    async def _generate_and_upload(self, job: dict, gen_pool: ThreadPoolExecutor | None = None) -> tuple[str, float]:
         """
         Generate audio for a job and upload to Garage.
+
+        The blocking generate_stem call runs in ``gen_pool`` (the caller's
+        per-job pool, see _generate_with_lease); encode/upload stay on the
+        shared default executor (bounded operations).
 
         Returns:
             Tuple of (garage_path, duration_seconds).
@@ -260,7 +286,7 @@ class GeneratorWorker:
         # Generate using stable-audio-tools (blocking, runs in executor)
         loop = asyncio.get_running_loop()
         audio_array = await loop.run_in_executor(
-            None,
+            gen_pool,
             lambda: self.generators.generate_stem(
                 model_id=job["model_id"],
                 prompt=job["prompt"],
@@ -293,11 +319,16 @@ class GeneratorWorker:
             logger.warning("Could not delete orphan audio %s: %s", audio_path, e)
 
     async def _mark_job_complete(self, job_id: uuid.UUID, audio_path: str, duration: float) -> None:
-        """Mark job completed and NOTIFY listeners in ONE transaction (A7/C6)."""
+        """Mark job completed and NOTIFY listeners in ONE transaction (A7/C6).
+
+        The UPDATE is guarded by lease ownership: a zombie worker whose lease
+        lapsed and whose job was reaped/re-claimed must not clobber the new
+        owner's row or resurrect a reaped job with a late NOTIFY (review DATA-4).
+        """
         assert self.db is not None
         async with self.db.acquire() as conn:  # noqa: SIM117 - acquire+tx can't be one CM
             async with conn.transaction():
-                await conn.execute(
+                tag = await conn.execute(
                     """
                     UPDATE generator_jobs
                     SET status = 'completed',
@@ -306,22 +337,31 @@ class GeneratorWorker:
                         completed_at = NOW(),
                         expires_at = NOW() + INTERVAL '24 hours',
                         lease_expires_at = NULL
-                    WHERE id = $3
+                    WHERE id = $3 AND status = 'processing' AND worker_id = $4
                 """,
                     audio_path,
                     duration,
                     job_id,
+                    self.config.worker_id,
                 )
+                if _update_rowcount(tag) == 0:
+                    logger.warning("Job %s lost lease; skipping completion + NOTIFY", job_id)
+                    return
                 # NOTIFY inside the same transaction: a crash between UPDATE and
                 # NOTIFY can no longer drop the notification (review A7/C6).
                 # pg_notify() is fully parameterized (no f-string payload).
                 await conn.execute("SELECT pg_notify('job_completed', $1)", str(job_id))
 
     async def _mark_job_failed(self, job_id: uuid.UUID, error: str) -> None:
-        """Mark job as failed with error message and release its lease."""
+        """Mark job as failed with error message and release its lease.
+
+        Guarded like _mark_job_complete: only the current lease owner may fail
+        the row, so a zombie worker cannot flip a reclaimed job to 'failed'
+        (review DATA-4).
+        """
         assert self.db is not None
         async with self.db.acquire() as conn:
-            await conn.execute(
+            tag = await conn.execute(
                 """
                 UPDATE generator_jobs
                 SET status = 'failed',
@@ -329,11 +369,14 @@ class GeneratorWorker:
                     completed_at = NOW(),
                     expires_at = NOW() + INTERVAL '1 hour',
                     lease_expires_at = NULL
-                WHERE id = $2
+                WHERE id = $2 AND status = 'processing' AND worker_id = $3
             """,
                 error,
                 job_id,
+                self.config.worker_id,
             )
+            if _update_rowcount(tag) == 0:
+                logger.warning("Job %s lost lease; skipping failure write", job_id)
 
     async def _cleanup_loop(self):
         """Periodically clean up expired jobs."""

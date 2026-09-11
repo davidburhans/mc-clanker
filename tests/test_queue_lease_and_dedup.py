@@ -195,7 +195,7 @@ async def test_generate_with_lease_times_out(worker_module, monkeypatch):
     monkeypatch.setattr(worker_module, "GENERATION_TIMEOUT_SECONDS", 0.05)
     worker = _make_worker(worker_module)
 
-    async def slow_generate(job):
+    async def slow_generate(job, gen_pool=None):
         await asyncio.sleep(10)
         return ("audio/x", 1.0)
 

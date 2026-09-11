@@ -164,42 +164,56 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     pass
 
             if provided_pass is None:
-                # Check if this route requires auth
-                is_dj_route = (
-                    path.startswith("/dj")
-                    or (path.startswith("/api/") and request.method == "POST")
-                    or path.startswith("/api/llm-config")
-                    or path.startswith("/api/stems")
+                # No Basic header sent; provided_pass stays None so the matching
+                # route gate below rejects.
+                pass
+
+            # Check if this route requires auth
+            is_dj_route = (
+                path.startswith("/dj")
+                # Every write method is DJ-gated, not just POST: DELETE/PATCH/PUT
+                # previously bypassed the gate entirely, so an anonymous peer
+                # could cancel jobs or corrupt session routing (review SEC-3).
+                or (path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS"))
+                or path.startswith("/api/llm-config")
+                or path.startswith("/api/stems")
+            )
+            is_audience_route = (
+                path == "/"
+                or path == "/index.html"
+                or path == "/styles.css"
+                or path == "/app.js"
+                or path.startswith("/stream.mp3")
+                or (path.startswith("/api/") and request.method == "GET")
+            )
+
+            # The route's env password must actually MATCH. The old gate only
+            # fired when NO password was sent, so any Basic value — even a wrong
+            # one — was accepted without verification (review SEC-3).
+            if (is_dj_route and dj_pass and provided_pass != dj_pass) or (
+                is_audience_route and aud_pass and provided_pass != aud_pass
+            ):
+                return Response(
+                    "Unauthorized",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Restricted"'},
                 )
-                is_audience_route = (
-                    path == "/"
-                    or path == "/index.html"
-                    or path == "/styles.css"
-                    or path == "/app.js"
-                    or path.startswith("/stream.mp3")
-                    or (path.startswith("/api/") and request.method == "GET")
-                )
 
-                # If auth is required for this route but no credentials provided, reject
-                if (is_dj_route and dj_pass) or (is_audience_route and aud_pass):
-                    return Response(
-                        "Unauthorized",
-                        status_code=401,
-                        headers={"WWW-Authenticate": 'Basic realm="Restricted"'},
-                    )
+            # Create a pseudo-user for backwards compat when env vars are set.
+            # Audit regression fix: this block used to sit INSIDE the rejection
+            # `if` after its `return`, so it was unreachable and gate-passing
+            # Basic-auth requests never got request.state.user attached.
+            class CompatUser:
+                id = 0
+                username = "djCompat"
+                email = "compat@local"
+                is_active = True
 
-                # Create a pseudo-user for backwards compat when env vars are set
-                class CompatUser:
-                    id = 0
-                    username = "djCompat"
-                    email = "compat@local"
-                    is_active = True
+                def to_dict(self):
+                    return {"id": 0, "username": "djCompat", "email": "compat@local"}
 
-                    def to_dict(self):
-                        return {"id": 0, "username": "djCompat", "email": "compat@local"}
-
-                request.state.user = CompatUser()
-                current_user = CompatUser()
+            request.state.user = CompatUser()
+            current_user = CompatUser()
 
         def needs_auth(realm="Restricted"):
             return Response(
@@ -398,6 +412,31 @@ async def onboarding_check():
     )
 
 
+# Only these env keys may be written through POST /api/setup/config. The route
+# used to persist arbitrary body keys into the host-mounted .env, so any LAN
+# peer (the middleware does not gate this route when env passwords are unset)
+# could inject e.g. JWT_SECRET / DATABASE_URL and take over auth + storage
+# (review SEC-2).
+SETUP_ENV_KEYS = frozenset(
+    {
+        "LLM_BASE_URL",
+        "LLM_API_KEY",
+        "LLM_MODEL",
+        "DPO_MODEL_PATH",
+        "GARAGE_ENDPOINT",
+        "GARAGE_ACCESS_KEY",
+        "GARAGE_SECRET_KEY",
+        "GARAGE_BUCKET",
+        "DATABASE_URL",
+        "POSTGRES_PASSWORD",
+        "HF_TOKEN",
+        "JWT_SECRET",
+        "DJ_PASSWORD",
+        "AUDIENCE_PASSWORD",
+    }
+)
+
+
 @app.post("/api/setup/config")
 async def save_setup_config(request: Request):
     """Persist config to /app/.env and restart services."""
@@ -408,6 +447,13 @@ async def save_setup_config(request: Request):
     body = await request.json()
     # Filter out empty strings
     values = {k: v for k, v in body.items() if v and v != ""}
+    # Fail closed on keys outside the allowlist instead of silently writing them.
+    rejected = sorted(set(values) - SETUP_ENV_KEYS)
+    if rejected:
+        return JSONResponse(
+            {"status": "error", "message": f"Keys not allowed: {', '.join(rejected)}"},
+            status_code=400,
+        )
     if not values:
         return JSONResponse({"status": "ok", "restarting": False})
 

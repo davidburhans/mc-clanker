@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import text
 
+from app.auth import get_current_user_from_request
 from app.db import DatabaseManager
 from app.models.generator_job import GeneratorJob
 
@@ -43,8 +44,14 @@ async def submit_job(job: JobSubmission):
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: uuid.UUID):
-    """Get job status and audio path if completed."""
+async def get_job(job_id: uuid.UUID, request: Request):
+    """Get job status and audio path if completed.
+
+    Authentication required (review SEC-4): job rows carry prompts and queue
+    contents that must not be enumerable by anonymous peers.
+    """
+    if get_current_user_from_request(request) is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
         job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
@@ -54,8 +61,13 @@ async def get_job(job_id: uuid.UUID):
 
 
 @router.get("/audio/{job_id}")
-async def get_audio(job_id: uuid.UUID):
-    """Stream audio info (presigned URL or path) for a completed job."""
+async def get_audio(job_id: uuid.UUID, request: Request):
+    """Stream audio info (presigned URL or path) for a completed job.
+
+    Authentication required (review SEC-4).
+    """
+    if get_current_user_from_request(request) is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
         job = session.query(GeneratorJob).filter(GeneratorJob.id == job_id).first()
@@ -92,8 +104,20 @@ async def cancel_job(job_id: uuid.UUID):
 
 
 @router.get("/jobs")
-async def list_jobs(session_id: uuid.UUID | None = None, status: str | None = None, limit: int = 50, offset: int = 0):
-    """List jobs with filtering."""
+async def list_jobs(
+    request: Request,
+    session_id: uuid.UUID | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List jobs with filtering.
+
+    Authentication required (review SEC-4): the unscoped listing previously
+    exposed every user's generation prompts and queue contents to anyone.
+    """
+    if get_current_user_from_request(request) is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
         query = session.query(GeneratorJob)

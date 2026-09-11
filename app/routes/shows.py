@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ from app.auth import get_current_user_from_request, hash_password
 from app.db import DatabaseManager
 from app.framework.framework_state import state
 from app.models import LLMInteraction, Show, ShowAction
+from app.playback import ShowPlayback
 
 from .schemas import ExportStartRequest, ShowCreate, ShowUpdate
 from .utils import generate_audience_password, require_show_owner
@@ -19,6 +21,24 @@ from .utils import generate_audience_password, require_show_owner
 router = APIRouter()
 
 log = logging.getLogger(__name__)
+
+# Live playback players by show id (review AUDIO-2). ShowPlayback used to be
+# orphaned: the routes only flipped state flags, so no player ever existed and
+# nothing streamed. One playback at a time — the playback flags are singular.
+_active_playbacks: dict[int, ShowPlayback] = {}
+
+
+def _as_naive_utc(value: datetime) -> datetime:
+    """Normalize to naive UTC wall time to match the naive DateTime columns.
+
+    Show.started_at/ended_at are ``DateTime`` (no timezone), so DB round-trips
+    return naive datetimes while this module writes ``datetime.now(timezone.utc)``.
+    Subtracting aware from naive raises TypeError, which crashed every stop_show
+    before the recording was finalized or the audit flushed (review DATA-1).
+    """
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 # Canonical recording format: the mixer emits stereo 16-bit PCM at 44.1kHz
 # (framework_mixer.py: `(pcm * 32767).astype('<i2').tobytes()`). The WAV header
@@ -119,14 +139,21 @@ def _transition_show_to_live(session, show_id, request, audio_file_path, started
         )
 
 
-def _stop_show_recording():
+def _stop_show_recording(show_id: int):
     """Clear show-recording flags + detach the handle under sync_lock (A1/B8).
 
     Returns the detached handle so the caller can finalize/close it OUTSIDE the
     lock (no I/O in the critical section). These fields are sync_lock-protected so
     ``broadcast_audio``'s snapshot is consistent with the close.
+
+    Only detaches when ``show_id`` actually owns the live recording: stopping a
+    stale 'live' row must not finalize/close another show's in-flight handle
+    (review DATA-5 — starting show B orphaned A's handle, then stopping A
+    killed B's recording).
     """
     with state.sync_lock:
+        if state.current_show_id != show_id:
+            return None
         show_file = state.current_show_audio_file
         state.current_show_audio_file = None
         state.is_show_recording = False
@@ -242,6 +269,16 @@ async def start_show(show_id: int, request: Request):
     leave inconsistent state). An atomic conditional UPDATE guards against
     concurrent double-starts.
     """
+    # Refuse when a recording is already live BEFORE touching the DB (DATA-5):
+    # a second live show would overwrite the sync_lock-protected handle slot,
+    # orphaning the first show's still-open file.
+    with state.sync_lock:
+        if state.current_show_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Another show (id {state.current_show_id}) is currently recording; stop it first",
+            )
+
     async with state.lock:
         config_snapshot = {
             "bpm": state.current_bpm,
@@ -253,7 +290,7 @@ async def start_show(show_id: int, request: Request):
     show_dir = os.path.join(shows_dir, str(show_id))
     os.makedirs(show_dir, exist_ok=True)
     audio_file_path = os.path.join(show_dir, "audio.wav")
-    started_at = datetime.now(timezone.utc)
+    started_at = _as_naive_utc(datetime.now(timezone.utc))
 
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
@@ -285,7 +322,7 @@ async def stop_show(show_id: int, request: Request):
     patched, C4) and closed, and the sync_lock-protected flags cleared (A1/B8).
     """
     db_manager = DatabaseManager.get_instance()
-    ended_at = datetime.now(timezone.utc)
+    ended_at = _as_naive_utc(datetime.now(timezone.utc))
     with db_manager.session() as session:
         require_show_owner(show_id, request, session)
         updated = (
@@ -308,7 +345,7 @@ async def stop_show(show_id: int, request: Request):
             show.duration_seconds = int((ended_at - show.started_at).total_seconds())
         response = show.to_dict(include_audience_password=True)
     # COMMIT succeeded — finalize/close the WAV + clear recording flags (A1/B8/C4).
-    show_file = _stop_show_recording()
+    show_file = _stop_show_recording(show_id)
     if show_file is not None:
         _finalize_wav(show_file)
     async with state.lock:
@@ -522,7 +559,11 @@ async def export_full_show(show_id: int, request: Request):
 
 @router.post("/shows/{show_id}/playback/start")
 async def start_playback(show_id: int, request: Request):
-    """Start pre-recorded audio playback."""
+    """Start pre-recorded audio playback.
+
+    Instantiates the ShowPlayback player (review AUDIO-2: the routes used to
+    only flip state flags, so no player ever existed and nothing streamed).
+    """
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
         show = require_show_owner(show_id, request, session)
@@ -535,19 +576,41 @@ async def start_playback(show_id: int, request: Request):
         if not show.audio_file_path or not os.path.exists(show.audio_file_path):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio file not found")
 
-        # Set playback state
-        async with state.lock:
-            state.currently_playing_show_id = show_id
-            state.is_playback_active = True
+        audio_file_path = show.audio_file_path
 
-        return {"status": "ok", "show_id": show_id}
+    # Only one playback at a time; retire EVERY live player first, not just
+    # this show's — the playback flags are singular, and a stale player from
+    # another show would keep looping forever (ShowPlayback rewinds on EOF),
+    # double-broadcasting audio (review AUDIO-2 follow-up). stop() joins the
+    # streaming thread, so keep that blocking join off the event loop.
+    retiring = list(_active_playbacks.values())
+    _active_playbacks.clear()
+    for stale_player in retiring:
+        await asyncio.get_running_loop().run_in_executor(None, stale_player.stop)
+
+    player = ShowPlayback(show_id=show_id, audio_file_path=audio_file_path)
+    result = player.start()
+    if result.get("status") != "started":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(result.get("message", "Playback failed to start")),
+        )
+    _active_playbacks[show_id] = player
+
+    return {"status": "ok", "show_id": show_id}
 
 
 @router.post("/shows/{show_id}/playback/stop")
 async def stop_playback_route(show_id: int, request: Request):
     """Stop playback."""
-    async with state.lock:
-        state.is_playback_active = False
-        state.currently_playing_show_id = None
+    player = _active_playbacks.pop(show_id, None)
+    if player is not None:
+        # stop() joins the playback thread (up to 5s) — run it off the loop.
+        await asyncio.get_running_loop().run_in_executor(None, player.stop)
+    else:
+        # No live player (e.g. stale flags after a restart) — clear directly.
+        async with state.lock:
+            state.is_playback_active = False
+            state.currently_playing_show_id = None
 
     return {"status": "ok"}

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -78,7 +79,11 @@ class StemVolumeUpdate(BaseModel):
 
 
 class ExportStartRequest(BaseModel):
-    format: str = "wav"
+    # Allowlist the recording container extension: the format string is
+    # interpolated into the export filename, so an unvalidated value enabled
+    # path traversal / arbitrary file truncation via POST /api/export/start
+    # (review SEC-1).
+    format: Literal["wav", "mp3"] = "wav"
 
 
 class ExportStopResponse(BaseModel):

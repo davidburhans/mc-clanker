@@ -1,6 +1,7 @@
 import io
 import wave
 
+import numpy as np
 from fastapi import APIRouter, HTTPException, Response
 
 from app.framework.framework_state import state
@@ -78,13 +79,18 @@ async def download_stem(index: int, set: str = "active"):
         if audio_data is None:
             raise HTTPException(status_code=404, detail="Audio data not found")
 
-        # Convert numpy array to WAV
+        # The cache stores float32 in [-1, 1] but the WAV header below declares
+        # 16-bit PCM: convert instead of writing raw float32 bit patterns, which
+        # players decoded as full-scale noise (review AUDIO-1). Same conversion
+        # as the mixer in framework_mixer.py.
+        pcm = (np.clip(audio_data, -1.0, 1.0) * 32767).astype("<i2")
+        channels = int(pcm.shape[1]) if pcm.ndim == 2 else 1
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
-            wf.setnchannels(2)
+            wf.setnchannels(channels)
             wf.setsampwidth(2)
             wf.setframerate(44100)
-            wf.writeframes(audio_data.tobytes())
+            wf.writeframes(pcm.tobytes())
 
         buf.seek(0)
         return Response(

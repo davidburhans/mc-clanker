@@ -38,6 +38,12 @@ async def _get_asyncpg_pool(dsn: str) -> "asyncpg.Pool":
                     dsn,
                     min_size=2,
                     max_size=10,
+                    # Bound queries so a half-open connection (PG failover,
+                    # network partition) cannot hang the music loop's job wait
+                    # forever — the B1 watchdog only fires on exceptions, and a
+                    # stuck await never raises. Mirrors worker.py (300s) and
+                    # cleanup.py (60s), which were already bounded (review ASYNC-3).
+                    command_timeout=30,
                 )
     return _asyncpg_pool
 
