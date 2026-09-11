@@ -180,7 +180,9 @@ nothing.
 **U11 rel-exports** — REL-13: export/stats/timeline endpoints load entire
 tables (`.all()`); export generators iterate ORM instances after session
 commit/expiry → `DetachedInstanceError` on real sessions = broken
-fine-tuning extraction. Fix: serialize rows to dicts inside the session;
+fine-tuning extraction. NOTE (from rel-09): the engine now carries a global
+10 s statement_timeout — unpaginated `.all()` exports would abort on large
+tables, so the pagination here also keeps exports under that timeout. Fix: serialize rows to dicts inside the session;
 `yield_per`/keyset pagination under a fresh session per chunk; SQL
 `GROUP BY` for stats/timeline. REL-30: clamp `limit` params on list
 endpoints (mirror `reasoning_logs.py:96-98`) — `jobs.py`, `shows.py`.
