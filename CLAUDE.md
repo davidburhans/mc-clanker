@@ -175,7 +175,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/worker_routes.py` | Worker health check/stats endpoints |
 | `app/garage_client.py` | Async boto3 wrapper for Garage/MinIO S3 |
 | `app/job_waiter.py` | Async LISTEN/NOTIFY waiter for job completion |
-| `app/cleanup.py` | Periodic expired job/audio cleanup |
+| `app/cleanup.py` | Periodic expired job/audio cleanup + storage retention (REL-05/REL-16): show-recording/export sweeps, stale session-routing reaper, opt-in LLM corpus retention (NDJSON archive-before-delete; default keep-forever). Passes live in `app/retention.py`; runs as a dedicated compose `cleanup` service and in the worker's cleanup loop |
 | `app/onboarding.py` | Pre-flight configuration health checks |
 | `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage |
 | `app/youtube_relay.py` | `YouTubeRelay` — PCM→FFmpeg RTMP relay for YouTube Live (audio-client queue, bounded auto-restart); see `docs/youtube_live.md` |

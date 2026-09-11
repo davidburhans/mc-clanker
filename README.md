@@ -139,6 +139,13 @@ curl -X POST http://localhost:4400/api/export/start \
 | `LLM_MODEL` | `local-model` | LLM model name |
 | `ICECAST_ENABLED` | `false` | Enable Icecast streaming |
 | `EXPORT_DIR` | `/exports` | Directory for recorded files |
+| `SHOW_AUDIO_RETENTION_DAYS` | `0` (off) | Days to keep show recordings under `SHOWS_DIR` (0 = keep forever) |
+| `EXPORT_RETENTION_DAYS` | `0` (off) | Days to keep export files in `EXPORT_DIR` (0 = keep forever) |
+| `SESSION_STALE_HOURS` | `24` | Reap `session_routing` rows with no heartbeat for this long (0 = off) |
+| `LLM_RETENTION_DAYS` | `0` (keep forever) | Days to keep the LLM audit corpus (`llm_interactions` + `show_actions`); enabling archives rows as NDJSON before deletion — a failed archive keeps every row |
+| `AUDIT_ARCHIVE_DIR` | `/exports/audit_archive` | NDJSON archive destination used by `LLM_RETENTION_DAYS` |
+
+Storage retention is disabled by default outside compose; the shipped `docker/compose.yaml` enables it via a dedicated `cleanup` service (`SHOW_AUDIO_RETENTION_DAYS=14`, `EXPORT_RETENTION_DAYS=7`). See `.env.example` for the full knob reference.
 
 ### Icecast Streaming (Optional)
 
