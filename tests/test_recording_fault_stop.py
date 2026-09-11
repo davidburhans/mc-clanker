@@ -125,7 +125,6 @@ def test_sustained_failures_stop_show_sink_cleanly(monkeypatch):
     """F2 (REL-05c acceptance): past the threshold the show sink auto-stops once,
     cleanly, and the audit corpus keeps capturing (current_show_id survives)."""
     import app.lib.wav as wav_module  # extracted from shows.py in this same unit
-
     from app.framework.framework_state import RECORDING_WRITE_FAILURE_STOP_THRESHOLD
 
     handle = FailingSinkHandle()
@@ -202,7 +201,6 @@ def test_concurrent_stop_wins_no_double_finalize(monkeypatch):
     """F5: a stop_show that detached the slot wins the race against the mixer's
     in-flight threshold breach — the stale handle is never finalized twice."""
     import app.lib.wav as wav_module
-
     from app.framework.framework_state import RECORDING_WRITE_FAILURE_STOP_THRESHOLD
 
     stale = FailingSinkHandle()
