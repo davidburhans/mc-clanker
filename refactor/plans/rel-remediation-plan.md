@@ -238,7 +238,7 @@ against fakes; documented how to run it.
 | baseline | landed | e125167 |
 | 1 rel-mixer-resilience | **landed** (939p/16s green; reviewer safe-to-land, 0 blockers) | 46e9d13 |
 | 2 rel-reset-reprime | **landed** (949p/16s green; reviewer safe-to-land, 0 blockers) | eda6ede |
-| 3 rel-worker-vram | **landed** (968p/16s green = 949 baseline + 19 new; ruff clean) | filled at merge |
+| 3 rel-worker-vram | **landed** (968p/16s green; reviewer safe-to-land, 0 blockers) | e28eee7 |
 | 4 rel-llm-capture | pending | — |
 | 5 rel-storage-retention | pending | — |
 | 6 rel-job-queue | pending | — |
@@ -265,6 +265,13 @@ against fakes; documented how to run it.
   monotonic generation/epoch counter on pregen results instead of loop_idx.
   Also: post-reset audit rows keep pre-force loop_index → duplicates within
   a show (cosmetic, disclosed).
+
+- rel-03 (P2, report-only): worker.py now 633 lines (pre-existing >500
+  brownfield debt extended; split deferred). Suggestion backlog: expose
+  consecutive_generation_timeouts in worker /health (not just /stats); pin
+  the timeout->non-timeout-failure->timeout breaker branch with a test;
+  py3.11+ note — builtin TimeoutError aliases asyncio.TimeoutError so a
+  socket/upload timeout would also feed the breaker (worker pins 3.10 today).
 
 ## Decisions log
 
