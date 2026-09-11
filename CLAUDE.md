@@ -341,6 +341,36 @@ The async framework uses PostgreSQL as a job queue:
 4. **Completion**: Worker marks job complete and sends PostgreSQL NOTIFY
 5. **Collection**: Async framework waits for NOTIFY and fetches audio from MinIO
 
+#### Queue lifecycle hygiene (rel-12-queue)
+
+- **Terminal abandon (loop path)**: after the await budget expires
+  (`JOB_WAIT_TIMEOUT_SECONDS` + grace), both submit→await paths — foreground
+  `_step_await_jobs_fetch` and the pregen mirror — terminal-fail still-
+  `pending` rows via the injected `JobQueuePort.abandon_jobs`
+  (`error_message='loop_abandoned'`, best-effort). Guarded to
+  `status='pending'` ONLY: a claimed/running `'processing'` row is never
+  failed — its lease machinery owns it. Without this, abandoned rows are
+  immortal: the worker's FIFO claim keeps generating them and the next
+  loop's cache-miss resubmits the identical prompt.
+- **Stale-pending reaper (backstop)**: the cleanup cycle's
+  `JobExpirationCleanup._reap_stale_pending` fails never-claimed `pending`
+  rows older than `PENDING_GRACE_SECONDS` (default 86400 = the audit's 24 h
+  horizon; `0` disables) with `error_message='queue_backlog_reaped'` —
+  covers rows no loop ever waits on (API submissions, a crashed web
+  process). Keyed on `created_at`, not `expires_at`, so queue hygiene
+  decouples from the terminal-retention horizon; never touches
+  `'processing'` rows.
+- **Submission backpressure**: `JobQueuePort.pending_depth()` gauges the
+  backlog; over `JOB_PENDING_DEPTH_LIMIT = 64` (`loop_steps.py`) the whole
+  submit phase skip-and-logs for the cycle (foreground P7 and pregen alike
+  — never blocks). Skipped prompts stay cache-missed and retry next loop;
+  the skipped stems report the documented `"failed"` applied-actions
+  outcome (no new enum value).
+- **Worker claim SQL deliberately unchanged**: once abandoned/reaped rows
+  are terminal, the existing `status='pending'` filter already excludes
+  them; a staleness predicate in the claim would duplicate the grace knob
+  in a second process. Pinned by `tests/test_job_queue_lifecycle.py`.
+
 #### Worker resilience (rel-03-worker)
 
 - **Pre-download**: every enabled model's weights are downloaded into the HF
