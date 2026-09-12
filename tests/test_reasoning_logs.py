@@ -219,22 +219,14 @@ class TestReasoningLogsExport:
             response = app_client.get("/api/llm-config/reasoning-logs/export?show_id=1")
             assert response.status_code == 401
 
-    def test_export_returns_jsonl_stream(self, app_client, mock_auth_user):
-        """Export returns NDJSON content type."""
-        mock_interaction = _make_mock_interaction()
+    def test_export_returns_jsonl_stream(self, app_client, isolated_export_db):
+        """Export returns NDJSON content type (rel-13: real session, no DB mocks —
+        the MagicMock query chains here were exactly why DetachedInstanceError
+        on real sessions stayed invisible)."""
+        sandbox = isolated_export_db
+        show_id = sandbox.make_show("Rewrite export stream")
 
-        mock_session = MagicMock()
-        mock_session.query.return_value.filter.return_value.order_by.return_value.all.return_value = [mock_interaction]
-
-        mock_db = MagicMock()
-        mock_db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db.is_postgres = False
-
-        with patch("app.routes.reasoning_logs.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("app.db.DatabaseManager.get_instance", return_value=mock_db):
-                with patch("app.routes.reasoning_logs._require_show_owner", return_value=None):
-                    response = app_client.get("/api/llm-config/reasoning-logs/export?show_id=1")
+        response = app_client.get(f"/api/llm-config/reasoning-logs/export?show_id={show_id}", headers=sandbox.headers)
 
         assert response.status_code == 200
         assert "application/x-ndjson" in response.headers.get("content-type", "")
@@ -249,61 +241,42 @@ class TestReasoningTimeline:
             response = app_client.get("/api/llm-config/reasoning-timeline?show_id=1")
             assert response.status_code == 401
 
-    def test_timeline_empty_show(self, app_client, mock_auth_user):
-        """Empty timeline when no interactions."""
-        mock_session = MagicMock()
-        mock_query = MagicMock()
-        mock_query.filter.return_value = mock_query
-        mock_query.order_by.return_value.all.return_value = []
-        mock_session.query.return_value = mock_query
+    def test_timeline_empty_show(self, app_client, isolated_export_db):
+        """Empty timeline when no interactions (rel-13: real session, no DB mocks)."""
+        sandbox = isolated_export_db
+        show_id = sandbox.make_show("Rewrite empty timeline")
 
-        mock_db = MagicMock()
-        mock_db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db.is_postgres = False
-
-        with patch("app.routes.reasoning_logs.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("app.db.DatabaseManager.get_instance", return_value=mock_db):
-                with patch("app.routes.reasoning_logs._require_show_owner", return_value=None):
-                    response = app_client.get("/api/llm-config/reasoning-timeline?show_id=1")
+        response = app_client.get(f"/api/llm-config/reasoning-timeline?show_id={show_id}", headers=sandbox.headers)
 
         assert response.status_code == 200
         data = response.json()
         assert data["segments"] == []
         assert data["total_interactions"] == 0
 
-    def test_timeline_segments(self, app_client, mock_auth_user):
-        """Timeline returns segments with aggregated data."""
-        interactions = [
-            _make_mock_interaction(
-                loop_index=1, action_type="retain", bpm=128.0, instruments=["Bass"], reasoning="Keep bass"
-            ),
-            _make_mock_interaction(
-                loop_index=2, action_type="add", bpm=130.0, instruments=["Bass", "Drums"], reasoning="Add drums"
-            ),
-        ]
+    def test_timeline_segments(self, app_client, isolated_export_db):
+        """Timeline returns segments with aggregated data (rel-13: real rows)."""
+        sandbox = isolated_export_db
+        show_id = sandbox.make_show("Rewrite timeline segments")
+        sandbox.insert_interactions(
+            show_id, 1, loop_index=1, relative_time_ms=4000, action_type="retain", bpm=128.0,
+            key="C", instruments=["Bass"], reasoning="Keep bass",
+        )
+        sandbox.insert_interactions(
+            show_id, 1, loop_index=2, relative_time_ms=8000, action_type="add", bpm=130.0,
+            key="C", instruments=["Bass", "Drums"], reasoning="Add drums",
+        )
 
-        mock_session = MagicMock()
-        mock_query = MagicMock()
-        mock_query.filter.return_value = mock_query
-        mock_query.order_by.return_value.all.return_value = interactions
-        mock_session.query.return_value = mock_query
-
-        mock_db = MagicMock()
-        mock_db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db.is_postgres = False
-
-        with patch("app.routes.reasoning_logs.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("app.db.DatabaseManager.get_instance", return_value=mock_db):
-                with patch("app.routes.reasoning_logs._require_show_owner", return_value=None):
-                    response = app_client.get("/api/llm-config/reasoning-timeline?show_id=1&segment_seconds=30")
+        response = app_client.get(
+            f"/api/llm-config/reasoning-timeline?show_id={show_id}&segment_seconds=30", headers=sandbox.headers
+        )
 
         assert response.status_code == 200
         data = response.json()
         assert data["total_interactions"] == 2
         assert data["segment_seconds"] == 30
         assert len(data["segments"]) >= 1
+        assert data["segments"][0]["interaction_count"] == 2
+        assert data["segments"][0]["avg_bpm"] == 129.0
 
 
 class TestReasoningStats:
@@ -314,56 +287,36 @@ class TestReasoningStats:
             response = app_client.get("/api/llm-config/reasoning-logs/stats?show_id=1")
             assert response.status_code == 401
 
-    def test_stats_empty_show(self, app_client, mock_auth_user):
-        """Stats with no interactions returns zeros."""
-        mock_session = MagicMock()
-        mock_query = MagicMock()
-        mock_query.filter.return_value = mock_query
-        mock_query.all.return_value = []
-        mock_session.query.return_value = mock_query
+    def test_stats_empty_show(self, app_client, isolated_export_db):
+        """Stats with no interactions returns zeros (rel-13: real session, no DB mocks)."""
+        sandbox = isolated_export_db
+        show_id = sandbox.make_show("Rewrite empty stats")
 
-        mock_db = MagicMock()
-        mock_db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db.is_postgres = False
-
-        with patch("app.routes.reasoning_logs.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("app.db.DatabaseManager.get_instance", return_value=mock_db):
-                with patch("app.routes.reasoning_logs._require_show_owner", return_value=None):
-                    response = app_client.get("/api/llm-config/reasoning-logs/stats?show_id=1")
+        response = app_client.get(f"/api/llm-config/reasoning-logs/stats?show_id={show_id}", headers=sandbox.headers)
 
         assert response.status_code == 200
         data = response.json()
         assert data["total_interactions"] == 0
         assert data["avg_bpm"] is None
 
-    def test_stats_aggregates(self, app_client, mock_auth_user):
-        """Stats correctly aggregate interaction data."""
-        interactions = [
-            _make_mock_interaction(action_type="retain", bpm=128.0, key="C", instruments=["Bass"], reasoning="Keep it"),
-            _make_mock_interaction(
-                action_type="add", bpm=132.0, key="C", instruments=["Bass", "Drums"], reasoning="Add drums"
-            ),
-            _make_mock_interaction(
-                action_type="remove", bpm=130.0, key="C", instruments=["Drums"], reasoning="Remove bass"
-            ),
-        ]
+    def test_stats_aggregates(self, app_client, isolated_export_db):
+        """Stats correctly aggregate interaction data (rel-13: real rows)."""
+        sandbox = isolated_export_db
+        show_id = sandbox.make_show("Rewrite stats aggregates")
+        sandbox.insert_interactions(
+            show_id, 1, loop_index=1, action_type="retain", bpm=128.0, key="C",
+            instruments=["Bass"], reasoning="Keep it",
+        )
+        sandbox.insert_interactions(
+            show_id, 1, loop_index=2, action_type="add", bpm=132.0, key="C",
+            instruments=["Bass", "Drums"], reasoning="Add drums",
+        )
+        sandbox.insert_interactions(
+            show_id, 1, loop_index=3, action_type="remove", bpm=130.0, key="C",
+            instruments=["Drums"], reasoning="Remove bass",
+        )
 
-        mock_session = MagicMock()
-        mock_query = MagicMock()
-        mock_query.filter.return_value = mock_query
-        mock_query.all.return_value = interactions
-        mock_session.query.return_value = mock_query
-
-        mock_db = MagicMock()
-        mock_db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.session.return_value.__exit__ = MagicMock(return_value=False)
-        mock_db.is_postgres = False
-
-        with patch("app.routes.reasoning_logs.get_current_user_from_request", return_value=mock_auth_user):
-            with patch("app.db.DatabaseManager.get_instance", return_value=mock_db):
-                with patch("app.routes.reasoning_logs._require_show_owner", return_value=None):
-                    response = app_client.get("/api/llm-config/reasoning-logs/stats?show_id=1")
+        response = app_client.get(f"/api/llm-config/reasoning-logs/stats?show_id={show_id}", headers=sandbox.headers)
 
         assert response.status_code == 200
         data = response.json()
