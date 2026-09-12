@@ -114,6 +114,16 @@ exceeded Ns")` so the row still gets a meaningful `error_message`. Weights
 pre-download via `GeneratorRegistry.download_models()` at `start()`, off-loop
 and before the pool exists, with per-model failure isolation. Pinned by
 `tests/test_worker_vram.py` (B1–B4, P1–P4).
+FU-3 hardening: the counter is now surfaced on `/health` too (healthy AND
+unhealthy branch — the operator-polled breadcrumb between timeout #1 and the
+trip); the `timeout → non-timeout-failure → timeout` branch is pinned
+(`tests/test_worker_fu3.py` B5); the py3.11+ `TimeoutError`-alias false-feed
+path is closed for real (pipeline-internal I/O timeouts re-wrapped as
+`GenerationIoTimeout` at the `_generate_and_upload` boundary, so only
+`wait_for`'s deadline feeds the breaker — B6); `_refresh_lease` is
+worker_id-scoped and a 0-rowcount completion is no longer counted as
+`jobs_processed` (rel-13 residuals); `worker.py` split under 500 LOC (job-row
+lifecycle → `worker_job_rows.py`).
 
 ### REL-04 [Critical] Show audit buffers grow in RAM for the whole show; flushed only at stop **[×3 — loop, server, mixer lanes]**
 `audit_recording.py:184,199` — `append_loop_audit` appends one LLMInteraction

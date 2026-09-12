@@ -24,6 +24,16 @@ from scipy.io import wavfile
 #: worker executor thread or the framework audio-fetch path.
 FFMPEG_TIMEOUT = 60  # seconds
 
+# REL-25a: the entire playback chain assumes 44.1 kHz and nothing downstream
+# resamples — GarageAudioAdapter.fetch decodes with decode_aac(sample_rate=44100)
+# (which RAISES on mismatch), the Mixer, the MP3 fan-out and the YouTube relay
+# are all hard-coded 44100. Engine output is therefore normalized ONCE, here.
+# (FU-3: moved here from worker.py — PCM normalization belongs at the audio
+# codec boundary module, and the move buys the worker's 500-LOC compliance.
+# worker.py re-imports both names, so ``worker_module._resample_to_mixer_rate``
+# resolves unchanged.)
+MIXER_SAMPLE_RATE = 44100
+
 
 def _run_ffmpeg(cmd: list[str], label: str) -> bytes:
     """Run an ffmpeg subprocess with a bounded timeout; return stdout.
@@ -62,6 +72,27 @@ def _normalize_decoded_audio(audio: np.ndarray) -> np.ndarray:
     # REL-21: float WAVs can carry NaN/Inf (corrupt stem); astype preserves
     # them and downstream clip would too. Int branches cannot contain NaN.
     return np.nan_to_num(audio.astype(np.float32), nan=0.0, posinf=1.0, neginf=-1.0)
+
+
+def _resample_to_mixer_rate(audio: np.ndarray, sample_rate: int | None) -> np.ndarray:
+    """REL-25a: normalize engine output to the 44.1 kHz playback chain.
+
+    No-op (same object) when already at the mixer rate — today's common case —
+    and for the degenerate unknown-rate batch (None).
+
+    scipy is imported lazily (rel-03 rule extended): the worker's module import
+    must stay torch-free, and scipy.signal's import-time array-API probe does
+    ``getattr(torch, 'Tensor')`` — which explodes under the fake-torch modules
+    the torch-less test harnesses install in sys.modules (test_worker_vram.py).
+    Only a non-44.1 kHz engine ever pays this import.
+
+    Usage: ``pcm = _resample_to_mixer_rate(generate_stem(...)[0], sr)``
+    """
+    if sample_rate == MIXER_SAMPLE_RATE or sample_rate is None:
+        return audio
+    from scipy.signal import resample_poly  # deferred: see docstring
+
+    return resample_poly(audio, MIXER_SAMPLE_RATE, sample_rate, axis=0).astype(np.float32)
 
 
 def encode_aac(audio: np.ndarray, sample_rate: int = 44100, bitrate: str = "192k") -> bytes:

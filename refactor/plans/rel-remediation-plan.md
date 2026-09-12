@@ -265,7 +265,7 @@ against fakes; documented how to run it.
 |---|------|-------|--------|--------|
 | FU-1 | rel-fu-health | mixer consecutive-failure counter + health + log rate-limit (rel-01); audit backlog/failed-flush health counters (rel-04); trigger_shutdown subprocess-kill outside sync_lock (rel-11); stems.py:23 sanitize (rel-01); psycopg2 TCP keepalives in db.py (rel-17) | `rel-fu-1-health` | **landed** (10 FU-1 regression tests red→green; full gate 1188p/26s) |
 | FU-2 | rel-fu-loop | pregen epoch/generation counter — stale pre-reset result acceptance (rel-02); outage streak resets on successful SUBMIT not read-probe (rel-12); loop_orchestrator.py split under 500 (rel-17) | `rel-fu-2-loop` | **landed** (9 FU-2 regression tests red→green (`tests/test_loop_epoch_recovery.py` E1–E4/O1–O4/S1); characterization + divergence suites untouched & green (pure move); full gate 1198p/26s) |
-| FU-3 | rel-fu-worker | consecutive_generation_timeouts in worker /health; breaker timeout->fail->timeout branch pin (rel-03); _refresh_lease worker_id-scoped; _mark_job_complete 0-rowcount not counted processed; py3.11 TimeoutError-alias note; worker.py split under 500 (rel-03/24) | `rel-fu-3-worker` | planned |
+| FU-3 | rel-fu-worker | consecutive_generation_timeouts in worker /health; breaker timeout->fail->timeout branch pin (rel-03); _refresh_lease worker_id-scoped; _mark_job_complete 0-rowcount not counted processed; py3.11 TimeoutError-alias note; worker.py split under 500 (rel-03/24) | `rel-fu-3-worker` | **landed** (6 FU-3 regression tests red→green (`tests/test_worker_fu3.py` H1/B5/B6/R1/C1/S1); keep-green worker suites untouched & green (pure move split first, then 4 behavior edits); full gate 1203p/26s, soak 9p/1s) |
 | FU-4 | rel-fu-exports | stats/timeline asyncio.to_thread + (show_id, relative_time_ms) index (rel-13); reasoning_logs.py split; export_chunks TYPE_CHECKING hints; fanout acquire_client rollback orphan kill (rel-10); soak P6 live PCM feed for dropped_pcm_blocks | `rel-fu-4-exports` | planned |
 
 ## Follow-ups (from unit reviews)
@@ -292,6 +292,13 @@ against fakes; documented how to run it.
   the timeout->non-timeout-failure->timeout breaker branch with a test;
   py3.11+ note — builtin TimeoutError aliases asyncio.TimeoutError so a
   socket/upload timeout would also feed the breaker (worker pins 3.10 today).
+  **(DONE in FU-3:** `consecutive_generation_timeouts` on /health both
+  branches (H1); the fail-branch pin landed (B5 — characterization, semantics
+  of record unchanged); the py3.11+ alias false-feed path CLOSED, not just
+  noted — pipeline I/O timeouts re-wrapped as `GenerationIoTimeout` at the
+  `_generate_and_upload` boundary so only wait_for's deadline feeds the
+  breaker (B6); `worker.py` split via the pure-move `_JobRowLifecycle` mixin
+  (`worker_job_rows.py`), both files <500 pinned by S1.**)**
 
 - rel-04 (P2, report-only): during a sustained DB outage, audit buffers grow
   without bound (retain-over-drop is the invariant-4-correct choice) —
@@ -334,6 +341,11 @@ against fakes; documented how to run it.
   guarded complete UPDATE; _mark_job_complete 0-rowcount no-op still counts
   jobs_processed (cosmetic, pre-existing); _refresh_lease not worker_id-scoped;
   cfg/steps not in the stem-cache key — U14 triage candidates.
+  **(refresh-lease scoping + 0-rowcount counting DONE in FU-3:** `_refresh_lease`
+  UPDATE carries `AND worker_id = $3` (R1 — a zombie heartbeat can no longer
+  extend a reclaimed row's lease); a 0-rowcount completion returns False and
+  the caller skips `jobs_processed` + logs (C1). The encode-window residual
+  and the cfg/steps stem-cache-key item remain.**)**
 
 ## Decisions log
 

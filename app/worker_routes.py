@@ -35,6 +35,9 @@ async def health_check():
     - Database connectivity
     - Garage connectivity
     - Jobs processed/failed counts
+    - consecutive_generation_timeouts: REL-03 breaker early-warning breadcrumb
+      (FU-3) — between timeout #1 and the breaker trip this is the only signal
+      on /health that the worker is wedging
     - Overall status (healthy/unhealthy)
     """
     worker = get_worker_instance()

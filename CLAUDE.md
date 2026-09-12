@@ -139,7 +139,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 |------|---------|-------------|
 | `app/app_ui.py` | FastAPI app startup, lifespan, routes, auth | `python -m app.app_ui` |
 | `app/framework/framework_main_async.py` | `run_framework_loop_async()` async task | Started in FastAPI lifespan |
-| `app/worker.py` | GPU job processor | `python -m app.worker` (separate container) |
+| `app/worker.py` | GPU job processor (FU-3: job-ROW lifecycle lives in `worker_job_rows.py` — claim/ownership/lease/terminal writes mixin; this file keeps generation, breaker, eviction, health/stats) | `python -m app.worker` (separate container) |
 
 ### Framework Components
 
@@ -174,13 +174,14 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/middleware_db.py` | Sync DB helpers the auth/session middlewares run off the event loop via `asyncio.to_thread` (REL-09); returns detached-safe data (expunged user / scalars) |
 | `app/models/` | SQLAlchemy ORM models (User, Show, GeneratorJob, etc.) |
 | `app/playback.py` | Pre-recorded show playback (REL-32a: every broadcast chunk is normalized to the s16le the downstream chain assumes — s16le, this app's recording format, passes through byte-identical; other int-PCM widths decode through float32 with NaN-safety; non-PCM/float WAVs fall back to a scipy whole-file streamer) |
-| `app/worker.py` | Async job processor (separate container) |
+| `app/worker.py` | Async job processor (separate container; FU-3: breaker counter surfaced on /health, timeout re-wrap `GenerationIoTimeout` keeps pipeline I/O timeouts off the breaker, `_generate_and_upload` is a provenance wrapper over `_run_generation_pipeline`) |
+| `app/worker_job_rows.py` | `_JobRowLifecycle`, `LostLeaseError` — FU-3 pure-move mixin owning the generator_jobs ROW lifecycle: `_claim_next_job`, ownership predicates (`_still_own_job_row` delete-guard vs `_lease_still_held` upload-guard), worker_id-scoped `_refresh_lease`/heartbeat, `_mark_job_complete` (returns bool; 0-rowcount = lost lease, NOT counted processed) / `_mark_job_failed`; `GeneratorWorker(_JobRowLifecycle)` mixin-first MRO keeps instance-attr test patches working; stdlib-only imports (torch-free worker import rule) |
 | `app/worker_routes.py` | Worker health check/stats endpoints |
 | `app/garage_client.py` | Async boto3 wrapper for Garage/MinIO S3 |
 | `app/job_waiter.py` | Async LISTEN/NOTIFY waiter for job completion (REL-17: waits in `WAITER_SLICE_SECONDS = 5.0` slices with a per-slice `conn.is_closed()` check — a dead LISTEN conn is caught within one slice instead of holding the pooled conn until the full job timeout; notify/deadline/dead-conn exits all funnel into one final status fetch on a fresh pool conn, preserving the missed-notify race coverage) |
 | `app/cleanup.py` | Periodic expired job/audio cleanup + storage retention (REL-05/REL-16): show-recording/export sweeps, stale session-routing reaper, opt-in LLM corpus retention (NDJSON archive-before-delete; default keep-forever). Passes live in `app/retention.py`; runs as a dedicated compose `cleanup` service and in the worker's cleanup loop |
 | `app/onboarding.py` | Pre-flight configuration health checks |
-| `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage |
+| `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage; also owns the REL-25a one-shot 44.1 kHz normalization (`MIXER_SAMPLE_RATE`, `_resample_to_mixer_rate`, lazy scipy import — FU-3 moved them here from worker.py, which re-imports the names) |
 | `app/youtube_relay.py` | `YouTubeRelay` — PCM→FFmpeg RTMP relay for YouTube Live (audio-client queue, rate-limited auto-restart: a proc alive ≥ `stability_window_s` earns a fresh restart budget; `_write_block` drops `None` poison); see `docs/youtube_live.md` |
 | `app/youtube_lifecycle.py` | REL-15 24/7 supervision: boot auto-arm (`auto_arm_youtube_relay`, never fatal), watchdog asyncio task (`youtube_watchdog_loop`, storm-guarded re-arm of an inactive non-disarmed relay), lifespan wiring (`start_relay_services`/`stop_relay_services`); operator kill switch `state.youtube_relay_disarmed` |
 | `app/stream_fanout.py` | `StreamFanout`, `get_stream_fanout`, `mp3_client_stream` — process-wide MP3 transcode fan-out for `/stream.mp3` (REL-10): ONE shared ffmpeg, per-client bounded queues (drop-oldest; clients own no subprocess); the pump thread evicts clients whose queue stayed full > `stale_client_s`, so abrupt disconnects leak zero ffmpeg/threads; singleton torn down on last client, deliberately NOT cleared by `reset()` |
@@ -423,7 +424,16 @@ The async framework uses PostgreSQL as a job queue:
   so the module import stays torch-free) before encode/duration — the entire
   playback chain (`decode_aac@44100` at fetch, mixer, MP3 fan-out, YouTube
   relay) is hard-coded 44.1 kHz and nothing downstream resamples. 44.1 kHz
-  output passes through by identity (zero copy).
+  output passes through by identity (zero copy). (FU-3: the constant + helper
+  moved to `app/aac_encoder.py`; worker.py re-imports them.)
+- **FU-3 worker hygiene**: the REL-03 breaker counter is surfaced on `/health`
+  (both branches); `_refresh_lease` is worker_id-scoped (a zombie heartbeat can
+  no longer extend a reclaimed row's lease); a 0-rowcount completion is NOT
+  counted as `jobs_processed` and is logged; on py3.11+ builtin `TimeoutError`
+  aliases `asyncio.TimeoutError`, so pipeline-internal I/O timeouts are
+  re-wrapped as `GenerationIoTimeout` at the `_generate_and_upload` boundary —
+  only `wait_for`'s deadline feeds the breaker. Job-row lifecycle split into
+  `app/worker_job_rows.py`. Pinned by `tests/test_worker_fu3.py`.
 - **cfg/steps reach the worker (REL-25b)**: nullable `generator_jobs.cfg_scale`
   / `steps` columns (`migrations/004_generation_params.sql`) are captured at
   submit from `state.generation_cfg_scale/steps` via
