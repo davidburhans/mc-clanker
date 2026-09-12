@@ -17,8 +17,10 @@ Contracts pinned here (per refactor/plans/units/rel-17-plan.md §3.2):
   the next clean pass (B2);
 * after 3 consecutive submit failures the conductor call is SKIPPED (retain-all
   fallback keeps the set running from cache) and one cheap recovery probe runs
-  per loop so the conductor resumes within one loop of the queue returning
-  (B3, B4); the streak is owned by the ``_submit_job`` delegate (B5) and the
+  per loop, gating a one-shot WRITE canary through the ``_submit_job`` seam —
+  the streak resets ONLY on a successful submit, so the conductor resumes
+  within one loop of the queue actually becoming WRITABLE (B3, B4; FU-2);
+  the streak is owned by the ``_submit_job`` delegate (B5) and the
   pregen path gets the same gate (B6);
 * a startup failure flips ONLY ``state.is_running`` under ``sync_lock`` — no
   kill switch (S1); the D11 done-callback keeps full cleanup for a task that
@@ -428,12 +430,17 @@ async def test_conductor_skipped_after_three_consecutive_submit_failures(sleep_r
 
 
 async def test_conductor_resumes_after_queue_recovery(sleep_recorder):
-    """B4 (REL-18 acceptance): once the recovery probe sees the queue healthy,
-    the NEXT iteration calls the conductor and submits again."""
+    """B4 (REL-18 acceptance, FU-2 amended): once the recovery probe sees the
+    queue healthy it unlocks the WRITE canary; the canary's successful submit
+    resets the streak and the real conductor decision is built THE SAME
+    iteration."""
     conductor = _CountingConductor()
-    # 7 failing probes: 3 P7 backlog gauges (the outage iterations) + guard
+    # 7 probes to recovery: 3 P7 backlog gauges (the outage iterations) + guard
     # probes at fallback iterations 1-3; the guard probe at fallback iteration 4
-    # is the one that observes recovery, so the recovered iteration is the 4th
+    # is the one that observes recovery. FU-2: that probe success no longer
+    # resets the streak itself — it unlocks the canary, whose successful submit
+    # (via the _submit_job seam) resets the streak and falls through to the
+    # conductor the SAME iteration, so the recovered iteration is still the 4th
     # (stop_after) audit append and the loop ends right after it.
     jobs = _OutageJobQueuePort(probes_before_recovery=7)
     loop = _make_robust_loop(conductor, jobs)
@@ -447,7 +454,7 @@ async def test_conductor_resumes_after_queue_recovery(sleep_recorder):
     await _drive_loop(loop)
 
     assert conductor.calls == 4, f"3 outage calls + 1 recovered call expected, got {conductor.calls}"
-    assert jobs.submit_calls == 4, f"3 failed + 1 recovered submit expected, got {jobs.submit_calls}"
+    assert jobs.submit_calls == 5, f"3 failed + 1 canary + 1 recovered submit expected, got {jobs.submit_calls}"
     assert jobs.submit_failures == 3
     assert len(audit.responses) == 4
     assert audit.responses[3]["name"] == "Conductor Live", (

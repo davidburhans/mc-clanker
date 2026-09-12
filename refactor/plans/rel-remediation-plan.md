@@ -264,7 +264,7 @@ against fakes; documented how to run it.
 | # | Unit | Items | Branch | Status |
 |---|------|-------|--------|--------|
 | FU-1 | rel-fu-health | mixer consecutive-failure counter + health + log rate-limit (rel-01); audit backlog/failed-flush health counters (rel-04); trigger_shutdown subprocess-kill outside sync_lock (rel-11); stems.py:23 sanitize (rel-01); psycopg2 TCP keepalives in db.py (rel-17) | `rel-fu-1-health` | **landed** (10 FU-1 regression tests red→green; full gate 1188p/26s) |
-| FU-2 | rel-fu-loop | pregen epoch/generation counter — stale pre-reset result acceptance (rel-02); outage streak resets on successful SUBMIT not read-probe (rel-12); loop_orchestrator.py split under 500 (rel-17) | `rel-fu-2-loop` | planned |
+| FU-2 | rel-fu-loop | pregen epoch/generation counter — stale pre-reset result acceptance (rel-02); outage streak resets on successful SUBMIT not read-probe (rel-12); loop_orchestrator.py split under 500 (rel-17) | `rel-fu-2-loop` | **landed** (9 FU-2 regression tests red→green (`tests/test_loop_epoch_recovery.py` E1–E4/O1–O4/S1); characterization + divergence suites untouched & green (pure move); full gate 1198p/26s) |
 | FU-3 | rel-fu-worker | consecutive_generation_timeouts in worker /health; breaker timeout->fail->timeout branch pin (rel-03); _refresh_lease worker_id-scoped; _mark_job_complete 0-rowcount not counted processed; py3.11 TimeoutError-alias note; worker.py split under 500 (rel-03/24) | `rel-fu-3-worker` | planned |
 | FU-4 | rel-fu-exports | stats/timeline asyncio.to_thread + (show_id, relative_time_ms) index (rel-13); reasoning_logs.py split; export_chunks TYPE_CHECKING hints; fanout acquire_client rollback orphan kill (rel-10); soak P6 live PCM feed for dropped_pcm_blocks | `rel-fu-4-exports` | planned |
 
@@ -281,6 +281,10 @@ against fakes; documented how to run it.
   monotonic generation/epoch counter on pregen results instead of loop_idx.
   Also: post-reset audit rows keep pre-force loop_index → duplicates within
   a show (cosmetic, disclosed).
+  **(epoch counter DONE in FU-2:** spawn-time `pregen_epoch` stamps + monotonic
+  P3 bump + P2 epoch-equality gate; pinned by `tests/test_loop_epoch_recovery.py`
+  E1–E4. Audit `loop_index` duplicates remain cosmetic/disclosed — audit and
+  commit semantics keep using `loop_idx`; the epoch is stale-detection only.**)**
 
 - rel-03 (P2, report-only): worker.py now 633 lines (pre-existing >500
   brownfield debt extended; split deferred). Suggestion backlog: expose
@@ -317,6 +321,13 @@ against fakes; documented how to run it.
   call repeats every cycle in that mode (inherent to a read probe); asyncpg
   connection-loss callback / TCP keepalives remain the half-open-conn
   follow-up; loop_orchestrator.py 508/500 lines — split on next touch.
+  **(streak churn + split DONE in FU-2:** streak resets ONLY on a successful
+  submit (the `_submit_job` seam); the read probe gates a one-shot write
+  canary (`_canary_submit`, best-effort abandoned) — pinned by
+  `tests/test_loop_epoch_recovery.py` O1–O4. `loop_orchestrator.py` split via
+  the pure-move `_LoopDelegates` mixin (`loop_delegates.py`), both files
+  <500 pinned by S1. TCP keepalives landed in FU-1; the asyncpg
+  connection-loss callback remains the half-open-conn follow-up.**)**
 
 - rel-13 (from rel-24 review): residual lost-lease window bounded by
   encode(≤60s)+S3 timeouts (not ~1s typical) — row stays unclobberable via the

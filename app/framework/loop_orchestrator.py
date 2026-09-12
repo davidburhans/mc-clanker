@@ -12,12 +12,13 @@ The async framework loop:
 5. Fetches audio from Garage
 6. Transitions stems in the mixer
 
-This file holds ONLY the loop lifecycle (``__init__``/``start``/``stop``), the
-thin ``_run_loop`` driver, and the adapter delegates. The 14 per-phase
-``_step_*`` methods live in ``app.framework.loop_steps`` (``_LoopSteps`` mixin,
-Phase B of the E1–E6 refactor) so this file stays under the project's 500-LOC
-rule. ``patch.object(loop, '_submit_job')`` etc. keep working: the delegates are
-defined here and the ``_step_*`` methods resolve on the combined class via MRO.
+This file holds ONLY the loop lifecycle (``__init__``/``start``/``stop``) and the
+thin ``_run_loop`` driver. The 14 per-phase ``_step_*`` methods live in
+``app.framework.loop_steps`` (``_LoopSteps`` mixin, Phase B of the E1–E6
+refactor) and the adapter delegates live in ``app.framework.loop_delegates``
+(``_LoopDelegates`` mixin, Phase FU-2 extraction) so this file stays under the
+project's 500-LOC rule. ``patch.object(loop, '_submit_job')`` etc. keep working:
+both mixins resolve on the combined class via MRO.
 
 Usage:
     # In app_ui.py lifespan or when starting a session:
@@ -29,8 +30,6 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-import numpy as np
-
 from app.framework.audio_fetch import GarageAudioAdapter
 from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (routes/shows.py, tests import these from here)
     AuditAdapter,
@@ -39,29 +38,31 @@ from app.framework.audit_recording import (  # noqa: F401  frozen re-exports (ro
     flush_recording_buffers,
 )
 from app.framework.conductor_interaction import (
-    build_track_prompt,
     process_actions,  # noqa: F401  frozen public API (simulation/session_state imports it from here)
 )
 from app.framework.framework_conductor_async import ConductorLLMAsync
 from app.framework.framework_mixer import Mixer
 from app.framework.framework_state import state
 from app.framework.job_queue import PostgresJobQueueAdapter
+from app.framework.loop_delegates import _LoopDelegates
 from app.framework.loop_steps import (
     _LoopSteps,
     _StepResult,
     loop_retry_backoff_delay,
 )
 from app.framework.ports import AudioFetchPort, AuditSinkPort, ConductorPort, JobQueuePort
-from app.framework.pregeneration import run_pregeneration
 from app.garage_client import GarageClient
 
 
-class AsyncFrameworkLoop(_LoopSteps):
-    """Event-driven DJ-set orchestrator: lifecycle + driver + adapter delegates.
+class AsyncFrameworkLoop(_LoopDelegates, _LoopSteps):
+    """Event-driven DJ-set orchestrator: lifecycle + driver.
 
     The per-phase ``_step_*`` bodies are mixed in from ``_LoopSteps``
-    (``app/framework.loop_steps``); see that module's docstring for the safety
-    invariants (single-lock P11 commit, no I/O inside ``state.lock``).
+    (``app/framework.loop_steps``) and the adapter delegates from
+    ``_LoopDelegates`` (``app/framework.loop_delegates``, FU-2 pure move —
+    first in the MRO so the real delegates win over ``_LoopSteps``' raising
+    stubs); see those modules' docstrings for the safety invariants
+    (single-lock P11 commit, no I/O inside ``state.lock``).
     """
 
     def __init__(
@@ -148,6 +149,11 @@ class AsyncFrameworkLoop(_LoopSteps):
         # which the mixer has not consumed at its boundary yet (0 = nothing staged).
         self._staged_loop_idx = 0
         self._loop_idx = 0  # Advanced by _step_wait_for_start (P1) on each PROCEED iteration
+        # FU-2 (rel-02 residual): generation of the loop NUMBERING — bumped on every
+        # should_reset consumption (P3) because post-reset numbering restarts at 1;
+        # pregen results carry their spawn-time stamp so a pre-reset in-flight result
+        # can never be accepted again when the indices revisit.
+        self._pregen_epoch = 0
         # REL-18 (U12): B1 consecutive-iteration failures (backoff input) and
         # consecutive job-submit failures (conductor-skip input) — two counters,
         # two semantics (a conductor-phase failure is not a submit failure).
@@ -339,131 +345,6 @@ class AsyncFrameworkLoop(_LoopSteps):
                 continue
 
         self._finish_loop()
-
-    # --- Adapter delegates (kept as methods so patch.object(loop, ...) works) ---
-
-    def _build_prompt(self, track: dict, key: str, bpm: int) -> str:
-        """Build a generation prompt; delegates to conductor_interaction (Phase 4)."""
-        return build_track_prompt(track, key, bpm)
-
-    async def _submit_job(
-        self,
-        session_id: uuid.UUID,
-        instrument: str,
-        prompt: str,
-        major_family: str,
-        model_id: str,
-        key: str,
-        bpm: int,
-        timbre_tags: list[str],
-        bars: int,
-        cfg_scale: float | None = None,
-        steps: int | None = None,
-    ) -> uuid.UUID:
-        """Submit a generation job; delegates to the injected JobQueuePort (U2).
-
-        Kept as a method so ``patch.object(loop, '_submit_job')`` keeps working.
-        Routes through ``self._jobs.submit`` (ctor-injected, defaults to
-        ``PostgresJobQueueAdapter``); identical signature + kwargs, so every
-        call site (loop_steps._step_submit_jobs, pregeneration.run_pregeneration)
-        and every test patch is transparent. REL-25b: the cfg/steps diffusion
-        params ride along (None -> NULL column, worker falls back to defaults).
-        """
-        try:
-            job_id = await self._jobs.submit(
-                session_id=session_id,
-                instrument=instrument,
-                prompt=prompt,
-                major_family=major_family,
-                model_id=model_id,
-                key=key,
-                bpm=bpm,
-                timbre_tags=timbre_tags,
-                bars=bars,
-                cfg_scale=cfg_scale,
-                steps=steps,
-            )
-        except Exception:
-            # REL-18 (U12): submit-failure streak — drives the conductor skip.
-            self._consecutive_submit_failures += 1
-            raise
-        self._consecutive_submit_failures = 0  # any successful submit proves the queue writable
-        return job_id
-
-    async def _await_jobs(
-        self,
-        job_ids: list[uuid.UUID],
-        timeout: float = 120.0,
-    ) -> dict[uuid.UUID, str | None]:
-        """Await job completion; delegates to the injected JobQueuePort (U4).
-
-        Kept as a method so ``patch.object(loop, '_await_jobs')`` and the
-        ``loop._await_jobs = AsyncMock(...)`` direct-assignment harness keep
-        working (brief-02 ssD). Routes through ``self._jobs.await_jobs``
-        (ctor-injected, defaults to ``PostgresJobQueueAdapter``); identical
-        signature + kwargs, so every call site (loop_steps._step_await_jobs_fetch,
-        pregeneration.run_pregeneration) and every test patch is transparent.
-
-        Closes the Phase 7b landmine: the loop no longer reaches
-        ``wait_for_multiple_jobs`` directly — all five ports are now reached
-        through their port abstraction (R14 complete).
-        """
-        return await self._jobs.await_jobs(job_ids, timeout=timeout)
-
-    async def _abandon_jobs(self, job_ids: list[uuid.UUID]) -> int:
-        """Fail still-pending jobs; delegates to the injected JobQueuePort (U6/REL-12a).
-
-        Kept as a method so ``patch.object(loop, '_abandon_jobs')`` keeps working
-        (same pattern as ``_await_jobs``); routes through ``self._jobs.abandon_jobs``.
-        """
-        return await self._jobs.abandon_jobs(job_ids)
-
-    async def _pending_depth(self) -> int:
-        """Pending-job count; delegates to the injected JobQueuePort (U6/REL-12c).
-
-        Kept as a method so ``patch.object(loop, '_pending_depth')`` keeps
-        working; routes through ``self._jobs.pending_depth``.
-        """
-        return await self._jobs.pending_depth()
-
-    async def _fetch_audio(self, audio_path: str) -> np.ndarray | None:
-        """
-        Fetch audio from Garage and decode to numpy array.
-
-        Args:
-            audio_path: Garage S3 path (e.g., "audio/{job_id}.aac")
-
-        Returns:
-            numpy array of audio samples (float32, shape [samples, channels])
-            or None if fetch/decode fails
-        """
-        # Phase 2: delegate to GarageAudioAdapter (app.framework.audio_fetch).
-        # Preserves exact behavior: empty bytes -> None, AAC decode in executor,
-        # any fetch/decode error swallowed -> None. Test string-patches now target
-        # app.framework.audio_fetch (where decode_aac is actually resolved).
-        return await self._audio.fetch(audio_path)
-
-    async def _append_loop_audit(self, conductor_response, active_stems, loop_idx):
-        """Buffer one loop's audit rows; delegates to the injected AuditSinkPort (U3).
-
-        Kept as a method so ``patch.object(loop, '_append_loop_audit')`` and
-        direct test calls keep working (brief-02 ssD). Routes through
-        ``self._audit.append_loop`` (ctor-injected, defaults to ``AuditAdapter``);
-        identical signature, so every call site (loop_steps._step_append_audit)
-        and every test patch / direct call is transparent.
-        """
-        await self._audit.append_loop(conductor_response, active_stems, loop_idx)
-
-    async def _pre_generate_next_loop(self, for_loop_idx: int, snapshot: dict[str, Any]):
-        """Pre-generate the next loop; delegates to pregeneration (Phase 6).
-
-        Kept as a method so ``patch.object(loop, '_pre_generate_next_loop')`` and
-        the ``_pregen_*`` attribute assertions in tests keep working. The body
-        lives in app.framework.pregeneration.run_pregeneration, which shares
-        this loop's ``stem_cache`` (R11) and preserves the cache_stem divergence
-        (brief-01 risk #4: background path never calls state.cache_stem).
-        """
-        await run_pregeneration(self, for_loop_idx, snapshot)
 
 
 async def run_framework_loop_async(session_id: uuid.UUID):

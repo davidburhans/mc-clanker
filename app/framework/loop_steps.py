@@ -376,6 +376,9 @@ class _LoopSteps:
     # REL-18 (U12): consecutive job-submit failures (drives the conductor skip);
     # owned/mutated by AsyncFrameworkLoop.__init__/_submit_job.
     _consecutive_submit_failures: int
+    # FU-2 (rel-02 residual): loop-numbering generation, bumped by P3 when a
+    # should_reset is consumed; pregen results carry their spawn-time stamp.
+    _pregen_epoch: int
 
     def _build_prompt(self, track: dict, key: str, bpm: int) -> str:
         """Delegate provided by ``AsyncFrameworkLoop``."""
@@ -424,6 +427,10 @@ class _LoopSteps:
 
     async def _pre_generate_next_loop(self, for_loop_idx: int, snapshot: dict[str, Any]) -> None:
         """Delegate provided by ``AsyncFrameworkLoop``."""
+        raise NotImplementedError
+
+    async def _canary_submit(self, active_stems: list, current_bpm: int, current_key: str) -> bool:
+        """Delegate provided by ``AsyncFrameworkLoop`` (FU-2 write canary)."""
         raise NotImplementedError
 
     async def _step_wait_for_start(self) -> _StepResult:
@@ -476,6 +483,15 @@ class _LoopSteps:
             self._loop_idx > 1
             and self._pregen_results is not None
             and self._pregen_results.get("loop_idx") == self._loop_idx
+            # FU-2 (rel-02 residual): the result must carry the epoch it was
+            # spawned in — post-reset numbering restarts at 1, so a pre-reset
+            # result would otherwise be accepted once when the indices revisit.
+            # The 0 default is total, not a compat hack: epoch 0 IS "before any
+            # reset", every real writer stamps the key (run_pregeneration from
+            # the P11 snapshot; the P12 loop-1 fabrication directly), and a
+            # missing key can only ever match while _pregen_epoch == 0 — a
+            # regime with no pre-reset history to reject.
+            and self._pregen_results.get("pregen_epoch", 0) == self._pregen_epoch
         )
 
         if pregen_ready:
@@ -547,6 +563,13 @@ class _LoopSteps:
                 self.mixer.clear()
                 self.stem_cache.clear()
                 state.should_reset = False
+                # FU-2 (rel-02 residual): post-reset numbering restarts at 1, so a
+                # pre-reset pregen result for loop M would be accepted once more
+                # when _loop_idx revisits M. Bump the loop-numbering generation —
+                # P2 requires the result's spawn-time stamp to match. Pure int
+                # increment, no I/O (invariant 1); NEVER reset to 0 — a second
+                # reset yields 1 then 2, so double-reset staleness is caught too.
+                self._pregen_epoch += 1
 
             # Round-3 fix B4 (review 08/3): the override used to be applied AND
             # cleared here. On the pre-generated path P11 then overwrote
@@ -606,12 +629,20 @@ class _LoopSteps:
         """
         # REL-18 (U12): DB presumed down — skip the LLM call (retain-all
         # fallback keeps the set running from cache) and probe for recovery so
-        # the conductor resumes within one loop of the queue returning.
+        # the conductor resumes within one loop of the queue returning (FU-2:
+        # the read probe only GATES the write canary below — the streak itself
+        # resets on a successful submit, never on the probe).
         if self._consecutive_submit_failures >= LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES:
-            if await self._probe_queue_recovered():
-                self._consecutive_submit_failures = 0
-            else:
+            if not await self._probe_queue_recovered():
                 return build_fallback_response(current_bpm, current_key, active_stems, "job-queue submit outage")
+            # FU-2: a successful READ says nothing about writability (a
+            # hot-standby PG answers reads while every submit fails — the old
+            # probe-side streak reset re-enabled the full LLM call every cycle
+            # in that mode). Verify with ONE real canary submit; only its
+            # success (via the _submit_job seam) may reset the streak.
+            if not await self._canary_submit(active_stems, current_bpm, current_key):
+                return build_fallback_response(current_bpm, current_key, active_stems, "job-queue submit outage")
+            # writable again — fall through to the real conductor call THIS iteration
         try:
             conductor_response = await self.conductor.get_next_state_async(
                 current_bpm=current_bpm,
@@ -819,10 +850,12 @@ class _LoopSteps:
         return depth > JOB_PENDING_DEPTH_LIMIT
 
     async def _probe_queue_recovered(self) -> bool:
-        """REL-18: one cheap queue round-trip; True resets the submit streak.
+        """REL-18/FU-2: one cheap queue round-trip; True = queue READABLE.
 
-        Runs at most once per loop and only while the conductor is being
-        skipped — steady state pays nothing.
+        Says nothing about writability (a read-only hot standby answers every
+        probe while every submit fails) — the P4 guard uses it only to decide
+        whether a write canary is worth one INSERT. Runs at most once per loop
+        and only while the conductor is being skipped — steady state pays nothing.
         """
         try:
             await self._pending_depth()
@@ -1009,6 +1042,10 @@ class _LoopSteps:
                 "user_override": state.user_override,
                 "available_instruments": list(state.available_instruments),
                 "stem_history": list(state.stem_history),
+                # FU-2: spawn-time epoch stamp — the snapshot is immutable from
+                # spawn to completion, so a pre-reset spawn can never acquire a
+                # post-reset stamp (plain dict write, no I/O).
+                "pregen_epoch": self._pregen_epoch,
                 "llm_config": {
                     "base_url": state.llm_base_url,
                     "api_key": state.llm_api_key,
@@ -1059,6 +1096,9 @@ class _LoopSteps:
             # this could clobber (that is what made the loop>=2 case unsafe below).
             self._pregen_results = {
                 "loop_idx": self._loop_idx + 1,
+                # FU-2: fabricated in this iteration, so the stamp is the loop's
+                # current epoch (no snapshot involved).
+                "pregen_epoch": self._pregen_epoch,
                 "prepared_tracks": tracks_to_use,
                 "loop_duration_samples": duration_samples,
                 "next_stems": list(state.active_stems),

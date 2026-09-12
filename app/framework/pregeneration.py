@@ -190,6 +190,14 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
             "prepared_tracks": prepared_tracks,
             "loop_duration_samples": loop_duration_samples,
             "loop_idx": for_loop_idx,
+            # FU-2 (rel-02 residual): SPAWN-TIME epoch stamp, read from the P11
+            # snapshot — NOT loop._pregen_epoch. A reset firing mid-pregen bumps
+            # the loop attr before this task finishes; the snapshot is immutable
+            # from spawn to completion, so a pre-reset spawn can never acquire a
+            # post-reset stamp and self-forgive. .get default 0 is total: results
+            # computed before the first reset (and every pre-FU-2 test snapshot)
+            # are epoch 0, and P2's default can only match while epoch == 0.
+            "pregen_epoch": snapshot.get("pregen_epoch", 0),
             "next_stems": next_stems,
             "master_bpm": pregen_master_bpm,
             "master_key": pregen_master_key,

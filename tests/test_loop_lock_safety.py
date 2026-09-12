@@ -38,6 +38,7 @@ def test_no_io_inside_state_lock_in_orchestrator() -> None:
     # lock (it stalls the event loop / opens races — brief-01 risk #2).
     orchestrator_files = [
         Path("app/framework/loop_orchestrator.py"),
+        Path("app/framework/loop_delegates.py"),
         Path("app/framework/loop_steps.py"),
     ]
 
@@ -388,10 +389,15 @@ def test_no_mixer_lock_nests_state_lock() -> None:
     Holding the sync ``mixer.lock`` while acquiring the asyncio ``state.lock`` is the
     R5 dual-lock DEADLOCK direction (the daemon _callback holds mixer.lock; the
     orchestrator holds state.lock — reversing the order deadlocks). Scanned across
-    the whole orchestrator surface (loop_steps.py + loop_orchestrator.py) so the
+    the whole orchestrator surface (loop_steps.py + loop_orchestrator.py +
+    loop_delegates.py) so the
     invariant follows the code wherever it moves.
     """
-    files = [Path("app/framework/loop_steps.py"), Path("app/framework/loop_orchestrator.py")]
+    files = [
+        Path("app/framework/loop_steps.py"),
+        Path("app/framework/loop_delegates.py"),
+        Path("app/framework/loop_orchestrator.py"),
+    ]
     violations: list[str] = []
     for src_path in files:
         for node in ast.walk(ast.parse(src_path.read_text())):
@@ -442,7 +448,7 @@ def test_p13_delegates_boundary_read_no_mixer_lock() -> None:
 
 
 def test_orchestrator_has_no_private_mixer_reach() -> None:
-    """U3 invariant: loop_steps.py + loop_orchestrator.py reach ZERO Mixer privates.
+    """U3 invariant: loop_steps.py + loop_orchestrator.py + loop_delegates.py reach ZERO Mixer privates.
 
     After U3 the only orchestrator→Mixer handoffs are ``Mixer.prime_loop`` /
     ``loop_position_seconds`` (plus the already-public ``clear``/``set_next_loop``/
@@ -458,7 +464,11 @@ def test_orchestrator_has_no_private_mixer_reach() -> None:
     GREEN once U3a + U3b both land. This is the permanent guard that keeps the
     migration from regressing.
     """
-    files = [Path("app/framework/loop_steps.py"), Path("app/framework/loop_orchestrator.py")]
+    files = [
+        Path("app/framework/loop_steps.py"),
+        Path("app/framework/loop_delegates.py"),
+        Path("app/framework/loop_orchestrator.py"),
+    ]
     forbidden_attrs = {"_add_track_internal", "_ensure_stereo", "_current_loop_duration"}
     violations: list[str] = []
     for src in files:

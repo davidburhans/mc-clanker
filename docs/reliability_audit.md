@@ -79,6 +79,18 @@ no-future-tracks fallback). Post-reset, show-audit `loop_index` restarts at
 reset) plus boundary-mirroring fakes in `tests/test_round3_fix_b.py` and
 `tests/test_loop_fixes.py`.
 
+**Follow-up (P2, report-only → fixed-in rel-fu-2):** post-reset numbering
+revisits indices, so a stale in-flight pregen result for a pre-reset loop M
+was still accepted once (one loop of stale audio, self-healing). Pregen
+results now carry a SPAWN-TIME `pregen_epoch` stamp (the P11 snapshot rides
+it into `run_pregeneration`; the loop-1 fabrication stamps directly), P3
+bumps the monotonic `loop._pregen_epoch` on every `should_reset` consumption
+(never back to 0), and P2 requires epoch equality — the stale-result
+acceptance window is closed (pinned by `tests/test_loop_epoch_recovery.py`
+E1–E4). The cosmetic post-reset `loop_index` duplicates in the show audit
+remain disclosed (audit/commit semantics intentionally keep using `loop_idx`;
+the epoch is stale-detection only).
+
 ### REL-03 [Critical] Worker generation-timeout leaks non-killable threads holding VRAM; wedged CUDA never self-heals
 `worker.py:275-285` — `asyncio.wait_for(..., timeout=600)` around generation
 in a private `ThreadPoolExecutor`; on timeout `shutdown(wait=False,
@@ -352,6 +364,15 @@ older than the grace now come back `failed` (that is the intent;
 `PENDING_GRACE_SECONDS=0` restores the old wait-forever behavior). Pinned by
 `tests/test_job_queue_lifecycle.py`.
 
+**Follow-up (from rel-17 review, report-only → fixed-in rel-fu-2):** a
+read-only PG (hot standby) used to make the REL-18 recovery probe reset the
+submit streak while every INSERT still failed — the full conductor LLM call
+repeated every cycle in that mode. The streak now resets ONLY on a successful
+submit (the `_submit_job` seam); the once-per-loop read probe merely gates a
+one-shot WRITE canary through that same seam (best-effort abandoned so the
+worker never generates it), and the conductor resumes the same iteration the
+canary succeeds (pinned by `tests/test_loop_epoch_recovery.py` O1–O4).
+
 ### REL-13 [High] Export/stats/timeline endpoints load entire tables; exports are broken on real sessions
 `reasoning_logs.py:153,178,188,275` and `shows.py:646,667` — unbounded
 `.all()` (a week-long show ≈ 75 k interactions ≈ hundreds of MB per request);
@@ -459,7 +480,7 @@ disarm toggle, config-heal, key-never-in-logs-or-responses).
 |---|---|---|---|
 | REL-16 | No retention for `llm_interactions`/`show_actions`; `session_routing` reaper never built | `cleanup.py` (jobs only), `models/session_routing.py:13-14` | retention deletes in cleanup cycle + `last_heartbeat < NOW()-1d` reaper — **fixed-in rel-05-storage** (invariant 4 first: corpus retention is OPT-IN — `LLM_RETENTION_DAYS=0` keeps everything forever and issues zero corpus SQL; enabled, rows are streamed to an fsync'd NDJSON archive in `AUDIT_ARCHIVE_DIR` in the exact `to_llm_dump_dict`/`to_dict` shape (shared pure shapers `llm_dump_row`/`show_action_row`) and only the archived ids are deleted; a failed archive keeps every row). Session reaper defaults ON (`SESSION_STALE_HOURS=24`, `0` disables) with a sargable `make_interval` predicate against `idx_session_routing_heartbeat`; pinned by `tests/test_storage_retention.py` T9–T14 |
 | REL-17 | Job-waiter holds PG conn across full 600 s wait; dead conn undetected until timeout; `pool max_size=10` coupling | `job_waiter.py` | poll event in 5 s slices + `conn.is_closed()` check, or asyncpg connection-loss callback — **fixed-in rel-17-19-loop** (`JobWaiter._wait_for_notify` waits in `WAITER_SLICE_SECONDS = 5.0` slices with a per-slice `is_closed()` check, last slice clamped to the deadline; all three exits — notify / deadline / dead conn — funnel into ONE final `_get_job` on a fresh pool conn, so a job completing as its LISTEN conn dies is still honored and the missed-notify race coverage (pre-check + post-subscribe re-check) is untouched; residual: a half-open conn without FIN stays undetected until the OS notices — asyncpg connection-loss callback/TCP keepalives remain the full fix; pinned by `tests/test_job_waiter_slicing.py` W1–W8) |
-| REL-18 | Flat 2 s retry backoff, no escalation/jitter; full LLM call repeated every cycle during DB outage | `loop_orchestrator.py:307-313` | exponential backoff w/ cap; skip conductor call after N submit failures — **fixed-in rel-17-19-loop** (`loop_retry_backoff_delay(n)`: the first failure keeps the exact 2 s base, then ×2 with ±25 % uniform jitter capped at 30 s, ladder reset on the next clean pass; a `_consecutive_submit_failures` streak owned by the `_submit_job` delegate (one seam for foreground P7 + pregen) skips the conductor call after 3 consecutive submit failures — the retain-all fallback keeps the set running from cache — while a once-per-loop `_pending_depth()` recovery probe resumes the conductor within one loop of the DB returning; the pregen path gets the same gate without a probe; pinned by `tests/test_loop_robustness.py` B1–B6) |
+| REL-18 | Flat 2 s retry backoff, no escalation/jitter; full LLM call repeated every cycle during DB outage | `loop_orchestrator.py:307-313` | exponential backoff w/ cap; skip conductor call after N submit failures — **fixed-in rel-17-19-loop** (`loop_retry_backoff_delay(n)`: the first failure keeps the exact 2 s base, then ×2 with ±25 % uniform jitter capped at 30 s, ladder reset on the next clean pass; a `_consecutive_submit_failures` streak owned by the `_submit_job` delegate (one seam for foreground P7 + pregen) skips the conductor call after 3 consecutive submit failures — the retain-all fallback keeps the set running from cache — while a once-per-loop `pending_depth()` read probe gates a `_submit_job`-seam write canary whose success resets the streak and resumes the conductor within one loop of the DB becoming WRITABLE (FU-2: probe success alone no longer resets anything — a read-only hot standby cannot re-enable the LLM call); the pregen path gets the same gate without a probe; pinned by `tests/test_loop_robustness.py` B1–B6 + `tests/test_loop_epoch_recovery.py` O1–O4) |
 | REL-19 | Loop startup failure calls whole-app `trigger_shutdown()` — poisons audience streams/recordings/YouTube relay | `loop_orchestrator.py:436-445` | set `is_running=False` only; reserve the kill switch for process shutdown — **fixed-in rel-17-19-loop** (the startup-failure path flips only `state.is_running` under `sync_lock` and returns — no shutdown event, no poisoned `audio_clients`, no killed subprocesses, no relay harm; `is_generating` untouched (user intent, not liveness); the kill switch remains for lifespan shutdown and for the D11 done-callback, which still runs full cleanup when the task DIES with an exception — boundary pinned by S2 and flagged as a follow-up candidate; pinned by `tests/test_loop_robustness.py` S1–S3) |
 | REL-20 | `sync_lock` held across `instruments.json` disk write — stalls every audio tick | `framework_state.py:367-373` | mutate under lock, write outside — **fixed-in rel-11-recwriter** (`save_instruments` snapshots the payload (deepcopy) under `sync_lock` then delegates to `_write_instruments_payload`, which runs outside it serialized by a private `_instruments_io_lock` the audio path never touches — writers can't interleave a torn file and can't lose updates since payloads are snapshotted after mutation under the same lock; `add_custom_instrument` + `add_custom_major_family` also moved outside; pinned by `tests/test_recording_writer.py` T13–T14) |
 | REL-21 | No NaN/Inf sanitization: `np.clip` preserves NaN; one bad stem poisons the whole mix for a loop | `aac_encoder.py:52-62`, `framework_mixer.py:375-377` | `np.nan_to_num` in decode/normalize — **fixed-in rel-01-mixer** (`Mixer._sanitize_pcm_block` at both broadcast sites + AAC float branch) |
