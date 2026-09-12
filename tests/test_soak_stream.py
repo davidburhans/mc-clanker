@@ -14,12 +14,22 @@ hangs (documented at test_stream_fanout.TestStreamRoute). The stateful
 ``receive`` (one ``http.request``, then park on a disconnect Event) is required
 by Starlette 1.0 — a repeating receive raises 'Unexpected message received'.
 
+FU-4 upgrade: every cycle also runs a LIVE PCM feed mirroring production
+``broadcast_audio`` (framework_state.py:505-530) at real mixer cadence —
+silence blocks through the REGISTERED queue → feeder thread → transcoder
+stdin. This makes the churn's ``dropped_pcm_blocks == 0`` non-vacuous: the
+pre-FU-4 harness fabricated MP3 chunks straight into ``FakeStdout``, so the
+fanout's PCM queue never received a block and the zero-drop pin asserted
+nothing. The stdout side stays fabricated — a real transcode is out of scope
+(the argv contract is pinned by test_stream_fanout_args).
+
 Opt-in (default SKIPPED in normal runs); see docs/soak_harness.md:
 
     SOAK=1 .venv/bin/python -m pytest -m soak tests/test_soak_stream.py -q
 """
 
 import asyncio
+import queue
 import time
 from contextlib import suppress
 from types import SimpleNamespace
@@ -32,6 +42,14 @@ from test_stream_fanout import FakeProc, PopenRecorder, fanout_threads_alive
 from app.framework.framework_state import state
 
 pytestmark = soak_gate()
+
+# ---------------------------------------------------------------------------
+# FU-4 live PCM feed constants (named, not magic: plan §2.7)
+# ---------------------------------------------------------------------------
+
+PCM_SILENCE_BLOCK = b"\x00" * 8192  # the ~8 KiB mixer block (FanoutConfig.pcm_queue_blocks comment)
+PCM_BLOCK_INTERVAL_S = 0.04  # 256 blocks ≈ 12 s ⇒ ~47 ms real cadence; 40 ms keeps the queue mildly ahead
+PCM_FEED_MAX_BLOCKS = 512  # belt-and-braces stop condition: bounded total blocks per cycle
 
 
 # ---------------------------------------------------------------------------
@@ -201,17 +219,74 @@ async def _kill_client(task: asyncio.Task, disconnected: asyncio.Event) -> None:
     assert task.done(), "the killed client's app task did not unwind within the poll budget"
 
 
+async def _feed_pcm_blocks(blocks_fed: list[int]) -> None:
+    """The per-cycle PCM source, mirroring production ``broadcast_audio``
+    (framework_state.py:505-530): snapshot ``audio_clients`` under sync_lock,
+    then ``put_nowait`` one silence block into every registered queue OUTSIDE
+    the lock, swallowing ``queue.Full`` exactly like the mixer path.
+
+    Feeding the REGISTERED queue (not the fanout object directly) is the point:
+    PCM must flow the production path — queue → feeder thread → write_pcm →
+    transcoder stdin — for ``dropped_pcm_blocks == 0`` to mean anything."""
+    while True:
+        with state.sync_lock:
+            clients = list(state.audio_clients)
+        for client_queue in clients:
+            try:
+                client_queue.put_nowait(PCM_SILENCE_BLOCK)
+                blocks_fed[0] += 1
+            except queue.Full:
+                pass  # full/disconnected client; production broadcast_audio drops identically
+        if blocks_fed[0] >= PCM_FEED_MAX_BLOCKS:
+            return
+        await asyncio.sleep(PCM_BLOCK_INTERVAL_S)
+
+
+async def _run_pcm_feed_until_stdin_flow(
+    recorder: PopenRecorder, proc_count: int
+) -> tuple["asyncio.Task[None]", list[int]]:
+    """Start the live PCM feed and wait until bytes demonstrably reached the
+    transcoder stdin (registered queue → feeder thread → write_pcm). Waiting
+    BEFORE the kill makes the post-churn ``stdin.buffer`` assertion
+    deterministic instead of racing the feeder."""
+    blocks_fed = [0]
+    feed = asyncio.create_task(_feed_pcm_blocks(blocks_fed))
+    try:
+        assert await _cond_async(lambda: len(recorder[proc_count - 1].stdin.buffer) > 0, timeout=5.0), (
+            "live PCM never reached the transcoder stdin — the feeder is not draining the registered queue"
+        )
+    except BaseException:
+        feed.cancel()
+        with suppress(asyncio.CancelledError):
+            await feed
+        raise
+    return feed, blocks_fed
+
+
+async def _stop_pcm_feed(feed: "asyncio.Task[None]", blocks_fed: list[int]) -> int:
+    """Cancel + await the feed (suppressing CancelledError); assert it actually fed."""
+    feed.cancel()
+    with suppress(asyncio.CancelledError):
+        await feed
+    assert blocks_fed[0] > 0, "the PCM feed never pushed a block — the churn ran dry"
+    return blocks_fed[0]
+
+
 async def _drive_stream_client_once(app, recorder: PopenRecorder, proc_count: int) -> Any:
-    """One connect → first chunk → abrupt cancel cycle; returns the (now torn
-    down) fanout singleton for the telemetry assertions."""
+    """One connect → first chunk → live PCM flow → abrupt cancel cycle; returns
+    the (now torn down) fanout singleton and the number of PCM blocks fed."""
     task, fanout, disconnected = await _start_stream_client(app, recorder, proc_count)
-    await _kill_client(task, disconnected)
-    return fanout
+    feed, blocks_fed = await _run_pcm_feed_until_stdin_flow(recorder, proc_count)
+    try:
+        await _kill_client(task, disconnected)
+    finally:
+        await _stop_pcm_feed(feed, blocks_fed)
+    return fanout, blocks_fed[0]
 
 
 async def _drive_concurrent_trio(app, recorder: PopenRecorder, proc_count: int) -> Any:
     """Three simultaneous /stream.mp3 clients share ONE transcoder; all three
-    are killed at once. Returns the shared singleton."""
+    are killed at once. Returns the shared singleton and the PCM blocks fed."""
     started = [await _start_stream_client(app, recorder, proc_count) for _ in range(2)]
     # The third client joins the EXISTING singleton (no new spawn): start it
     # against the already-reached proc_count and give it its first chunk.
@@ -228,6 +303,8 @@ async def _drive_concurrent_trio(app, recorder: PopenRecorder, proc_count: int) 
         if message["type"] == "http.response.body" and message.get("body"):
             first_chunk.set()
 
+    feed: "asyncio.Task[None]" | None = None
+    blocks_fed = [0]
     third = asyncio.create_task(app(_stream_scope(), receive, send_tracking))
     try:
         await _push_until_first_chunk(recorder, proc_count, first_chunk)
@@ -237,7 +314,13 @@ async def _drive_concurrent_trio(app, recorder: PopenRecorder, proc_count: int) 
         assert fanout.status().client_count == 3, (
             f"len(state.audio_clients) must equal live clients mid-drive, got {fanout.status().client_count}"
         )
+        # FU-4: singleton live with all three clients attached — start the live feed.
+        feed, blocks_fed = await _run_pcm_feed_until_stdin_flow(recorder, proc_count)
     except BaseException:
+        if feed is not None:
+            feed.cancel()
+            with suppress(asyncio.CancelledError):
+                await feed
         third.cancel()
         disconnected.set()
         with suppress(asyncio.CancelledError):
@@ -248,7 +331,8 @@ async def _drive_concurrent_trio(app, recorder: PopenRecorder, proc_count: int) 
     for task, _fanout, kill_event in started:
         await _kill_client(task, kill_event)
     await _kill_client(third, disconnected)
-    return fanout
+    fed = await _stop_pcm_feed(feed, blocks_fed)
+    return fanout, fed
 
 
 # ---------------------------------------------------------------------------
@@ -279,14 +363,22 @@ async def test_p6_disconnect_churn_zero_zombies(fake_popen, fake_ffmpeg_exe):
     total = trio_procs + params.p6_clients
 
     if params.p6_concurrent_trio:
-        fanout = await _drive_concurrent_trio(ui_app, fake_popen, proc_count=1)
+        fanout, fed = await _drive_concurrent_trio(ui_app, fake_popen, proc_count=1)
+        # FU-4: the zero-drop pin below is non-vacuous only when live PCM flowed
+        assert fed > 0, "the trio ran dry — dropped_pcm_blocks == 0 would assert nothing"
+        assert len(fake_popen[0].stdin.buffer) > 0, "PCM never reached the trio's transcoder stdin"
         dropped_pcm_blocks += fanout.status().dropped_pcm_blocks
         rss = _read_rss()
         if rss is not None:
             rss_samples.append(rss)
 
     for _cycle in range(params.p6_clients):
-        fanout = await _drive_stream_client_once(ui_app, fake_popen, proc_count=trio_procs + _cycle + 1)
+        proc_index = trio_procs + _cycle
+        fanout, fed = await _drive_stream_client_once(ui_app, fake_popen, proc_count=proc_index + 1)
+        assert fed > 0, f"cycle {_cycle} ran dry — dropped_pcm_blocks == 0 would assert nothing"
+        assert len(fake_popen[proc_index].stdin.buffer) > 0, (
+            f"PCM never reached cycle {_cycle}'s transcoder stdin"
+        )
         # the last release must tear the singleton down between cycles
         assert await _cond_async(lambda: state.audio_clients == [], timeout=8.0), "a killed client kept its queue"
         assert await _cond_async(lambda: fanout_threads_alive() == 0, timeout=8.0), (
@@ -306,7 +398,9 @@ async def test_p6_disconnect_churn_zero_zombies(fake_popen, fake_ffmpeg_exe):
     assert state.audio_clients == [], "PCM queues left registered after the churn"
     assert state.active_subprocesses == set(), "the shutdown kill list still holds transcoders"
     assert fanout_threads_alive() == 0, "fanout threads outlived the whole churn"
-    assert dropped_pcm_blocks == 0, "the pump dropped PCM blocks under churn (it must never stall)"
+    assert dropped_pcm_blocks == 0, (
+        "the feeder dropped live PCM blocks under churn — it must drain every pushed block through a live pipe"
+    )
     if len(rss_samples) >= 2:
         assert rss_samples[-1] <= rss_samples[0] * 1.10, (
             f"RSS did not stay flat across the churn: {rss_samples[0]} -> {rss_samples[-1]}"
