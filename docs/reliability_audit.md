@@ -260,6 +260,33 @@ queue. Tens/day on a public stream.
 per-client bounded queues (clients own no subprocess); interim: watchdog
 killing ffmpeg whose client queue has been full >N s.
 
+**Status: fixed-in rel-10-stream** — the full fix landed, not the interim
+watchdog. One shared ffmpeg lives in a process-wide singleton on
+`state.stream_fanout` (`app/stream_fanout.py`; launch contract in
+`stream_fanout_args.py`, subprocess lifecycle in
+`stream_fanout_proc.TranscoderSupervisor`); clients get bounded queues of the
+cleaned MP3 bytes (drop-oldest) and own no subprocess — the per-client
+generator path is gone from `app_ui.py`. Cleanup no longer depends on the
+abandoned generator's `finally`: the fan-out pump is the single writer of each
+session's fullness clock and evicts any client whose queue stayed full
+>`stale_client_s` (default 10 s), poisoning the parked frame with a stop
+sentinel — abandoned generators are reaped, not parked forever, so the leak
+is closed regardless of Starlette's threadpool behavior. Subprocess hard rule:
+terminate-before-join escalation (stdin EOF → wait → kill → reap) so no ffmpeg
+outlives its owner. Respawn is indefinite with capped linear backoff — no
+permanent give-up by design (REL-15's lesson); the loop is bounded because the
+singleton only exists while clients do (last release tears it down and retires
+the slot; deliberately NOT cleared by `reset()` — a musical reset must not
+kill the audience stream). The argv is byte-identical to the legacy per-client
+transcoder (`build_mp3_args`, pinned by test); spawn failure serves an empty
+stream, never a hang. `FanoutStatus` telemetry exists on the singleton for
+tests/soak introspection — deliberately no new endpoint (scope discipline).
+Documented residual: a slow-but-alive consumer that falls behind with zero
+consumption is evicted once its queue stays full past the staleness window —
+deliberate live-latency bound; it reconnects. Adjacent relay `None`-poison
+`TypeError` (`YouTubeRelay._write_block`) discovered during this unit is out
+of scope — noted as a U10 follow-up. Pinned by `tests/test_stream_fanout.py`.
+
 ### REL-11 [High] Recording file writes run on the real-time mixer thread
 `framework_state.py:460-479` — `handle.write(pcm_data)` inline in
 `broadcast_audio`, called every ~46 ms tick. Any disk stall (page-cache

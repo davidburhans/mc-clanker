@@ -245,7 +245,7 @@ against fakes; documented how to run it.
 | 5 rel-storage-retention | **landed** (1013p/16s green after round-1 fixes; invariant 4 preserved) | b53a981 |
 | 6 rel-job-queue | **landed** (1032p/16s green; pending-only abandon + reaper + depth throttle; claim SQL untouched) | b0e794c |
 | 7 rel-db-offloop | **landed** (1047p/16s green; dialect-gated PG engine resilience; middleware + audio-route DB off-loop via to_thread; SQLite fallback byte-identical; T6 fast-subcase test corrected to its documented Basic-auth intent) | 0b2ee6a |
-| 8 rel-stream-fanout | pending | — |
+| 8 rel-stream-fanout | **landed** (1071p/16s green; one shared ffmpeg + per-client bounded queues, stale-client eviction reaper for abandoned frames, capped-backoff respawn — zero zombie ffmpeg on abrupt disconnect) | b83ccee |
 | 9 rel-recording-writer | pending | — |
 | 10 rel-youtube-247 | pending | — |
 | 11 rel-exports | pending | — |
@@ -278,6 +278,14 @@ against fakes; documented how to run it.
 - rel-04 (P2, report-only): during a sustained DB outage, audit buffers grow
   without bound (retain-over-drop is the invariant-4-correct choice) —
   surface a failed-flush/backlog counter in /api/health during U15.
+
+- rel-10 (P2, report-only): adjacent live bug found, out of scope —
+  `YouTubeRelay._write_block` does not guard `None`: a `trigger_shutdown`
+  poison delivered to a non-full relay queue raises `TypeError` (outside its
+  `except (BrokenPipeError, OSError, ValueError)` tuple) and kills the writer
+  thread. Harmless today (poison only flies during process exit, and
+  `stop()`'s join sees a dead thread) — fold into U10; the fan-out handles
+  `None` correctly.
 
 ## Decisions log
 
