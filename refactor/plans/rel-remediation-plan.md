@@ -259,14 +259,18 @@ against fakes; documented how to run it.
 | 14 rel-p3-hygiene | **landed** (1178p/17s green after round-1 fixes; icecast deleted) | 1f1abb4 |
 | 15 rel-soak-harness | **landed** (SOAK=1: 9p/1s fast 3.1s + full 9.3s; normal 1178p/26s) | 33f3a1f |
 
-## Follow-ups round 2 — FU units (post-push, user-directed)
+## Follow-ups round 2 — FU units (post-push, user-directed) — COMPLETE
+(2026-09-12: all four FU units landed; remaining ledger entries below are
+cosmetic/documentation residuals — typed annotations on moved private helpers,
+stream_fanout 532-line split, worker.py 498/500 headroom note, soak
+log-episode note — none behavioral.)
 
 | # | Unit | Items | Branch | Status |
 |---|------|-------|--------|--------|
 | FU-1 | rel-fu-health | mixer consecutive-failure counter + health + log rate-limit (rel-01); audit backlog/failed-flush health counters (rel-04); trigger_shutdown subprocess-kill outside sync_lock (rel-11); stems.py:23 sanitize (rel-01); psycopg2 TCP keepalives in db.py (rel-17) | `rel-fu-1-health` | **landed** (10 FU-1 regression tests red→green; full gate 1188p/26s) |
-| FU-2 | rel-fu-loop | pregen epoch/generation counter — stale pre-reset result acceptance (rel-02); outage streak resets on successful SUBMIT not read-probe (rel-12); loop_orchestrator.py split under 500 (rel-17) | `rel-fu-2-loop` | **landed** (9 FU-2 regression tests red→green (`tests/test_loop_epoch_recovery.py` E1–E4/O1–O4/S1); characterization + divergence suites untouched & green (pure move); full gate 1198p/26s) |
-| FU-3 | rel-fu-worker | consecutive_generation_timeouts in worker /health; breaker timeout->fail->timeout branch pin (rel-03); _refresh_lease worker_id-scoped; _mark_job_complete 0-rowcount not counted processed; py3.11 TimeoutError-alias note; worker.py split under 500 (rel-03/24) | `rel-fu-3-worker` | **landed** (6 FU-3 regression tests red→green (`tests/test_worker_fu3.py` H1/B5/B6/R1/C1/S1); keep-green worker suites untouched & green (pure move split first, then 4 behavior edits); full gate 1203p/26s, soak 9p/1s) |
-| FU-4 | rel-fu-exports | stats/timeline asyncio.to_thread + (show_id, relative_time_ms) index (rel-13); reasoning_logs.py split; export_chunks TYPE_CHECKING hints; fanout acquire_client rollback orphan kill (rel-10); soak P6 live PCM feed for dropped_pcm_blocks | `rel-fu-4-exports` | **landed** (6 FU-4 regression tests red→green (`tests/test_fu4_exports.py` O1/O2/I1/S1/H1/R1); soak P6 live-PCM feed upgraded in place, red-proofed feed-disabled; keep-green reasoning/fanout/export suites untouched & green (pure move split); full gate 1209p/26s, soak 9p/1s) |
+| FU-2 | rel-fu-loop — **landed 59bae97** (1197p/26s) | pregen epoch/generation counter — stale pre-reset result acceptance (rel-02); outage streak resets on successful SUBMIT not read-probe (rel-12); loop_orchestrator.py split under 500 (rel-17) | `rel-fu-2-loop` | **landed** (9 FU-2 regression tests red→green (`tests/test_loop_epoch_recovery.py` E1–E4/O1–O4/S1); characterization + divergence suites untouched & green (pure move); full gate 1198p/26s) |
+| FU-3 | rel-fu-worker — **landed bf70b7a** (1203p/26s) | consecutive_generation_timeouts in worker /health; breaker timeout->fail->timeout branch pin (rel-03); _refresh_lease worker_id-scoped; _mark_job_complete 0-rowcount not counted processed; py3.11 TimeoutError-alias note; worker.py split under 500 (rel-03/24) | `rel-fu-3-worker` | **landed** (6 FU-3 regression tests red→green (`tests/test_worker_fu3.py` H1/B5/B6/R1/C1/S1); keep-green worker suites untouched & green (pure move split first, then 4 behavior edits); full gate 1203p/26s, soak 9p/1s) |
+| FU-4 | rel-fu-exports — **landed 6c55f86** (1209p/26s; soak green) | stats/timeline asyncio.to_thread + (show_id, relative_time_ms) index (rel-13); reasoning_logs.py split; export_chunks TYPE_CHECKING hints; fanout acquire_client rollback orphan kill (rel-10); soak P6 live PCM feed for dropped_pcm_blocks | `rel-fu-4-exports` | **landed** (6 FU-4 regression tests red→green (`tests/test_fu4_exports.py` O1/O2/I1/S1/H1/R1); soak P6 live-PCM feed upgraded in place, red-proofed feed-disabled; keep-green reasoning/fanout/export suites untouched & green (pure move split); full gate 1209p/26s, soak 9p/1s) |
 
 ## Follow-ups (from unit reviews)
 
