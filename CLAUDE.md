@@ -146,7 +146,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | File | Class/Functions | Responsibility |
 |------|-----------------|----------------|
 | `framework_main_async.py` | (re-export shim) | Thin re-export shim — preserves the frozen public API; `AsyncFrameworkLoop` now lives in `loop_orchestrator.py` |
-| `loop_orchestrator.py` | `AsyncFrameworkLoop` | Async DJ set orchestrator — coordinates conductor, jobs, fetching, mixing; ctor-injects `ConductorPort` + `MixerController` (via `mixer_factory`) |
+| `loop_orchestrator.py` | `AsyncFrameworkLoop` | Async DJ set orchestrator — coordinates conductor, jobs, fetching, mixing; ctor-injects `ConductorPort` + `MixerController` (via `mixer_factory`); loop-failure semantics (REL-18/19): failed iterations retry on an escalated ±25 %-jitter backoff (`loop_retry_backoff_delay`, first failure keeps the flat 2 s, cap 30 s, ladder resets on a clean pass) and the conductor call is skipped once 3 consecutive job submits fail (`LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES`, foreground + pregen gated; a once-per-loop `pending_depth()` probe resumes it within one loop of the DB returning); a startup failure flips only `state.is_running` — the `trigger_shutdown()` kill switch stays reserved for process shutdown |
 | `ports.py` | `ConductorPort`, `MixerController`, `JobQueuePort`, `AudioFetchPort`, `AuditSinkPort` | Hexagonal port protocols (E5) |
 | `framework_state.py` | `GlobalState`, `state` | Thread-safe shared state |
 | `recording_sink.py` | `RecordingSink`, `SinkStatus`, `end_live_show_row` | Per-recording writer threads (REL-11): bounded queue, drop-oldest + dropped-bytes counter, `put_nowait`-only audio path; the writer owns the handle and is the single owner of WAV finalize; `end_live_show_row` ends a live Show row on shutdown (REL-22) |
@@ -176,7 +176,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/worker.py` | Async job processor (separate container) |
 | `app/worker_routes.py` | Worker health check/stats endpoints |
 | `app/garage_client.py` | Async boto3 wrapper for Garage/MinIO S3 |
-| `app/job_waiter.py` | Async LISTEN/NOTIFY waiter for job completion |
+| `app/job_waiter.py` | Async LISTEN/NOTIFY waiter for job completion (REL-17: waits in `WAITER_SLICE_SECONDS = 5.0` slices with a per-slice `conn.is_closed()` check — a dead LISTEN conn is caught within one slice instead of holding the pooled conn until the full job timeout; notify/deadline/dead-conn exits all funnel into one final status fetch on a fresh pool conn, preserving the missed-notify race coverage) |
 | `app/cleanup.py` | Periodic expired job/audio cleanup + storage retention (REL-05/REL-16): show-recording/export sweeps, stale session-routing reaper, opt-in LLM corpus retention (NDJSON archive-before-delete; default keep-forever). Passes live in `app/retention.py`; runs as a dedicated compose `cleanup` service and in the worker's cleanup loop |
 | `app/onboarding.py` | Pre-flight configuration health checks |
 | `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage |
