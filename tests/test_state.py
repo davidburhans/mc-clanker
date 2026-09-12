@@ -542,6 +542,53 @@ def test_trigger_shutdown_with_exception_in_subprocess():
     assert mock_process not in state.active_subprocesses
 
 
+def test_trigger_shutdown_does_not_hold_sync_lock_across_subprocess_wait():
+    """FU-1 (rel-11 follow-up): the subprocess kill/wait sweep must run OUTSIDE
+    sync_lock. A slow-dying proc blocks p.wait up to 1 s per proc; under the
+    lock that stalls the ~46 ms audio tick and every other sync_lock holder
+    during shutdown. Deterministic: a fake proc parks inside wait(), and a
+    concurrent sync_lock acquire must succeed while the sweep is in flight
+    (under the old code the acquire times out — the lock is held across wait)."""
+    import threading
+
+    kill_started, release = threading.Event(), threading.Event()
+
+    class SlowKillProc:
+        pid = 4242
+
+        def __init__(self) -> None:
+            self.killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+            kill_started.set()
+
+        def wait(self, timeout=None) -> None:
+            release.wait(timeout=5)  # block exactly like a slow-dying proc
+
+    state = GlobalState()
+    state.is_running = True
+    state.shutdown_event.clear()
+    state.audio_clients = []
+    proc = SlowKillProc()
+    state.active_subprocesses.add(proc)
+
+    shutdown_thread = threading.Thread(target=state.trigger_shutdown, name="shutdown-probe")
+    shutdown_thread.start()
+    try:
+        assert kill_started.wait(timeout=2), "shutdown must reach the kill sweep"
+        assert state.sync_lock.acquire(timeout=1.0), (
+            "sync_lock must be free while the subprocess kill/wait is in flight"
+        )
+        state.sync_lock.release()
+    finally:
+        release.set()
+        shutdown_thread.join(timeout=5)
+
+    assert proc.killed
+    assert proc not in state.active_subprocesses
+
+
 def test_register_subprocess_thread_safety():
     """Test subprocess registration is thread-safe via lock."""
     import threading

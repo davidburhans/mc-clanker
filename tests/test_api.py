@@ -1,4 +1,7 @@
+import io
 import time
+import warnings
+import wave
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -206,6 +209,42 @@ def test_download_stem_copies_audio_before_leaving_lock(client, monkeypatch):
     )
 
 
+def test_download_stem_sanitizes_nan_buffer(client):
+    """FU-1 (rel-01/21 follow-up): the stems download path must sanitize
+    non-finite floats through the shared mixer sanitizer before the int16
+    cast — np.clip preserves NaN, so a poisoned cached stem downloads as
+    platform-defined int16 garbage (the third clip site, third REL-21 site).
+
+    The no-invalid-cast-warning pin is the platform-independent red detector:
+    on some platforms NaN happens to cast to 0, which would make the sample
+    values pass even against the unsafe np.clip path. The warning only fires
+    when a non-finite value actually reaches the cast."""
+    prompt = "nan-poisoned stem"
+    state.active_stems = [{"prompt": prompt}]
+    state.last_generated_stems[prompt] = np.array(
+        [[np.nan], [np.inf], [-np.inf], [0.5]], dtype=np.float32
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        response = client.get("/api/stems/0/download")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    invalid_cast = [w for w in caught if "invalid value" in str(w.message)]
+    assert not invalid_cast, f"NaN reached the int16 cast (np.clip preserves NaN): {invalid_cast}"
+
+    buf = io.BytesIO(response.content)
+    with wave.open(buf, "rb") as wf:
+        assert wf.getnchannels() == 1
+        assert wf.getsampwidth() == 2
+        assert wf.getframerate() == 44100
+        samples = np.frombuffer(wf.readframes(wf.getnframes()), dtype="<i2")
+
+    assert samples.tolist() == [0, 32767, -32767, 16383]
+    assert np.isfinite(samples.astype(np.float64)).all()
+
+
 def test_get_models(client):
     response = client.get("/api/models")
     assert response.status_code == 200
@@ -402,6 +441,9 @@ def test_health_check(client):
     assert "is_running" in data
     # REL-01: health payload must expose mixer render-thread liveness.
     assert "mixer_alive" in data
+    # FU-1: purely additive keys — mixer tick-failure counters + audit health.
+    assert "mixer_tick_failures" in data
+    assert "audit" in data
 
 
 def test_download_stem_previous_set(client):

@@ -1088,3 +1088,96 @@ async def test_stop_show_flush_persists_remaining_rows(client):
     db = DatabaseManager.get_instance()
     with db.session() as session:
         assert session.query(LLMInteraction).filter(LLMInteraction.show_id == show_b).count() == 2
+
+
+# --------------------------------------------------------------------------- #
+# FU-1 — audit health counters (backlog + failed flushes visible in /api/health)
+#
+# rel-04 follow-up: during a sustained DB outage the buffers grow unbounded
+# (retain-over-drop is the invariant-4-correct choice) and the repeated flush
+# failures are invisible — the only signal was a bare print in the except
+# branch. These tests pin the module-level monotonic counter (plan
+# units/rel-fu-1-plan.md D4) and the additive /api/health "audit" group (D3).
+# --------------------------------------------------------------------------- #
+
+
+def _poison_insert(monkeypatch) -> None:
+    """Force the flush's DB write to raise (the name is resolved at call time,
+    so the patch lands through asyncio.to_thread)."""
+    import app.framework.audit_recording as audit_recording_mod
+
+    def _boom(llm_buffer, action_buffer):
+        raise RuntimeError("simulated DB outage (flush failed)")
+
+    monkeypatch.setattr(audit_recording_mod, "_insert_audit_batches", _boom)
+
+
+async def test_failed_flush_counter_and_backlog_visible_in_health(client, monkeypatch):
+    """C1 (FU-1): a failed flush bumps audit_recording.audit_failed_flushes,
+    keeps every row buffered IN ORDER (invariant 4), and /api/health surfaces
+    backlog + failure count. Health must read the MODULE attribute at request
+    time (a from-imported int would go stale)."""
+    import app.framework.audit_recording as audit_recording_mod
+
+    monkeypatch.setattr(audit_recording_mod, "audit_failed_flushes", 0)
+    llm_rows = [_buffered_llm_row(41, i) for i in range(2)]
+    action_rows = [_buffered_action_row(41, i) for i in range(3)]
+    state.llm_interaction_buffer = list(llm_rows)
+    state.action_buffer = list(action_rows)
+    _poison_insert(monkeypatch)
+
+    await flush_recording_buffers()  # swallows internally and re-queues
+
+    assert audit_recording_mod.audit_failed_flushes == 1
+    assert state.llm_interaction_buffer == llm_rows, "failure must re-prepend rows IN ORDER (invariant 4)"
+    assert state.action_buffer == action_rows
+
+    data = client.get("/api/health").json()
+    assert data["audit"] == {
+        "buffered_interactions": 2,
+        "buffered_actions": 3,
+        "failed_flushes": 1,
+    }
+
+
+async def test_successful_flush_does_not_increment_counter(client, monkeypatch):
+    """C2 (FU-1): a healthy flush keeps failed_flushes at 0 and drains the
+    backlog — health reports empty buffers after the flush."""
+    import app.framework.audit_recording as audit_recording_mod
+
+    monkeypatch.setattr(audit_recording_mod, "audit_failed_flushes", 0)
+    _install_fake_db(monkeypatch)  # happy-path fake DB
+
+    show_id = _unique_show_id()
+    state.llm_interaction_buffer = [_buffered_llm_row(show_id, i) for i in range(2)]
+    state.action_buffer = [_buffered_action_row(show_id, i) for i in range(1)]
+
+    await flush_recording_buffers()
+
+    assert audit_recording_mod.audit_failed_flushes == 0
+    assert state.llm_interaction_buffer == []
+    assert state.action_buffer == []
+
+    data = client.get("/api/health").json()
+    assert data["audit"] == {
+        "buffered_interactions": 0,
+        "buffered_actions": 0,
+        "failed_flushes": 0,
+    }
+
+
+async def test_failed_flush_counter_is_monotonic(monkeypatch):
+    """C3 (FU-1): the failed-flush counter never resets — two consecutive
+    failures accumulate, so an intermittent outage stays visible after
+    recovery (consumers diff the lifetime count)."""
+    import app.framework.audit_recording as audit_recording_mod
+
+    monkeypatch.setattr(audit_recording_mod, "audit_failed_flushes", 0)
+    state.llm_interaction_buffer = [_buffered_llm_row(43, 0)]
+    state.action_buffer = []
+    _poison_insert(monkeypatch)
+
+    await flush_recording_buffers()  # rows re-queue -> second flush has work too
+    await flush_recording_buffers()
+
+    assert audit_recording_mod.audit_failed_flushes == 2

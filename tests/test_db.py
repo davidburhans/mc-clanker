@@ -259,9 +259,17 @@ class TestEngineResilienceRel09:
         assert call_kwargs["max_overflow"] == 20
         assert call_kwargs["pool_pre_ping"] is True
         assert call_kwargs["pool_recycle"] == 1800
+        # FU-1 (rel-17 follow-up): exact-dict assert grows the libpq TCP
+        # keepalives — a half-open pooled conn must be detected in ~60 s
+        # instead of the OS default (often 2 h+); pre_ping only catches conns
+        # that error, not ones that silently black-hole.
         assert call_kwargs["connect_args"] == {
             "connect_timeout": 5,
             "options": "-c statement_timeout=10000",
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
         }
 
     def test_sqlite_fallback_engine_unchanged(self, monkeypatch):
@@ -334,7 +342,14 @@ class TestEngineResilienceRel09:
 
         call_kwargs = mock_engine.call_args.kwargs
         assert call_kwargs["pool_pre_ping"] is True
+        # FU-1 (rel-17 follow-up): same keepalive growth as T1 — this test pins
+        # the PG branch by equality too (postgresql+psycopg2 URL), so it must
+        # carry the identical connect_args contract.
         assert call_kwargs["connect_args"] == {
             "connect_timeout": 5,
             "options": "-c statement_timeout=10000",
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
         }

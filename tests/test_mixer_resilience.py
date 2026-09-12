@@ -14,6 +14,7 @@ TDD note: these tests were written BEFORE the fix; see the
 rel-remediation-plan U1 spec for the acceptance clauses they pin.
 """
 
+import logging
 import threading
 import time
 from unittest.mock import patch
@@ -228,3 +229,143 @@ def test_health_detects_dead_mixer_thread(client):
     finally:
         with state.sync_lock:
             state.mixer_thread = None
+
+
+# ---------------------------------------------------------------------------
+# FU-1 — render-tick failure counters + log rate-limit (rel-01 follow-up)
+#
+# The REL-01 guard bounded the *crash* risk but logged a full traceback on
+# EVERY failing tick (~21.7 lines/s under persistent failure) and nothing
+# counted the failures, so /api/health could not distinguish a flapping tick
+# from a wedged render loop. These tests pin the counter + rate-limit design
+# (plan units/rel-fu-1-plan.md D1/D2/D3).
+# ---------------------------------------------------------------------------
+
+
+def _fail_n_ticks(m: Mixer, n: int) -> None:
+    """Drive _stream_loop synchronously with a callback that raises exactly n
+    times, then stops the loop (the file's synchronous drive pattern)."""
+    ticks = {"count": 0}
+
+    def failing_callback(outdata, frames, _time, _status):
+        ticks["count"] += 1
+        if ticks["count"] >= n:
+            m._running = False
+        raise RuntimeError("synthetic mixer tick failure")
+
+    m._running = True
+    with patch.object(m, "_callback", failing_callback):
+        m._stream_loop()
+
+
+def test_consecutive_tick_failures_counted_and_visible_in_health(client):
+    """F1 (FU-1): consecutive raising ticks increment
+    state.mixer_tick_failures (no clean tick in between -> consecutive stays
+    up) and /api/health surfaces the same numbers."""
+    m = Mixer(channels=1)
+    m.blocksize = 512
+    _fail_n_ticks(m, 7)
+
+    with state.sync_lock:
+        assert state.mixer_tick_failures == {"consecutive": 7, "total": 7}
+
+    data = client.get("/api/health").json()
+    assert data["mixer_tick_failures"] == {"consecutive": 7, "total": 7}
+
+
+def test_clean_tick_resets_consecutive_not_total(client):
+    """F2 (FU-1): a clean tick zeroes ``consecutive`` (one recovery episode)
+    while ``total`` keeps counting every failed tick of the run."""
+    m = Mixer(channels=1)
+    m.blocksize = 512
+    tick_count = {"n": 0}
+
+    def flaky_callback(outdata, frames, _time, _status):
+        tick_count["n"] += 1
+        if tick_count["n"] <= 3:
+            raise RuntimeError("synthetic mixer tick failure")
+        if tick_count["n"] >= 6:
+            m._running = False
+            return
+        outdata.fill(0.25)
+
+    m._running = True
+    with patch.object(m, "_callback", flaky_callback):
+        m._stream_loop()
+
+    with state.sync_lock:
+        assert state.mixer_tick_failures == {"consecutive": 0, "total": 3}
+
+
+def test_tick_failure_log_rate_limited(monkeypatch, caplog):
+    """F3 (FU-1): the traceback is logged on the first failure and every Nth
+    consecutive one (TICK_FAILURE_LOG_EVERY, pinned at N=5), plus exactly ONE
+    recovery INFO line on the first clean tick. Counter-based formula, no
+    wall-clock waits."""
+    import app.framework.framework_mixer as framework_mixer
+
+    monkeypatch.setattr(framework_mixer, "TICK_FAILURE_LOG_EVERY", 5)
+
+    m = Mixer(channels=1)
+    m.blocksize = 512
+    tick_count = {"n": 0}
+
+    def flaky_callback(outdata, frames, _time, _status):
+        tick_count["n"] += 1
+        if tick_count["n"] <= 12:
+            raise RuntimeError("synthetic mixer tick failure")
+        m._running = False  # tick 13 succeeds -> recovery line, then stop
+
+    m._running = True
+    with caplog.at_level(logging.INFO):
+        with patch.object(m, "_callback", flaky_callback):
+            m._stream_loop()
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR and "tick failed" in r.getMessage()]
+    assert len(errors) == 3, [r.getMessage() for r in errors]
+    assert "1 consecutive" in errors[0].getMessage()
+    assert "5 consecutive" in errors[1].getMessage()
+    assert "10 consecutive" in errors[2].getMessage()
+
+    recoveries = [r for r in caplog.records if r.levelno == logging.INFO and "recovered" in r.getMessage()]
+    assert len(recoveries) == 1, [r.getMessage() for r in recoveries]
+    assert "recovered after 12 failing ticks" in recoveries[0].getMessage()
+
+
+def test_mixer_start_zeroes_failure_counters_and_reset_clears_them(client):
+    """F4 (FU-1): counter lifecycle — start() zeroes (fresh run => fresh
+    health), stop() PRESERVES (a died-after-failures mixer stays reportable),
+    reset() clears (fixture isolation, like recording_write_errors)."""
+    m = Mixer(channels=1)
+    m.blocksize = 512
+    _fail_n_ticks(m, 3)
+    with state.sync_lock:
+        assert state.mixer_tick_failures == {"consecutive": 3, "total": 3}
+
+    m.stop()
+    with state.sync_lock:
+        assert state.mixer_tick_failures == {"consecutive": 3, "total": 3}, (
+            "stop() must not zero the counters — the last counts stay reportable"
+        )
+
+    fresh = Mixer(channels=1)
+    fresh.start()
+    try:
+        with state.sync_lock:
+            assert state.mixer_tick_failures == {"consecutive": 0, "total": 0}
+    finally:
+        fresh.stop()
+
+    state.reset()
+    with state.sync_lock:
+        assert state.mixer_tick_failures == {"consecutive": 0, "total": 0}
+
+
+def test_health_tick_failures_zero_when_idle(client):
+    """F5 (FU-1): with no mixer ever started, health reports zeroed counters
+    (always an object — no None state) while mixer_alive stays None; 'never
+    started' is mixer_alive's job, not a second None-semantics on the
+    counters (plan D3)."""
+    data = client.get("/api/health").json()
+    assert data["mixer_alive"] is None
+    assert data["mixer_tick_failures"] == {"consecutive": 0, "total": 0}
