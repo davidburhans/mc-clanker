@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import logging
 import random
 import time
 from collections.abc import Awaitable, Callable
@@ -50,6 +51,10 @@ if TYPE_CHECKING:
 
     from app.framework.framework_mixer import Mixer
     from app.framework.ports import ConductorPort
+
+# REL-29: the loop's per-250ms wait heartbeat went to stdout (tens of
+# thousands of lines/day); only the module-level logger carries it now.
+log = logging.getLogger(__name__)
 
 # Backoff between loop retries after a transient body error (review B1 watchdog).
 # Kept short so the set recovers quickly; overridable by tests / config.
@@ -147,6 +152,44 @@ STEM_CACHE_MAX_ENTRIES = 32
 # per loop this flushes every ~200 loops: crash loss bounded to the unflushed
 # tail, RAM bounded at ~1 MB. Module attr so tests can monkeypatch it.
 AUDIT_FLUSH_THRESHOLD_ROWS = 200
+
+# REL-28: bound on concurrent per-stem audio fetches (Garage GET + AAC decode
+# each). One uncached batch is 4-6 stems; parallel fetch removes the serial
+# 5-15 s/batch stall without hammering the object store. Module attr so tests
+# monkeypatch it (JOB_PENDING_DEPTH_LIMIT precedent).
+STEM_FETCH_CONCURRENCY = 4
+
+
+async def gather_stem_audio(
+    fetch: Callable[[str], Awaitable[Any]],
+    audio_paths: list,
+    concurrency: int | None = None,
+) -> list:
+    """REL-28: fetch per-stem audio with bounded concurrency, order-preserving.
+
+    ``fetch`` is the loop's ``_fetch_audio`` port delegate; ``audio_paths`` is
+    aligned with the caller's pending_jobs (``None`` = failed job, never
+    fetched). Returns audio-or-None per entry in the SAME order
+    (``asyncio.gather`` order guarantee); cache writes and the foreground/
+    pregen ``state.cache_stem`` divergence (brief-01 risk #4) stay with the
+    caller so one shared helper cannot blur that boundary.
+
+    The semaphore is created per call — no module-level event-loop binding.
+
+    Example::
+
+        fetched = await gather_stem_audio(loop._fetch_audio, paths)
+    """
+    limit = STEM_FETCH_CONCURRENCY if concurrency is None else concurrency
+    semaphore = asyncio.Semaphore(limit)
+
+    async def fetch_one(path):
+        if path is None:
+            return None
+        async with semaphore:
+            return await fetch(path)
+
+    return await asyncio.gather(*(fetch_one(p) for p in audio_paths))
 
 
 def sanitize_master_bpm(candidate: Any, fallback: int | None) -> int:
@@ -726,22 +769,27 @@ class _LoopSteps:
             wait_duration = time.time() - wait_start
             print(f"[AsyncLoop-{self._loop_idx}] Jobs completed in {wait_duration:.2f}s")
 
-            # Process results (keyed lookup: a short/None result for one job must
-            # never shift the audio of the jobs after it)
-            for job_id, orig_idx, cache_key in pending_jobs:
-                audio_path = results.get(job_id)
-                if audio_path:
-                    # Fetch audio from Garage
-                    audio_data = await self._fetch_audio(audio_path)
-                    if audio_data is not None:
-                        self.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
-                        async with state.lock:
-                            state.cache_stem(local_next_stems[orig_idx]["prompt"], audio_data)
-                        outcomes[orig_idx] = "generated"
-                    else:
-                        outcomes[orig_idx] = "failed"
+            # REL-28: fetch concurrently (bounded) — was one serial Garage GET
+            # + AAC decode per stem. Keyed lookup survives the gather: a
+            # short/None result for one job must never shift another's audio.
+            # Cache writes + the state.cache_stem routing stay here, per stem,
+            # AFTER the gather (no lock held across an await).
+            audio_paths = [results.get(job_id) for job_id, _, _ in pending_jobs]
+            fetched = await gather_stem_audio(self._fetch_audio, audio_paths)
+            for (job_id, orig_idx, cache_key), audio_data in zip(pending_jobs, fetched):
+                if audio_data is not None:
+                    self.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
+                    async with state.lock:
+                        state.cache_stem(local_next_stems[orig_idx]["prompt"], audio_data)
+                    outcomes[orig_idx] = "generated"
                 else:
-                    print(f"Job {job_id} failed or timed out")
+                    # Same failure diagnostics the serial loop had,
+                    # distinguishing "job never completed" from "fetch
+                    # returned None".
+                    if results.get(job_id):
+                        print(f"Job {job_id} fetch returned no audio")
+                    else:
+                        print(f"Job {job_id} failed or timed out")
                     outcomes[orig_idx] = "failed"
         return outcomes
 
@@ -1112,7 +1160,7 @@ class _LoopSteps:
                     if playhead_moving and self._staged_audio_pending(current_ahead):
                         await asyncio.sleep(0.25)
                         continue
-                    print(f"[AsyncLoop-{self._loop_idx}] Pre-generation complete, using results")
+                    log.info("[AsyncLoop-%s] Pre-generation complete, using results", self._loop_idx)
                     # B1(a): guarantee a suspension point on this path. Every lock
                     # acquisition on a replay iteration is uncontended, so without
                     # this yield a fast path could monopolise the event loop.
@@ -1120,9 +1168,10 @@ class _LoopSteps:
                     break
 
                 if self._loop_idx > 1:
-                    print(
-                        f"[AsyncLoop-{self._loop_idx}] DEBUG: "
-                        f"current_ahead={current_ahead:.2f}s, waiting for pre-gen..."
+                    log.debug(
+                        "[AsyncLoop-%s] current_ahead=%.2fs, waiting for pre-gen...",
+                        self._loop_idx,
+                        current_ahead,
                     )
                 if current_ahead < BOUNDARY_BREAK_SECONDS:
                     # Still waiting for pre-gen, but we need to break to avoid missing the loop transition

@@ -11,6 +11,32 @@ from .schemas import CustomStemCreate, StemVolumeUpdate
 router = APIRouter()
 
 
+def _encode_wav_response(audio_data, index: int) -> Response:
+    """Encode a cached float32 stem as a 16-bit PCM WAV download (AUDIO-1).
+
+    The cache stores float32 in [-1, 1] but the WAV header below declares
+    16-bit PCM: convert instead of writing raw float32 bit patterns, which
+    players decoded as full-scale noise (review AUDIO-1). Same conversion as
+    the mixer in framework_mixer.py. Runs OUTSIDE state.lock (REL-31b) on a
+    copy taken under the lock.
+    """
+    pcm = (np.clip(audio_data, -1.0, 1.0) * 32767).astype("<i2")
+    channels = int(pcm.shape[1]) if pcm.ndim == 2 else 1
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(44100)
+        wf.writeframes(pcm.tobytes())
+
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="audio/wav",
+        headers={"Content-Disposition": f"attachment; filename=stem_{index}.wav"},
+    )
+
+
 @router.get("/stems")
 async def get_stems():
     """Get active stems with volumes and status."""
@@ -59,6 +85,9 @@ async def toggle_stem_solo(index: int):
 @router.get("/stems/{index}/download")
 async def download_stem(index: int, set: str = "active"):
     """Download a stem as a WAV file."""
+    # REL-31b: the lock section only resolves + copies — WAV encoding and the
+    # Response build run outside it, mirroring _mixer_thread_liveness's
+    # copy-under-lock-then-work-outside pattern.
     async with state.lock:
         if set == "active":
             stems = state.active_stems
@@ -79,25 +108,11 @@ async def download_stem(index: int, set: str = "active"):
         if audio_data is None:
             raise HTTPException(status_code=404, detail="Audio data not found")
 
-        # The cache stores float32 in [-1, 1] but the WAV header below declares
-        # 16-bit PCM: convert instead of writing raw float32 bit patterns, which
-        # players decoded as full-scale noise (review AUDIO-1). Same conversion
-        # as the mixer in framework_mixer.py.
-        pcm = (np.clip(audio_data, -1.0, 1.0) * 32767).astype("<i2")
-        channels = int(pcm.shape[1]) if pcm.ndim == 2 else 1
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(channels)
-            wf.setsampwidth(2)
-            wf.setframerate(44100)
-            wf.writeframes(pcm.tobytes())
+        # Detach from the LRU-shared buffer so the outside-lock encode is
+        # race-free by construction (the array is immutable-in-practice).
+        audio_copy = audio_data.copy()
 
-        buf.seek(0)
-        return Response(
-            content=buf.getvalue(),
-            media_type="audio/wav",
-            headers={"Content-Disposition": f"attachment; filename=stem_{index}.wav"},
-        )
+    return _encode_wav_response(audio_copy, index)
 
 
 @router.post("/stems/custom")

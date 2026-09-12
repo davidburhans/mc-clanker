@@ -140,7 +140,6 @@ class DJSlopApp {
         this.llmUrl = document.getElementById('llm-url');
         this.llmKey = document.getElementById('llm-key');
         this.llmModel = document.getElementById('llm-model');
-        this.icecastEnabled = document.getElementById('icecast-enabled');
         this.audiencePassword = document.getElementById('audience-password');
         this.togglePasswordBtn = document.getElementById('toggle-password');
 
@@ -620,7 +619,6 @@ class DJSlopApp {
                 this.llmUrl.value = config.base_url || '';
                 this.llmKey.value = config.api_key || '';
                 this.llmModel.value = config.model || '';
-                this.icecastEnabled.checked = config.icecast_enabled || false;
             }
         } catch (e) {
             console.error('Failed to load LLM config:', e);
@@ -1995,7 +1993,6 @@ class DJSlopApp {
             base_url: url,
             api_key: this.llmKey.value,
             model: this.llmModel.value,
-            icecast_enabled: this.icecastEnabled.checked,
             audience_password: this.audiencePassword.value
         };
 

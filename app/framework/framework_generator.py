@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import threading
 import time
@@ -11,6 +12,10 @@ from stable_audio_tools import create_model_from_config
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
 from app.gpu_monitor import GPUMonitor
+
+# REL-27b: stdout prints from the GPU worker are invisible to structured
+# logging/rotation; route them through the module logger instead.
+log = logging.getLogger(__name__)
 
 
 class ModelState:
@@ -73,11 +78,11 @@ class StableAudioEngine:
         config_path = self._get_cached_model_path(self.config_filename)
 
         if model_path is None or config_path is None:
-            print(f"[{self.repo_id}] Model not in cache, downloading...")
+            log.info("[%s] Model not in cache, downloading...", self.repo_id)
             model_path = hf_hub_download(repo_id=self.repo_id, filename=self.filename)
             config_path = hf_hub_download(repo_id=self.repo_id, filename=self.config_filename)
         else:
-            print(f"[{self.repo_id}] Loading model from cache: {model_path}")
+            log.info("[%s] Loading model from cache: %s", self.repo_id, model_path)
         return model_path, config_path
 
     def load(self):
@@ -98,9 +103,10 @@ class StableAudioEngine:
                 break
             except RuntimeError as e:
                 if "Cannot send a request, as the client has been closed" in str(e) and attempt < max_retries - 1:
-                    print(
-                        "Warning: httpx client closed during model loading "
-                        f"(attempt {attempt + 1}/{max_retries}). Retrying..."
+                    log.warning(
+                        "httpx client closed during model loading (attempt %d/%d). Retrying...",
+                        attempt + 1,
+                        max_retries,
                     )
                     time.sleep(2)
                 else:
@@ -119,7 +125,7 @@ class StableAudioEngine:
             del state_dict  # REL-08: release the CPU copy before the GPU move
             self.model = self.model.to(self.device)  # single device move
             self.sample_rate = self.model.sample_rate
-            print(f"[{self.repo_id}] Loaded successfully.")
+            log.info("[%s] Loaded successfully.", self.repo_id)
         except Exception as e:
             self.model = None
             raise e
@@ -144,7 +150,7 @@ class StableAudioEngine:
 
             seed = np.random.default_rng().integers(0, 2**32, dtype=np.uint32).item()
 
-            print(f"[{self.repo_id}] Generating stem {i + 1}/{len(requests)}: '{text_prompt}'...")
+            log.info("[%s] Generating stem %d/%d: '%s'...", self.repo_id, i + 1, len(requests), text_prompt)
             output = generate_diffusion_cond(
                 self.model,
                 steps=steps,
@@ -192,7 +198,7 @@ class GeneratorRegistry:
 
     def load(self):
         if not os.path.exists(self.config_path):
-            print(f"Config file {self.config_path} not found. Proceeding with empty registry.")
+            log.warning("Config file %s not found. Proceeding with empty registry.", self.config_path)
             return
 
         with open(self.config_path, "r") as f:
@@ -212,7 +218,7 @@ class GeneratorRegistry:
                     supported_families=model_info.get("supported_families"),
                 )
             else:
-                print(f"Unknown engine type '{engine_type}' for model '{model_id}'")
+                log.warning("Unknown engine type '%s' for model '%s'", engine_type, model_id)
                 continue
 
             # Don't load model here - just create engine instance and set to IDLE
@@ -276,15 +282,16 @@ class GeneratorRegistry:
             model_id = req.get("model_id")
             if model_id not in self.models:
                 if model_id:
-                    print(
-                        f"Warning: Requested model '{model_id}' not loaded. "
-                        f"Falling back to default '{self.default_model_id}'."
+                    log.warning(
+                        "Requested model '%s' not loaded. Falling back to default '%s'.",
+                        model_id,
+                        self.default_model_id,
                     )
                 model_id = self.default_model_id
 
             # Ensure the model is loaded before generation
             if model_id and not self.is_model_loaded(model_id):
-                print(f"Loading model '{model_id}' on-demand...")
+                log.info("Loading model '%s' on-demand...", model_id)
                 self._load_model_locked(model_id)
 
             if model_id not in model_requests:
@@ -308,7 +315,11 @@ class GeneratorRegistry:
             if common_sr is None:
                 common_sr = sr
             elif common_sr != sr:
-                print(f"Warning: Mismatched sample rates between engines ({common_sr} vs {sr}). Mixer may distort.")
+                log.warning(
+                    "Mismatched sample rates between engines (%s vs %s). Mixer may distort.",
+                    common_sr,
+                    sr,
+                )
 
             for j, res in enumerate(engine_results):
                 original_index = original_indices[model_id][j]
@@ -349,11 +360,11 @@ class GeneratorRegistry:
             self.gpu_monitor.track_model_load(model_id, engine.load)
             self.model_states[model_id] = ModelState.LOADED
             self.model_last_used[model_id] = time.monotonic()
-            print(f"[{model_id}] Model loaded successfully.")
+            log.info("[%s] Model loaded successfully.", model_id)
         except Exception as e:
             self.model_states[model_id] = ModelState.ERROR
             self.model_errors[model_id] = str(e)
-            print(f"[{model_id}] Failed to load model: {e}")
+            log.error("[%s] Failed to load model: %s", model_id, e)
             raise
 
     def unload_model(self, model_id):
@@ -372,7 +383,7 @@ class GeneratorRegistry:
             self.gpu_monitor.record_model_unload(model_id)
             self.model_states[model_id] = ModelState.IDLE
             self.model_last_used.pop(model_id, None)
-            print(f"[{model_id}] Model unloaded.")
+            log.info("[%s] Model unloaded.", model_id)
 
             # If this was the default model, reassign to first loaded model
             if self.default_model_id == model_id:

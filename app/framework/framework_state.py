@@ -228,9 +228,6 @@ class GlobalState:
         # download_progress dicts here were never read (dead — brief-03 ssA).
         self.generator = None
 
-        # Icecast
-        self.icecast_enabled = False
-
         # Audience message broadcast
         self.audience_message = ""
         self.audience_message_ts = None

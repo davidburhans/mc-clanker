@@ -147,7 +147,7 @@ class InstrumentCatalog(_Slice):
 
 
 class SessionConfig(_Slice):
-    """Auth + audience message + icecast toggle."""
+    """Auth + audience message."""
 
     _attrs = frozenset(
         {
@@ -155,6 +155,5 @@ class SessionConfig(_Slice):
             "audience_password",
             "audience_message",
             "audience_message_ts",
-            "icecast_enabled",
         }
     )

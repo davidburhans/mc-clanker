@@ -63,7 +63,6 @@ class LLMConfig(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
-    icecast_enabled: bool | None = None
     audience_password: str | None = None
 
 

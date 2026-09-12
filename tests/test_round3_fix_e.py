@@ -6,7 +6,6 @@ Covers the fixes landed in the round3-fixes branch:
 - E1  app/worker.py            : orphan audio delete re-checks row ownership
 - E2  app/cleanup.py           : Garage objects are deleted BEFORE the rows
 - E3  app/models/session_routing.py : UUID PK / TIMESTAMPTZ / indexes from migration 001
-- E4  app/framework/framework_icecast.py : _running cleared when ffmpeg dies
 - E5  app/onboarding.py        : docker compose restart is bounded by a timeout
 - E6  app/cleanup.py           : asyncio.Event makes SIGTERM interrupt the idle wait
 - E7  app/cleanup.py           : the one-shot cron pool gets command_timeout
@@ -291,55 +290,9 @@ def test_session_routing_still_creates_on_sqlite():
 
 
 # ---------------------------------------------------------------------------
-# E4 — ffmpeg death clears _running so is_running tells the truth
+# E4 — ffmpeg-death coverage was deleted together with the dead streamer
+# module (REL-26); the surviving E-numbered regression tests are unaffected.
 # ---------------------------------------------------------------------------
-
-
-class DeadFfmpeg:
-    """Popen stand-in whose process has already exited."""
-
-    returncode = 1
-    stdin = MagicMock()
-
-    def poll(self):
-        return self.returncode
-
-
-def _icecast_with_dead_ffmpeg(monkeypatch):
-    from app.framework.framework_icecast import IcecastStreamer
-
-    monkeypatch.setattr("app.framework.framework_icecast.subprocess.Popen", lambda *a, **k: DeadFfmpeg())
-    streamer = IcecastStreamer(host="h", port=1, password="p")
-    streamer._running = True
-    streamer._pcm_queue.put(b"\x00" * 8)  # first chunk (starts ffmpeg)
-    streamer._pcm_queue.put(b"\x00" * 8)  # second chunk -> poll() shows the exit
-    return streamer
-
-
-def test_ffmpeg_death_clears_running_state(monkeypatch):
-    """E4: after ffmpeg exits the streamer reports down and drops fed PCM."""
-    streamer = _icecast_with_dead_ffmpeg(monkeypatch)
-    streamer._stream_loop()
-
-    assert streamer.is_running is False
-    assert streamer.is_connected is False
-    streamer.feed_pcm(b"\x00" * 8)
-    assert streamer._pcm_queue.empty()
-
-
-def test_ffmpeg_death_allows_restart(monkeypatch):
-    """E4: start() is no longer refused by a stale 'already running' flag."""
-    streamer = _icecast_with_dead_ffmpeg(monkeypatch)
-    streamer._stream_loop()
-
-    live = MagicMock()
-    live.poll.return_value = None
-    live.stdin = MagicMock()
-    monkeypatch.setattr("app.framework.framework_icecast.subprocess.Popen", lambda *a, **k: live)
-
-    streamer.start()
-    assert streamer.is_running is True
-    streamer.stop()
 
 
 # ---------------------------------------------------------------------------

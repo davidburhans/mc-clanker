@@ -24,6 +24,12 @@ from app.framework.framework_state import state
 
 log = logging.getLogger(__name__)
 
+# REL-32b: one slow subscriber must not head-of-line-block its topic — every
+# send is bounded by this timeout and a send that exceeds it drops the
+# subscriber (same fate as a broken socket). Module attr so tests
+# monkeypatch it.
+WS_SEND_TIMEOUT_SECONDS = 5.0
+
 # ---------------------------------------------------------------------------
 # Connection manager — tracks active WebSocket subscribers per channel
 # ---------------------------------------------------------------------------
@@ -52,26 +58,37 @@ class ConnectionManager:
         """Non-async accessor — safe to call from sync contexts."""
         return self._connections.get(topic, set())
 
+    async def _send_to_subscriber(self, ws: WebSocket, topic: str, payload: str) -> bool:
+        """One bounded send; False means stale (error or too slow — REL-32b drop)."""
+        try:
+            await asyncio.wait_for(ws.send_text(payload), timeout=WS_SEND_TIMEOUT_SECONDS)
+            return True
+        except Exception as exc:  # noqa: BLE001 — a bad socket must not kill the topic
+            log.debug("WS send to topic=%s failed/timed out (%s); dropping subscriber", topic, exc)
+            return False
+
     async def broadcast(self, topic: str, message: dict) -> None:
         """Send a JSON payload to all subscribers on a topic.
 
         Failures (broken pipes, closed sockets) are handled per-connection
         so one bad socket doesn't prevent the rest from receiving.
+        REL-32b: sends run concurrently, each bounded by
+        WS_SEND_TIMEOUT_SECONDS — one slow client can no longer
+        head-of-line-block the topic; timed-out subscribers are dropped
+        like broken ones.
         """
         payload = json.dumps(message, default=str)
-        stale: list[WebSocket] = []
 
-        # Snapshot the subscriber set BEFORE iterating: send_text awaits and
-        # yields control, during which connect()/disconnect() can mutate the
-        # live set and raise 'Set changed size during iteration'.
+        # Snapshot the subscriber set BEFORE scheduling: sends await and yield
+        # control, during which connect()/disconnect() can mutate the live set
+        # and raise 'Set changed size during iteration'.
         conns = list(self._connections_sync(topic))
-        for ws in conns:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                stale.append(ws)
+        results = await asyncio.gather(
+            *(self._send_to_subscriber(ws, topic, payload) for ws in conns)
+        )
 
-        # Clean up stale connections
+        # Clean up stale (failed OR timed-out) connections
+        stale = [ws for ws, ok in zip(conns, results) if not ok]
         if stale:
             async with self._lock:
                 for ws in stale:

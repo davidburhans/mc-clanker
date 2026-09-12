@@ -26,7 +26,6 @@ A sleek, immersive visualizer that your listeners see while tuning into the live
 - **Vibe Context**: Natural language prompts to guide the music mood
 - **File Export**: Record live sessions to WAV or MP3
 - **Web Streaming**: Built-in HTTP streaming server
-- **Icecast Support**: Optional streaming to Shoutcast/Icecast for web radio
 
 ## Supported Models
 
@@ -137,7 +136,6 @@ curl -X POST http://localhost:4400/api/export/start \
 | `LLM_BASE_URL` | `http://localhost:1234/v1` | LLM API base URL |
 | `LLM_API_KEY` | `not-needed` | LLM API key |
 | `LLM_MODEL` | `local-model` | LLM model name |
-| `ICECAST_ENABLED` | `false` | Enable Icecast streaming |
 | `EXPORT_DIR` | `/exports` | Directory for recorded files |
 | `SHOW_AUDIO_RETENTION_DAYS` | `0` (off) | Days to keep show recordings under `SHOWS_DIR` (0 = keep forever) |
 | `EXPORT_RETENTION_DAYS` | `0` (off) | Days to keep export files in `EXPORT_DIR` (0 = keep forever) |
@@ -146,10 +144,6 @@ curl -X POST http://localhost:4400/api/export/start \
 | `AUDIT_ARCHIVE_DIR` | `/exports/audit_archive` | NDJSON archive destination used by `LLM_RETENTION_DAYS` |
 
 Storage retention is disabled by default outside compose; the shipped `docker/compose.yaml` enables it via a dedicated `cleanup` service (`SHOW_AUDIO_RETENTION_DAYS=14`, `EXPORT_RETENTION_DAYS=7`). See `.env.example` for the full knob reference.
-
-### Icecast Streaming (Optional)
-
-Icecast streaming is configured via environment variables (`ICECAST_ENABLED`, `ICECAST_HOST`, `ICECAST_PORT`, `ICECAST_PASSWORD`). See `docker/compose.yaml` for the current Icecast configuration if enabled.
 
 ## Troubleshooting
 
@@ -241,7 +235,7 @@ podman exec <container> nvidia-smi
 │                          ▼                                 │
 │  ┌─────────────────────────────────────────────────────┐  │
 │  │              Audio Output (Stream)                  │  │
-│  │         /stream.mp3  •  Icecast (optional)          │  │
+│  │         /stream.mp3                                 │  │
 │  └─────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```

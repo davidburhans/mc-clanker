@@ -2,12 +2,7 @@
 
 Covers:
 - B3: GarageClient S3 timeouts/retries (no more indefinite hangs).
-- B4: Icecast ffmpeg stderr/stdout -> DEVNULL + `-nostats -loglevel error`
-      (eliminates the pipe-buffer deadlock).
 - B5: aac_encoder ffmpeg subprocess now bounded by ``FFMPEG_TIMEOUT``.
-
-These are self-contained and do NOT depend on ``state.icecast_streamer``
-(which is not wired into GlobalState and breaks ``tests/test_icecast.py``).
 """
 
 import subprocess
@@ -18,7 +13,6 @@ import pytest
 
 from app import aac_encoder
 from app.aac_encoder import FFMPEG_TIMEOUT, _normalize_decoded_audio, decode_aac, encode_aac
-from app.framework.framework_icecast import IcecastStreamer
 from app.garage_client import (
     DEFAULT_S3_TIMEOUTS,
     GarageClient,
@@ -170,60 +164,3 @@ class TestNormalizeDecodedAudioSanitization:
         assert norm.dtype == np.float32
         assert norm[0][0] == -1.0
         assert pytest.approx(float(norm[0][1]), abs=1e-5) == 0.99997
-
-
-# --------------------------------------------------------------------------- #
-# B4 — Icecast ffmpeg pipe-buffer deadlock
-# --------------------------------------------------------------------------- #
-class TestIcecastNoStderrDeadlock:
-    """ffmpeg must discard stdout/stderr (no undrained pipe) and run quietly."""
-
-    def _streamer(self) -> IcecastStreamer:
-        return IcecastStreamer(
-            host="localhost",
-            port=9999,
-            password="test",
-            mount="/test",
-            bitrate=128,
-            sample_rate=44100,
-            channels=2,
-        )
-
-    def test_stream_loop_builds_quiet_command(self):
-        """The streaming command includes `-nostats` + `-loglevel error`."""
-        import inspect
-
-        body = inspect.getsource(IcecastStreamer._stream_loop)
-        assert "-nostats" in body
-        # Check the two tokens semantically (they sit on adjacent list entries,
-        # possibly across lines/comments, so don't assert a single substring).
-        assert '"-loglevel"' in body
-        assert '"error"' in body
-
-    def test_popen_uses_devnull_not_pipe(self):
-        """ffmpeg is started with stdout=DEVNULL and stderr=DEVNULL (no deadlock)."""
-        streamer = self._streamer()
-        with patch("app.framework.framework_icecast.subprocess.Popen") as mock_popen:
-            mock_proc = MagicMock()
-            mock_proc.poll.return_value = None  # ffmpeg "running"
-            mock_proc.stdin = MagicMock()
-            mock_popen.return_value = mock_proc
-
-            streamer.start()
-            streamer.feed_pcm(b"\x00" * 1024)  # unblock the queue.get wait-for-first-chunk
-            streamer.stop()
-
-            assert mock_popen.called
-            kwargs = mock_popen.call_args.kwargs
-            assert kwargs["stdin"] == subprocess.PIPE
-            assert kwargs["stdout"] == subprocess.DEVNULL
-            assert kwargs["stderr"] == subprocess.DEVNULL
-            # The exact condition the deadlock bug violated:
-            assert kwargs["stderr"] != subprocess.PIPE
-
-    def test_stdin_narrowing_helper_raises_when_unavailable(self):
-        """_ffmpeg_stdin raises an explicit error instead of an AttributeError."""
-        streamer = self._streamer()
-        streamer._ffmpeg_proc = None
-        with pytest.raises(RuntimeError, match="stdin pipe is unavailable"):
-            streamer._ffmpeg_stdin()

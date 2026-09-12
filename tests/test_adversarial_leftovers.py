@@ -236,24 +236,6 @@ class TestData6AuditClamp:
         assert state.llm_interaction_buffer[0]["reasoning"] == ""
 
 
-class TestSec6IcecastLogRedaction:
-    """SEC-6: the ffmpeg argv log leaked the base64 Icecast source password."""
-
-    def test_log_safe_argv_redacts_authorization_without_touching_the_command(self):
-        from app.framework.framework_icecast import IcecastStreamer
-
-        secret = "Basic c291cmNlOnNlY3JldA=="  # base64("source:secret")
-        cmd = ["ffmpeg", "-icy_header", f"Authorization: {secret}", "-icy_header", "ice-name: dj"]
-
-        safe = IcecastStreamer._log_safe_argv(cmd)
-
-        assert safe[2] == "Authorization: Basic ***"
-        assert safe[4] == "ice-name: dj"
-        assert secret not in " ".join(safe)
-        # The real command passed to ffmpeg must be untouched.
-        assert cmd[2] == f"Authorization: {secret}"
-
-
 class TestSec7InstrumentJsonFilter:
     """SEC-7: the instrument containment filter built invalid JSON for values
     containing quotes, 500ing the endpoint on Postgres."""

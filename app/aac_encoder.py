@@ -101,11 +101,14 @@ def encode_aac(audio: np.ndarray, sample_rate: int = 44100, bitrate: str = "192k
 
     # Write temporary WAV file for ffmpeg to process
     # scipy.io.wavfile.write expects (samples, channels) float32 in [-1, 1]
+    # REL-27a: the write sits INSIDE the try so a raise there (e.g. disk full)
+    # still flows through the finally unlink — the old layout orphaned the
+    # temp file whenever wavfile.write failed.
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         wav_path = Path(f.name)
+    try:
         wavfile.write(wav_path, sample_rate, audio)
 
-    try:
         # Encode to AAC via ffmpeg
         # -c:a aac: Use AAC codec
         # -b:a 192k: 192kbps bitrate

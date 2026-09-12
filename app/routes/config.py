@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 
 from fastapi import APIRouter, Request
@@ -49,29 +50,79 @@ def _ping_database() -> str:
         return f"error: {exc}"
 
 
+def _probe_env_fingerprint() -> tuple[str, str, str, str]:
+    """The exact GARAGE_* env tuple the probe reads — the cache key (REL-31a)."""
+    return (
+        os.environ.get("GARAGE_ENDPOINT", ""),
+        os.environ.get("GARAGE_ACCESS_KEY", ""),
+        os.environ.get("GARAGE_SECRET_KEY", ""),
+        os.environ.get("GARAGE_BUCKET", "mcclanker"),
+    )
+
+
+def _build_probe_s3_client(env: tuple[str, str, str, str]):
+    """Build the short-timeout probe client.
+
+    Shares only ``garage_client``'s pure botocore-Config builder — never the
+    storage adapter — so the health path stays decoupled from GarageClient
+    state while keeping the project-wide S3 convention (s3v4 + bounded
+    adaptive retries; attempts capped at 1 for the probe).
+    """
+    import boto3
+
+    from app.garage_client import S3Timeouts, build_boto3_config
+
+    endpoint, key, secret, _bucket = env
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=key,
+        aws_secret_access_key=secret,
+        config=build_boto3_config(S3Timeouts(connect_timeout=2, read_timeout=3, max_attempts=1)),
+    )
+
+
+# REL-31a: /api/health used to build a fresh boto3 client per probe (env read
+# + client construction on every request). boto3 clients are thread-safe, so
+# cache one, keyed on the env fingerprint above — a changed env (restart, test
+# monkeypatch) rebuilds on the next probe; no explicit flush hook exists.
+# threading.Lock because the probe runs via asyncio.to_thread.
+_probe_client_lock = threading.Lock()
+_cached_probe_client: tuple[tuple[str, str, str, str], object] | None = None
+
+
+def _probe_s3_client():
+    """Cached probe client, rebuilt when the GARAGE_* env fingerprint changes.
+
+    The lock is held across the fingerprint check AND the build, so concurrent
+    probes (thundering herd after an outage) construct exactly one client.
+    """
+    global _cached_probe_client
+    env = _probe_env_fingerprint()
+    with _probe_client_lock:
+        cached = _cached_probe_client
+        if cached is not None and cached[0] == env:
+            return cached[1]
+        client = _build_probe_s3_client(env)
+        _cached_probe_client = (env, client)
+        return client
+
+
 def _ping_object_store() -> str:
     """Light, decoupled S3 reachability probe.
 
     'not_configured' when no GARAGE_ENDPOINT is set (local/dev), 'ok' when the
-    bucket is reachable, 'error: <reason>' otherwise. Builds its own
-    short-timeout boto3 client instead of importing garage_client so the health
-    path never couples to the storage adapter.
+    bucket is reachable, 'error: <reason>' otherwise. Uses a cached,
+    thread-safe probe client (REL-31a; rebuilt when the GARAGE_* env changes)
+    that shares only ``garage_client``'s pure botocore-Config builder — never
+    the storage adapter — so the health path stays decoupled from GarageClient.
     """
-    endpoint = os.environ.get("GARAGE_ENDPOINT")
-    if not endpoint:
+    env = _probe_env_fingerprint()
+    if not env[0]:
         return "not_configured"
     try:
-        import boto3
-        from botocore.config import Config
-
-        client = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=os.environ.get("GARAGE_ACCESS_KEY"),
-            aws_secret_access_key=os.environ.get("GARAGE_SECRET_KEY"),
-            config=Config(connect_timeout=2, read_timeout=3, retries={"max_attempts": 1}),
-        )
-        client.head_bucket(Bucket=os.environ.get("GARAGE_BUCKET", "mcclanker"))
+        client = _probe_s3_client()
+        client.head_bucket(Bucket=env[3])
         return "ok"
     except Exception as exc:  # noqa: BLE001 — health probe must not raise
         logger.warning("health object-store ping failed: %s", exc)
@@ -395,7 +446,6 @@ async def get_llm_config(request: Request):
             "base_url": state.llm_base_url,
             "api_key": _mask_secret(state.llm_api_key) if mask_for_audience else state.llm_api_key,
             "model": state.llm_model,
-            "icecast_enabled": state.icecast_enabled,
             "audience_password": state.audience_password,
         }
 
@@ -410,8 +460,6 @@ async def update_llm_config(config: LLMConfig):
             state.llm_api_key = config.api_key
         if config.model is not None:
             state.llm_model = config.model
-        if config.icecast_enabled is not None:
-            state.icecast_enabled = config.icecast_enabled
         if config.audience_password is not None:
             state.audience_password = config.audience_password
     return {"status": "ok"}

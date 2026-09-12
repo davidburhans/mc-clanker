@@ -251,7 +251,7 @@ against fakes; documented how to run it.
 | 11 rel-exports | **landed** (1129p/16s green after round-1 fix) | 67effaa |
 | 12 rel-loop-robustness | **landed** (1147p/16s green after round-1 fix) | 6da999e |
 | 13 rel-worker-correctness | **landed** (1165p/18s green after round-1 fix) | cf60523 |
-| 14 rel-p3-hygiene | pending | — |
+| 14 rel-p3-hygiene | **implemented** (1177p/17s green on `rel-26-32-p3`; REL-26 module+refs deleted (grep-clean pin), REL-27a/b, 28 (both loop paths via shared `gather_stem_audio`), 29, 31a/b, 32a/b fixed; 2 red-test anchor slips corrected to documented intent) | this commit |
 | 15 rel-soak-harness | pending | — |
 
 ## Follow-ups (from unit reviews)

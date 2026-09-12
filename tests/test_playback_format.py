@@ -84,7 +84,7 @@ def _write_pcm_wav(path: Path, frames: bytes, *, channels: int, sampwidth: int, 
         # truncates to 32766 under the documented (clip*32767) convention).
         pytest.param(3, bytes.fromhex("000000"), 0, id="w24-zero"),
         pytest.param(3, bytes.fromhex("000080"), -32767, id="w24-neg-full"),  # 0x800000 -> -1.0
-        pytest.param(3, bytes.fromhex("ffffff"), 32766, id="w24-pos-full"),  # 0x7FFFFF -> ~+1.0
+        pytest.param(3, bytes.fromhex("ffff7f"), 32766, id="w24-pos-full"),  # 0x7FFFFF -> ~+1.0
         pytest.param(3, bytes.fromhex("000040"), 16383, id="w24-half"),  # 0x400000 -> +0.5
         pytest.param(3, bytes.fromhex("0000c0"), -16383, id="w24-neg-half"),  # 0xC00000 -> -0.5
         # int32: float32 rounds INT32_MAX up to 2^31, so full scale maps to 32767.
@@ -94,7 +94,7 @@ def _write_pcm_wav(path: Path, frames: bytes, *, channels: int, sampwidth: int, 
         # 8-bit WAV PCM is UNSIGNED with a 128 bias.
         pytest.param(1, bytes([0x00]), -32767, id="w8-min"),
         pytest.param(1, bytes([0x80]), 0, id="w8-mid"),
-        pytest.param(1, bytes([0xFF]), 32504, id="w8-near-full"),  # 127/128 * 32767 -> 32504
+        pytest.param(1, bytes([0xFF]), 32511, id="w8-near-full"),  # 127/128 * 32767 -> 32511.0078
         pytest.param(1, bytes([0x40]), -16383, id="w8-neg-half"),
     ],
 )

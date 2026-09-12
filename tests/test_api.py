@@ -753,7 +753,6 @@ class TestLLMConfigEdgeCases:
         assert "base_url" in data
         assert "api_key" in data
         assert "model" in data
-        assert "icecast_enabled" in data
         assert "audience_password" in data
 
     def test_llm_config_update_with_api_key(self, client):

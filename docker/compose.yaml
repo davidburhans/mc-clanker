@@ -49,7 +49,6 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1234/v1}
       - LLM_API_KEY=${LLM_API_KEY:-not-needed}
       - LLM_MODEL=${LLM_MODEL:-McClanker}
-      - ICECAST_ENABLED=${ICECAST_ENABLED:-false}
       - EXPORT_DIR=/exports
       - DISABLE_LOCAL_AUDIO=1
       - DATABASE_URL=${DATABASE_URL:-postgresql://mcclanker:${POSTGRES_PASSWORD}@postgres:5432/mcclanker}

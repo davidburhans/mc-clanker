@@ -91,8 +91,8 @@ def test_stream_loop_survives_broadcast_failure():
     """The real render thread must survive broadcast_audio blowing up (REL-01).
 
     Thread-level: two initial broadcast failures (the exact shape of a dead
-    Icecast/YouTube sink), then the thread must still be alive mid-run and
-    must have kept rendering past the failures.
+    downstream sink, e.g. the YouTube relay), then the thread must still be
+    alive mid-run and must have kept rendering past the failures.
     """
     m = Mixer(channels=1)
     m.add_track(np.ones((44100, 1), dtype=np.float32) * 0.5, 0, stem_index=0)

@@ -32,6 +32,7 @@ from app.framework.loop_steps import (
     JOB_WAIT_TIMEOUT_SECONDS,
     LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES,
     _collect_uncached_stems,
+    gather_stem_audio,
     read_generation_params,
     reawait_late_job_completions,
     sanitize_master_bpm,
@@ -158,15 +159,15 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
             missing = [job_id for job_id in job_ids if not results.get(job_id)]
             await loop._abandon_missing_jobs(missing)
 
-            for job_id, orig_idx, cache_key in pending_jobs:
-                audio_path = results.get(job_id)
-                if audio_path:
-                    audio_data = await loop._fetch_audio(audio_path)
-                    if audio_data is not None:
-                        loop.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
-                        stem_outcomes[orig_idx] = "generated"
-                    else:
-                        stem_outcomes[orig_idx] = "failed"
+            # REL-28: same bounded concurrent fetch as the foreground P8 path
+            # (shared helper); the cache write below stays stem_cache-ONLY —
+            # state.cache_stem is foreground-only (brief-01 risk #4 divergence).
+            audio_paths = [results.get(job_id) for job_id, _, _ in pending_jobs]
+            fetched = await gather_stem_audio(loop._fetch_audio, audio_paths)
+            for (job_id, orig_idx, cache_key), audio_data in zip(pending_jobs, fetched):
+                if audio_data is not None:
+                    loop.stem_cache[cache_key] = {"audio_data": audio_data, "last_used": time.time()}
+                    stem_outcomes[orig_idx] = "generated"
                 else:
                     stem_outcomes[orig_idx] = "failed"
 
