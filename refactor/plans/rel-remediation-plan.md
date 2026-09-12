@@ -248,7 +248,7 @@ against fakes; documented how to run it.
 | 8 rel-stream-fanout | **landed** (1072p/16s green after review fix; reviewer OK-no-blockers) | eb060fa |
 | 9 rel-recording-writer | **landed** (1091p/16s green after round-1 fixes) | 3fffc2b |
 | 10 rel-youtube-247 | **landed** (1116p/16s green after round-1 fixes) | 690f8c2 |
-| 11 rel-exports | **landed** (1129p/16s green; serialize-in-session chunked keyset exports — DetachedInstanceError impossible by construction; SQL GROUP BY stats/timeline + column-projected instruments scan; export/full streams its JSON document; Query(ge=,le=) clamps on jobs/shows; T4 expected-side corrected to the documented capture→export round-trip) | this commit |
+| 11 rel-exports | **landed** (1129p/16s green after round-1 fix) | 67effaa |
 | 12 rel-loop-robustness | pending | — |
 | 13 rel-worker-correctness | pending | — |
 | 14 rel-p3-hygiene | pending | — |
@@ -297,6 +297,12 @@ against fakes; documented how to run it.
 - rel-11 (P2, report-only): trigger_shutdown holds sync_lock across
   p.kill()/p.wait(timeout=1) — pre-existing I/O-under-lock (rel-12/19
   territory if ever tightened).
+
+- rel-11 (from rel-13 review, report-only): stats/timeline chunk scans still
+  run on the event loop (page-bounded but ~150 serial SELECTs for 75k rows);
+  follow-up: asyncio.to_thread wrap or an (show_id, relative_time_ms) index.
+  reasoning_logs.py at 497/500 lines — split timeline/stats helpers on next
+  touch. export_chunks.py params want TYPE_CHECKING hints.
 
 ## Decisions log
 
