@@ -81,9 +81,15 @@ def loop_retry_backoff_delay(consecutive_failures: int) -> float:
     """
     if consecutive_failures <= 1:
         return LOOP_RETRY_BACKOFF_SECONDS
+    # Review P2: cap the EXPONENT before the float multiply — at n≈1025,
+    # 2**(n-1) overflows float and raises OverflowError inside the B1
+    # except-handler itself, killing the watchdog task (the REL-19 boundary
+    # then escalates to a full trigger_shutdown). The cap makes the tail
+    # flat instead of explosive.
+    exponent = min(consecutive_failures - 1, 64)
     exponential = min(
         LOOP_RETRY_BACKOFF_MAX_SECONDS,
-        LOOP_RETRY_BACKOFF_SECONDS * 2 ** (consecutive_failures - 1),
+        LOOP_RETRY_BACKOFF_SECONDS * 2 ** exponent,
     )
     span = exponential * LOOP_RETRY_BACKOFF_JITTER_FRACTION
     return exponential + random.uniform(-span, span)

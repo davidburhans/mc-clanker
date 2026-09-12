@@ -640,3 +640,18 @@ async def test_b6_startup_failure_still_green(monkeypatch):
     assert built["loop"].running is False
     assert built["loop"].loop_task is None, "no run-loop task may exist after a failed start"
     assert state.is_running is False, "/api/health must stop reporting a live framework"
+
+
+def test_loop_retry_backoff_delay_huge_failure_counts_do_not_overflow():
+    """Review P2 pin: n≈1025 consecutive failures once made 2**(n-1) overflow
+    float INSIDE the B1 except-handler — the OverflowError escaped the
+    watchdog and killed the task. The exponent is capped; huge n returns the
+    capped, jitter-bounded delay instead of raising."""
+    from app.framework.loop_steps import (
+        LOOP_RETRY_BACKOFF_MAX_SECONDS,
+        loop_retry_backoff_delay,
+    )
+
+    for huge in (1024, 1025, 5000, 10**9):
+        delay = loop_retry_backoff_delay(huge)
+        assert LOOP_RETRY_BACKOFF_MAX_SECONDS * 0.5 <= delay <= LOOP_RETRY_BACKOFF_MAX_SECONDS * 1.5
