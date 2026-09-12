@@ -12,8 +12,11 @@ returns its connection to the pool before the next chunk opens.
 """
 
 import json
+import logging
 
 from sqlalchemy import tuple_
+
+logger = logging.getLogger(__name__)
 
 # Page size for every export scan. Bounds SERVER MEMORY only — the exports
 # themselves stay complete (no response limit, invariant 4). Module constant,
@@ -47,18 +50,27 @@ def chunked_shaped_rows(
     size = page_size or EXPORT_CHUNK_ROWS
     cursor = None
     while True:
-        with db_manager.session() as session:
-            query = build_query(session)
-            if cursor is not None:
-                query = query.filter(tuple_(*cursor_cols) > cursor)
-            # Fetch one row past the page boundary to detect exhaustion inside
-            # the SAME session — exactly ceil(N/page) sessions per scan, no
-            # extra probe session after an exactly-full last page.
-            fetched = query.order_by(*order_cols).limit(size + 1).all()
-            has_more = len(fetched) > size
-            rows = fetched[:size]
-            shaped = [shaper(row) for row in rows]  # in-session: no detach
-            cursor = row_key(rows[-1]) if rows else None
+        try:
+            with db_manager.session() as session:
+                query = build_query(session)
+                if cursor is not None:
+                    query = query.filter(tuple_(*cursor_cols) > cursor)
+                # Fetch one row past the page boundary to detect exhaustion inside
+                # the SAME session — exactly ceil(N/page) sessions per scan, no
+                # extra probe session after an exactly-full last page.
+                fetched = query.order_by(*order_cols).limit(size + 1).all()
+                has_more = len(fetched) > size
+                rows = fetched[:size]
+                shaped = [shaper(row) for row in rows]  # in-session: no detach
+                cursor = row_key(rows[-1]) if rows else None
+        except Exception:
+            # Plan decision 8 (review round-1): abort WITH context — a silent
+            # mid-stream truncation would corrupt the fine-tuning corpus
+            # extraction (invariant 4), so name the cursor + page before re-raising.
+            logger.exception(
+                "Export chunk failed at cursor=%r page_size=%s — aborting stream", cursor, size
+            )
+            raise
         if not shaped:
             return
         yield from shaped
