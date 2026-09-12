@@ -529,6 +529,18 @@ disarm toggle, config-heal, key-never-in-logs-or-responses).
 
 ## Soak-test spec (the 24/7 gate — see `youtube_247_risk_analysis.md` §3)
 
+> **Implemented — rel-soak (U15).** The harness lives in `tests/test_soak_247.py`
+> (point 1) plus the sibling soak files (`test_soak_mixer.py`,
+> `test_soak_worker.py`, `test_soak_stream.py`, `test_soak_storage_export.py`,
+> shared clock/gate/profile logic in `tests/soak_helpers.py`) — one test per
+> point 1–8, fakes/real SQLite only (no GPU/Postgres/ffmpeg/LLM). Run:
+> `SOAK=1 pytest -m soak` (fast profile, ~3 s) or `SOAK=1 SOAK_PROFILE=full
+> pytest -m soak` (audit-literal 24 h-equivalent schedule, ~10 s); without
+> `SOAK=1` the soak tests skip by default. Point mapping and caveats:
+> `docs/soak_harness.md`. The per-point "*fails today*" notes below are the
+> pre-remediation audit findings — units 1–14 are landed, so the harness is
+> expected green and now stands as the standing regression gate.
+
 1. **24 h-equivalent fault-injection soak** (fake conductor/jobs/storage):
    scheduled LLM outage (1 h), PG restart, worker-down window, one stuck
    generation. Assert: loop task alive, `loop_count` monotonic,

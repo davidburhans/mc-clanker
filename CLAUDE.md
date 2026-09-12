@@ -624,6 +624,10 @@ python -m pytest tests/test_api.py -v
 # Single test
 python -m pytest tests/test_api.py::test_get_state -v
 
+# Soak suite (rel-soak 24/7 acceptance harness, opt-in; point map in docs/soak_harness.md)
+SOAK=1 python -m pytest -m soak -v
+SOAK=1 SOAK_PROFILE=full python -m pytest -m soak -v   # audit-literal 24 h-equivalent schedule
+
 # With coverage
 python -m pytest tests/ --cov=app --cov-report=term-missing
 ```
@@ -651,6 +655,11 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | `test_shows_api.py` | Show management endpoints |
 | `test_shows_model.py` | Show SQLAlchemy model |
 | `test_simulation.py` | Stateful DJ session simulation |
+| `test_soak_247.py` | rel-soak point 1: 24 h-equivalent fault-injection soak (LLM outage, PG restart, worker-down, stuck generation) — loop task alive, monotonic `loop_count`, bounded audit buffer/tasks/pending, RSS plateau; opt-in `SOAK=1` |
+| `test_soak_mixer.py` | rel-soak points 2–3: mixer `_callback` fault survival with bounded silence; reset-then-restart fires the boundary transition, two cycles |
+| `test_soak_storage_export.py` | rel-soak points 7–8: storage reconciliation under randomized DB outages (zero orphaned objects/files); real-session capture→flush→export roundtrip + delete-live-show |
+| `test_soak_stream.py` | rel-soak point 6: `/stream.mp3` disconnect churn — zero zombie ffmpeg, live client count, RSS flat |
+| `test_soak_worker.py` | rel-soak points 4–5: VRAM/thread plateau after 300 generations; timeout→success→timeout→timeout circuit-breaker contract |
 | `test_state.py` | GlobalState lock behavior |
 | `test_worker.py` | Job queue worker and job claiming |
 | `test_worker_correctness.py` | REL-24: post-generation lease recheck (`_lease_still_held`) — lost lease skips upload/encode, stands down without mark-fail/counters, gone-or-unreadable row never uploads, delete-guard `_still_own_job_row` semantics unchanged, breaker counter untouched; REL-25a: 48 kHz engine output resampled once to 44.1 kHz (identity fast path); REL-25b: job-row cfg/steps reach `generate_stem`, NULL/absent → 7.0/50 defaults (`cfg_scale=0.0` uncoerced) |
