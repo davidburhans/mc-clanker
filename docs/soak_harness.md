@@ -58,6 +58,16 @@ run instructions.
   K=12 churn, N=100 export loops). The virtual clock advances in virtual
   seconds, so the 24 h schedule costs seconds of wall time; only the driver
   watchdog runs on real time — a wedge is itself a soak failure.
+- **Reading soak logs — the log-episode contract (rel-fu round-2 residual, written down here
+  2026-09-12)**: every fault episode emits a bounded, recognizable marker set, all landed code —
+  LLM outage → `[AsyncFrameworkLoop] Loop iteration error (retry in …)` on the escalated jittered
+  backoff plus the `job-queue submit outage` fallback reasoning; PG restart / worker down →
+  `Abandoned N job(s) (loop_abandoned)` and `Pending backlog over 64; skipping submit`;
+  stuck generation → the structured `circuit_breaker_open` JSON exactly once (the breaker trip is
+  the episode end); failing mixer `_callback` → ONE `Mixer render tick failed (N consecutive);
+  emitting silence` line per failure EPISODE (FU-1's consecutive-counter bound, recovery logged
+  once at `Mixer render recovered`). Any marker repeating at per-tick cadence inside one episode
+  is a soak FINDING, not noise.
 - **Scope-to-soak seams** (module-attr monkeypatches, restored per test):
   `AUDIT_FLUSH_THRESHOLD_ROWS` is lowered in P1 so the real P12 flush trigger
   fires dozens of times, and the fast profile lowers `JOB_WAIT_TIMEOUT_SECONDS`

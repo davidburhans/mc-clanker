@@ -28,7 +28,6 @@ import subprocess
 import threading
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.stream_fanout_args import (
@@ -39,6 +38,13 @@ from app.stream_fanout_args import (
     resolve_ffmpeg_exe,
 )
 from app.stream_fanout_proc import TranscoderSupervisor
+from app.stream_fanout_sessions import (
+    _STOP_SENTINEL,
+    _ClientSession,
+    _drain_one,
+    _drain_queue,
+    _residual_blocks,
+)
 
 if TYPE_CHECKING:
     from app.framework.framework_state import GlobalState
@@ -57,10 +63,9 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-#: Wake-up marker for per-client queues. ``None`` is the trigger_shutdown
-#: poison (framework_state); the sentinel is ours (eviction/teardown). Both
-#: terminate a client generator; the feeder treats both as stop (decision 9).
-_STOP_SENTINEL = object()
+# _STOP_SENTINEL + session plumbing (_ClientSession, _drain_*, _residual_blocks)
+# moved to stream_fanout_sessions (FU-5); re-imported above so every historical
+# app.stream_fanout.* patch point keeps resolving the SAME sentinel object.
 
 _CLIENT_IDS = itertools.count(1)
 
@@ -75,49 +80,6 @@ class FanoutError(RuntimeError):
 
 class FanoutInactive(FanoutError):
     """The object entered teardown; the factory must retry a fresh singleton."""
-
-
-@dataclass(eq=False)
-class _ClientSession:
-    """One connected client: bounded queue + fullness clock (identity type:
-    registry removal is by identity). The pump thread solely writes it."""
-
-    client_id: int
-    queue: queue.Queue
-    full_since: float | None = None
-
-
-def _drain_one(client_queue: queue.Queue) -> None:
-    """Discard the oldest buffered item (drop-oldest overflow policy)."""
-    try:
-        client_queue.get_nowait()
-    except queue.Empty:
-        pass
-
-
-def _drain_queue(client_queue: queue.Queue) -> None:
-    """Empty a bounded queue without blocking (eviction/teardown helper)."""
-    while True:
-        try:
-            client_queue.get_nowait()
-        except queue.Empty:
-            return
-
-
-def _residual_blocks(client_queue: queue.Queue) -> Iterator[bytes]:
-    """Yield data blocks queued ahead of a stop marker.
-
-    Teardown never discards already-encoded bytes, and the route stays
-    deterministic whichever lands last, a data block or the sentinel.
-    """
-    while True:
-        try:
-            block = client_queue.get_nowait()
-        except queue.Empty:
-            return
-        if block is None or block is _STOP_SENTINEL:
-            return
-        yield block
 
 
 class StreamFanout:

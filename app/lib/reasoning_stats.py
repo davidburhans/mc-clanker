@@ -22,6 +22,7 @@ No FastAPI imports — importable by routes, cleanup, and tests.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 from sqlalchemy import case, func
@@ -30,10 +31,13 @@ from app.lib.export_chunks import chunked_shaped_rows
 from app.models import LLMInteraction
 
 if TYPE_CHECKING:
+    from sqlalchemy import ColumnElement, Row
+    from sqlalchemy.orm import Session
+
     from app.db import DatabaseManager
 
 
-def _timeline_segment_key(segment_seconds: int):
+def _timeline_segment_key(segment_seconds: int) -> ColumnElement[int]:
     """Integer-bucketed segment index from relative_time_ms (None coalesced to 0).
 
     ``//`` (floordiv) renders plain int/int division — integer division on both
@@ -43,7 +47,7 @@ def _timeline_segment_key(segment_seconds: int):
     return func.coalesce(LLMInteraction.relative_time_ms, 0) // 1000 // segment_seconds
 
 
-def _timeline_segment_aggregates(session, show_id: int, segment_seconds: int):
+def _timeline_segment_aggregates(session: Session, show_id: int, segment_seconds: int) -> list[Row]:
     """Per-segment count/avg(bpm)/action tallies in ONE GROUP BY (REL-13c)."""
     seg_key = _timeline_segment_key(segment_seconds).label("seg_index")
     return (
@@ -62,7 +66,7 @@ def _timeline_segment_aggregates(session, show_id: int, segment_seconds: int):
     )
 
 
-def _timeline_detail_rows(db_manager, show_id: int):
+def _timeline_detail_rows(db_manager: DatabaseManager, show_id: int) -> Iterator[Row]:
     """Column-projected keyset scan for the per-segment detail lists (REL-13c).
 
     Reads only the slim columns — the fat prompt_messages/parsed_response
@@ -93,7 +97,7 @@ def _timeline_detail_rows(db_manager, show_id: int):
     )
 
 
-def _timeline_instruments(detail_rows) -> list[str]:
+def _timeline_instruments(detail_rows: Iterable[Row]) -> list[str]:
     """Sorted union of instrument names across one segment's rows."""
     instruments = set()
     for row in detail_rows:
@@ -102,7 +106,7 @@ def _timeline_instruments(detail_rows) -> list[str]:
     return sorted(instruments)
 
 
-def _timeline_key_changes(detail_rows) -> list[dict]:
+def _timeline_key_changes(detail_rows: Iterable[Row]) -> list[dict[str, int | str]]:
     """Key-change entries (old semantics: key is not None)."""
     return [
         {"loop_index": row.loop_index, "key": row.key, "time_ms": row.relative_time_ms or 0}
@@ -111,7 +115,7 @@ def _timeline_key_changes(detail_rows) -> list[dict]:
     ]
 
 
-def _timeline_reasoning_snippets(detail_rows) -> list[dict]:
+def _timeline_reasoning_snippets(detail_rows: Iterable[Row]) -> list[dict[str, int | str | None]]:
     """Per-loop reasoning snippets, truncated at 200 chars (old semantics)."""
     return [
         {
@@ -125,7 +129,7 @@ def _timeline_reasoning_snippets(detail_rows) -> list[dict]:
     ]
 
 
-def _timeline_segment_dict(agg, detail_rows, segment_seconds: int) -> dict:
+def _timeline_segment_dict(agg: Row, detail_rows: Iterable[Row], segment_seconds: int) -> dict:
     """One timeline segment: SQL aggregates + detail lists from the slim scan."""
     start_ms = agg.seg_index * segment_seconds * 1000
     retain, add, remove = agg.retain or 0, agg.add or 0, agg.remove or 0
@@ -147,7 +151,9 @@ def _timeline_segment_dict(agg, detail_rows, segment_seconds: int) -> dict:
     }
 
 
-def _assemble_timeline_segments(aggregates, detail_rows, segment_seconds: int) -> list[dict]:
+def _assemble_timeline_segments(
+    aggregates: Sequence[Row], detail_rows: Iterable[Row], segment_seconds: int
+) -> list[dict]:
     """Merge the SQL per-segment aggregates with the slim detail scan (old row-loop semantics)."""
     details_by_seg: dict[int, list] = {}
     for row in detail_rows:
@@ -160,7 +166,7 @@ def _assemble_timeline_segments(aggregates, detail_rows, segment_seconds: int) -
     ]
 
 
-def _stats_core_totals(session, show_id: int):
+def _stats_core_totals(session: Session, show_id: int) -> Row:
     """count/avg/min/max bpm + fallback tally + avg reasoning length in ONE SELECT (REL-13c).
 
     ``nullif(reasoning, '')`` makes empty-string reasoning NULL so
@@ -182,7 +188,7 @@ def _stats_core_totals(session, show_id: int):
     )
 
 
-def _stats_action_counts(session, show_id: int) -> dict:
+def _stats_action_counts(session: Session, show_id: int) -> dict[str, int]:
     """Per-action_type counts via GROUP BY; NULL/'' roll up to 'unknown' (old ``or 'unknown'``)."""
     kind = func.coalesce(func.nullif(LLMInteraction.action_type, ""), "unknown")
     rows = (
@@ -194,7 +200,7 @@ def _stats_action_counts(session, show_id: int) -> dict:
     return dict(rows)
 
 
-def _stats_keys_used(session, show_id: int) -> list[str]:
+def _stats_keys_used(session: Session, show_id: int) -> list[str]:
     """Distinct non-empty keys via GROUP BY (old ``if i.key:`` excluded NULL and '')."""
     rows = (
         session.query(LLMInteraction.key)
@@ -205,7 +211,7 @@ def _stats_keys_used(session, show_id: int) -> list[str]:
     return sorted(key for (key,) in rows)
 
 
-def _stats_instruments_used(db_manager, show_id: int) -> list[str]:
+def _stats_instruments_used(db_manager: DatabaseManager, show_id: int) -> list[str]:
     """Set-union over the instruments JSON array via a column-projected keyset scan.
 
     The one aggregate SQL cannot do portably (PG jsonb_array_elements has no
@@ -233,7 +239,9 @@ def _stats_instruments_used(db_manager, show_id: int) -> list[str]:
     return sorted(instruments)
 
 
-def _stats_response(totals, action_counts: dict, keys_used: list, instruments_used: list) -> dict:
+def _stats_response(
+    totals: Row, action_counts: dict[str, int], keys_used: list[str], instruments_used: list[str]
+) -> dict:
     """Shape the stats payload (same keys/rounding as the old Python-loop version)."""
     fallbacks = totals.fallbacks or 0
     return {

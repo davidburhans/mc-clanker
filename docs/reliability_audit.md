@@ -1,5 +1,12 @@
 # Reliability Audit — Music Production Pipeline
 
+> **STATUS (2026-09-12): remediated.** All 32 findings (the 5 Critical and 10 High below, plus
+> every P1–P3 item) are fixed, regression-pinned, and landed on `main`; the ledger and each
+> finding's `Status: fixed-in …` note live in `refactor/plans/rel-remediation-plan.md`. The 24/7
+> acceptance gate is the soak suite: `SOAK=1 .venv/bin/python -m pytest -m soak -q`. This document
+> is the historical audit snapshot — the verdict below describes the pre-remediation tree and is
+> preserved for provenance.
+
 Deep reliability pass over the audio-production critical path, targeting the
 24/7 requirement: *no memory growth, no performance degradation, no silent
 stalls that halt the music over multi-day operation.*

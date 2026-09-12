@@ -1,10 +1,15 @@
+from __future__ import annotations
+
+import logging
 import os
 import threading
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+log = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -26,6 +31,37 @@ DB_KEEPALIVE_IDLE_SECONDS = 30
 DB_KEEPALIVE_INTERVAL_SECONDS = 10
 DB_KEEPALIVE_COUNT = 3
 
+# FU-5: the keepalives/timeouts above are libpq connection params — a non-libpq
+# driver (asyncpg, pg8000) rejects them at connect time. Gate on the DRIVER,
+# not just the backend name. The default ``postgresql://`` URL resolves to
+# psycopg2, so every existing deployment keeps the exact kwargs below.
+_LIBPQ_DRIVERS = frozenset({"psycopg2", "psycopg2cffi", "psycopg"})
+
+
+def _pg_connect_args(url: URL) -> dict:
+    """Build the libpq connect_args for a PG engine URL; empty for non-libpq drivers.
+
+    Example:
+        _pg_connect_args(make_url("postgresql://u:p@h/db"))
+        # -> {"connect_timeout": 5, "options": "-c statement_timeout=10000", ...}
+    """
+    if url.get_driver_name() not in _LIBPQ_DRIVERS:
+        log.warning(
+            "DATABASE_URL driver %r is not libpq-based; skipping libpq-only connect_args "
+            "(connect/statement timeout, TCP keepalives). Use postgresql+psycopg2:// "
+            "for the REL-09 connection budgets.",
+            url.drivername,
+        )
+        return {}
+    return {
+        "connect_timeout": DB_CONNECT_TIMEOUT_SECONDS,
+        "options": f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS}",
+        "keepalives": 1,
+        "keepalives_idle": DB_KEEPALIVE_IDLE_SECONDS,
+        "keepalives_interval": DB_KEEPALIVE_INTERVAL_SECONDS,
+        "keepalives_count": DB_KEEPALIVE_COUNT,
+    }
+
 
 class DatabaseManager:
     _instance = None
@@ -38,21 +74,16 @@ class DatabaseManager:
             # PostgreSQL in production (REL-09): pre-ping recovers NAT-idled
             # conns, recycle bounds pool age, connect/statement timeouts bound
             # a hung DB so middleware/route queries can never block the loop
-            # past ~10 s. libpq-only args — never passed to the SQLite paths.
+            # past ~10 s. The connect_args are libpq-only (FU-5: driver-gated —
+            # never passed to SQLite paths or non-libpq PG drivers); the pool
+            # resilience kwargs stay for EVERY PG dialect.
             self.engine = create_engine(
                 database_url,
                 pool_size=10,
                 max_overflow=20,
                 pool_pre_ping=True,
                 pool_recycle=DB_POOL_RECYCLE_SECONDS,
-                connect_args={
-                    "connect_timeout": DB_CONNECT_TIMEOUT_SECONDS,
-                    "options": f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS}",
-                    "keepalives": 1,
-                    "keepalives_idle": DB_KEEPALIVE_IDLE_SECONDS,
-                    "keepalives_interval": DB_KEEPALIVE_INTERVAL_SECONDS,
-                    "keepalives_count": DB_KEEPALIVE_COUNT,
-                },
+                connect_args=_pg_connect_args(make_url(database_url)),
             )
         elif database_url:
             # Explicit non-PG DATABASE_URL (tests set sqlite:///...): honor it
