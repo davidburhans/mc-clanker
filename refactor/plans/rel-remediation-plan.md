@@ -246,7 +246,7 @@ against fakes; documented how to run it.
 | 6 rel-job-queue | **landed** (1032p/16s green; pending-only abandon + reaper + depth throttle; claim SQL untouched) | b0e794c |
 | 7 rel-db-offloop | **landed** (1047p/16s green; dialect-gated PG engine resilience; middleware + audio-route DB off-loop via to_thread; SQLite fallback byte-identical; T6 fast-subcase test corrected to its documented Basic-auth intent) | 0b2ee6a |
 | 8 rel-stream-fanout | **landed** (1072p/16s green after review fix; reviewer OK-no-blockers) | eb060fa |
-| 9 rel-recording-writer | **landed** (1091p/16s green; writer-thread sinks — put_nowait-only audio path, single-owner finalize, drop-oldest + dropped_bytes in /api/health; instruments write outside sync_lock; shutdown drains+finalizes WAVs + ends the live show row) | this branch |
+| 9 rel-recording-writer | **landed** (1091p/16s green after round-1 fixes) | 3fffc2b |
 | 10 rel-youtube-247 | pending | — |
 | 11 rel-exports | pending | — |
 | 12 rel-loop-robustness | pending | — |
@@ -293,6 +293,10 @@ against fakes; documented how to run it.
   (narrow); client acquiring inside the teardown snapshot window gets one
   instantly-poisoned session (browser reconnects). Also:
   YouTubeRelay._write_block None-poison TypeError guard → U10.
+
+- rel-11 (P2, report-only): trigger_shutdown holds sync_lock across
+  p.kill()/p.wait(timeout=1) — pre-existing I/O-under-lock (rel-12/19
+  territory if ever tightened).
 
 ## Decisions log
 
