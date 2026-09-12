@@ -167,7 +167,8 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/routes/stems.py` | Stem volume/mute/solo control |
 | `app/routes/models.py` | Model loading/unloading |
 | `app/routes/config.py` | LLM config, generation params, instruments |
-| `app/routes/reasoning_logs.py` | Conductor reasoning search, NDJSON export, timeline, stats (REL-13: exports stream via chunked keyset scans from `app/lib/export_chunks.py`; timeline/stats run as SQL aggregates — no unbounded `.all()`) |
+| `app/routes/reasoning_logs.py` | Conductor reasoning search, NDJSON export, timeline, stats (REL-13: exports stream via chunked keyset scans from `app/lib/export_chunks.py`; timeline/stats run as SQL aggregates — no unbounded `.all()`; FU-4: the timeline/stats compute lives in `app/lib/reasoning_stats.py` and every DB statement — auth included — runs off the event loop via `asyncio.to_thread`) |
+| `app/lib/reasoning_stats.py` | `compute_timeline_payload`, `compute_stats_payload` + the moved timeline/stats helpers — FU-4 pure move from `routes/reasoning_logs.py` (497/500 LOC): phase-sequenced short sessions (at most ONE open at a time, no nested sessions), no FastAPI imports, runs on a worker thread via the routes' `asyncio.to_thread` hops |
 | `app/routes/youtube.py` | YouTube Live RTMP stream start/stop/status/config |
 | `app/auth.py` | JWT tokens, bcrypt password hashing |
 | `app/db.py` | SQLAlchemy DatabaseManager singleton (thread-safe); REL-09: PG engines get pool_pre_ping/pool_recycle + connect/statement timeouts (dialect-gated; SQLite paths unchanged) |
@@ -184,10 +185,10 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage; also owns the REL-25a one-shot 44.1 kHz normalization (`MIXER_SAMPLE_RATE`, `_resample_to_mixer_rate`, lazy scipy import — FU-3 moved them here from worker.py, which re-imports the names) |
 | `app/youtube_relay.py` | `YouTubeRelay` — PCM→FFmpeg RTMP relay for YouTube Live (audio-client queue, rate-limited auto-restart: a proc alive ≥ `stability_window_s` earns a fresh restart budget; `_write_block` drops `None` poison); see `docs/youtube_live.md` |
 | `app/youtube_lifecycle.py` | REL-15 24/7 supervision: boot auto-arm (`auto_arm_youtube_relay`, never fatal), watchdog asyncio task (`youtube_watchdog_loop`, storm-guarded re-arm of an inactive non-disarmed relay), lifespan wiring (`start_relay_services`/`stop_relay_services`); operator kill switch `state.youtube_relay_disarmed` |
-| `app/stream_fanout.py` | `StreamFanout`, `get_stream_fanout`, `mp3_client_stream` — process-wide MP3 transcode fan-out for `/stream.mp3` (REL-10): ONE shared ffmpeg, per-client bounded queues (drop-oldest; clients own no subprocess); the pump thread evicts clients whose queue stayed full > `stale_client_s`, so abrupt disconnects leak zero ffmpeg/threads; singleton torn down on last client, deliberately NOT cleared by `reset()` |
+| `app/stream_fanout.py` | `StreamFanout`, `get_stream_fanout`, `mp3_client_stream` — process-wide MP3 transcode fan-out for `/stream.mp3` (REL-10): ONE shared ffmpeg, per-client bounded queues (drop-oldest; clients own no subprocess); the pump thread evicts clients whose queue stayed full > `stale_client_s`, so abrupt disconnects leak zero ffmpeg/threads; singleton torn down on last client, deliberately NOT cleared by `reset()` (FU-4: an acquire that fails AFTER `supervisor.spawn()` funnels its rollback through the idempotent `_teardown()` — no orphaned transcoder on a retired singleton) |
 | `app/stream_fanout_args.py` | ffmpeg launch contract for the fan-out: binary discovery, byte-identical-to-legacy argv (`build_mp3_args`), immutable `FanoutConfig`, `FanoutStatus` telemetry shape |
 | `app/stream_fanout_proc.py` | `TranscoderSupervisor` — owns the ONE shared transcoder subprocess: spawn + stderr drain + kill-list registration, respawn with capped linear backoff (no permanent give-up, REL-15's lesson), terminate-with-escalation (stdin EOF → wait → kill → reap) |
-| `app/lib/export_chunks.py` | `chunked_shaped_rows`, `ndjson_lines` — REL-13 chunked keyset export scans: page-bounded SELECTs, one fresh session per chunk, rows serialized via the existing shapers INSIDE the session (no DetachedInstanceError, no unbounded query under rel-09's statement_timeout, connection released between chunks); `EXPORT_CHUNK_ROWS` bounds server memory only — exports stay complete |
+| `app/lib/export_chunks.py` | `chunked_shaped_rows`, `ndjson_lines` — REL-13 chunked keyset export scans: page-bounded SELECTs, one fresh session per chunk, rows serialized via the existing shapers INSIDE the session (no DetachedInstanceError, no unbounded query under rel-09's statement_timeout, connection released between chunks); `EXPORT_CHUNK_ROWS` bounds server memory only — exports stay complete (FU-4: params fully annotated via TYPE_CHECKING-only imports — no runtime deps added) |
 
 ---
 
@@ -587,6 +588,13 @@ Existing PostgreSQL deployments gain `applied_actions` only via
 `migrations/003_llm_capture_additive.sql` (`Base.metadata.create_all()` does
 not add columns to existing tables).
 
+Indexes (model-declared in `__table_args__`): `ix_llm_interactions_show_loop`
+on `(show_id, loop_index)` and — FU-4/rel-13 §6 residual —
+`ix_llm_interactions_show_rel_time` on `(show_id, relative_time_ms)` covering
+the timeline detail scan's keyset. Deployed PG gains the second index only
+via `migrations/005_llm_timeline_index.sql` (performance-only; `create_all`
+covers fresh installs and every test schema).
+
 ### GeneratorJob
 ```
 id: uuid (PK)
@@ -669,7 +677,9 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | `test_soak_247.py` | rel-soak point 1: 24 h-equivalent fault-injection soak (LLM outage, PG restart, worker-down, stuck generation) — loop task alive, monotonic `loop_count`, bounded audit buffer/tasks/pending, RSS plateau; opt-in `SOAK=1` |
 | `test_soak_mixer.py` | rel-soak points 2–3: mixer `_callback` fault survival with bounded silence; reset-then-restart fires the boundary transition, two cycles |
 | `test_soak_storage_export.py` | rel-soak points 7–8: storage reconciliation under randomized DB outages (zero orphaned objects/files); real-session capture→flush→export roundtrip + delete-live-show |
-| `test_soak_stream.py` | rel-soak point 6: `/stream.mp3` disconnect churn — zero zombie ffmpeg, live client count, RSS flat |
+| `test_soak_stream.py` | rel-soak point 6: `/stream.mp3` disconnect churn — zero zombie ffmpeg, live client count, RSS flat (FU-4: live PCM feed mirrors `broadcast_audio` through the registered queue at real mixer cadence — `dropped_pcm_blocks == 0` is non-vacuous, stdin actually receives bytes) |
+| `test_fu4_exports.py` | FU-4: off-loop stats/timeline (engine-level slow-fake + live heartbeat — auth included), `ix_llm_interactions_show_rel_time` index introspection, reasoning split LOC pin, `export_chunks` annotation pin, fanout acquire-rollback orphan kill |
+| `test_stream_fanout.py` | REL-10 regression suite — ONE shared transcoder, disconnect churn, restart policy, shutdown kill list, spawn failure, concurrency hammer, telemetry shape |
 | `test_soak_worker.py` | rel-soak points 4–5: VRAM/thread plateau after 300 generations; timeout→success→timeout→timeout circuit-breaker contract |
 | `test_state.py` | GlobalState lock behavior |
 | `test_worker.py` | Job queue worker and job claiming |

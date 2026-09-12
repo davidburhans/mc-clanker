@@ -308,6 +308,14 @@ consumption is evicted once its queue stays full past the staleness window —
 deliberate live-latency bound; it reconnects. Adjacent relay `None`-poison
 `TypeError` (`YouTubeRelay._write_block`) discovered during this unit is out
 of scope — noted as a U10 follow-up. Pinned by `tests/test_stream_fanout.py`.
+FU-4 closed the review's P2/P3 acquire-rollback residual: `_start` raising
+AFTER `supervisor.spawn()` (e.g. thread exhaustion at `_start_threads`) used
+to strand a live transcoder + registered PCM queue on a singleton the factory
+then merely `_retire()`d; `acquire_client`'s rollback now funnels through the
+single idempotent `_teardown()` (proc reaped, kill list emptied, queue
+unregistered, singleton retired — no-op when the spawn itself failed,
+early-return when a concurrent teardown already began). Pinned by
+`tests/test_fu4_exports.py::test_acquire_rollback_kills_orphaned_transcoder`.
 
 ### REL-11 [High] Recording file writes run on the real-time mixer thread
 `framework_state.py:460-479` — `handle.write(pcm_data)` inline in
@@ -413,6 +421,19 @@ instead of materializing both tables. Mid-stream chunk failures abort loudly
 consumers detect truncation by row count as before, no sentinel lines).
 Exports stay complete by design (no response limit — the fine-tuning
 corpus is never truncated, invariant 4).
+FU-4 closed this unit's two follow-up residuals: (1) the rel-11-from-rel-13
+note — stats/timeline DB compute (auth + aggregates + the per-chunk scans)
+runs on a worker thread via `asyncio.to_thread`, moved with the timeline/stats
+helpers into `app/lib/reasoning_stats.py` (also the reasoning_logs.py
+497/500-LOC split); each phase holds at most ONE short session (the old
+timeline route nested its chunk scans inside the aggregate session), and the
+`(show_id, relative_time_ms)` index (`ix_llm_interactions_show_rel_time`,
+migrations/005 for deployed PG) covers the detail scan's keyset that
+deliberately did not re-sort per chunk before. (2) `chunked_shaped_rows`/
+`ndjson_lines` params are fully annotated (TYPE_CHECKING-only imports, no
+runtime cycle). Payloads are byte-identical (pure move); pinned by
+`tests/test_fu4_exports.py` (off-loop heartbeat ×2, index introspection,
+LOC/annotation pins).
 
 ### REL-14 [High] Deleting a live show poisons the audit flush forever
 `shows.py:334-335` tears down recording but leaves `llm_interaction_buffer`

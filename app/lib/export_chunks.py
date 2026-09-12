@@ -11,10 +11,25 @@ milliseconds — far under rel-09's engine-wide 10 s statement_timeout — and
 returns its connection to the pool before the next chunk opens.
 """
 
+from __future__ import annotations
+
 import json
 import logging
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from typing import TYPE_CHECKING, TypeVar
 
 from sqlalchemy import tuple_
+
+if TYPE_CHECKING:
+    from sqlalchemy import Column
+    from sqlalchemy.orm import Query, Session
+
+    from app.db import DatabaseManager
+
+# The two shapes that genuinely vary across call sites: the raw row handed to
+# the shaper (ORM entity or projected Row) and whatever the shaper returns.
+RowT = TypeVar("RowT")
+ShapedT = TypeVar("ShapedT")
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +40,14 @@ EXPORT_CHUNK_ROWS = 500
 
 
 def chunked_shaped_rows(
-    db_manager, build_query, order_cols, cursor_cols, shaper, row_key, page_size=None
-):
+    db_manager: DatabaseManager,
+    build_query: Callable[[Session], Query],
+    order_cols: Sequence[Column],
+    cursor_cols: Sequence[Column],
+    shaper: Callable[[RowT], ShapedT],
+    row_key: Callable[[RowT], tuple],
+    page_size: int | None = None,
+) -> Iterator[ShapedT]:
     """Yield shaper(row) dicts across a show-sized table, one short session per chunk.
 
     build_query(session) returns the show-scoped (+user-filtered) query WITHOUT
@@ -78,7 +99,7 @@ def chunked_shaped_rows(
             return
 
 
-def ndjson_lines(row_dicts):
+def ndjson_lines(row_dicts: Iterable[dict]) -> Iterator[str]:
     """Render shaped row dicts as one JSON line each (format-stable export)."""
     for row in row_dicts:
         yield json.dumps(row) + "\n"

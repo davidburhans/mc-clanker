@@ -19,7 +19,7 @@ is expected GREEN on `main`; that green-on-main is the TDD red-phase inversion
 | 3 | Reset-then-restart — boundary re-primed + transition fires, TWO cycles | `test_soak_mixer.py::test_p3_reset_then_restart_two_cycles` |
 | 4 | VRAM plateau — 300 generations, counters + threads return to baseline | `test_soak_worker.py::test_p4_vram_and_thread_plateau_after_300_generations` |
 | 5 | Timeout circuit-breaker — t→s→t→t trips exactly once; completed pipeline resets | `test_soak_worker.py::test_p5_consecutive_timeout_breaker_contract_under_mixed_schedule` |
-| 6 | Disconnect churn — K abrupt `/stream.mp3` kills: zero zombie ffmpeg, clients bounded, RSS flat | `test_soak_stream.py::test_p6_disconnect_churn_zero_zombies` |
+| 6 | Disconnect churn — K abrupt `/stream.mp3` kills: zero zombie ffmpeg, clients bounded, RSS flat. FU-4: + live PCM feed (mirroring `broadcast_audio`'s snapshot/put_nowait shape at real mixer cadence through the REGISTERED queue → feeder → transcoder stdin), so `dropped_pcm_blocks == 0` is non-vacuous | `test_soak_stream.py::test_p6_disconnect_churn_zero_zombies` |
 | 7 | Storage reconciliation — outages + delete_show: zero unreferenced objects / orphan files, bytes bounded by retention | `test_soak_storage_export.py::test_p7_storage_reconciliation_under_db_outages` |
 | 8 | Real-session export — real capture+flush, delete-live-show, complete NDJSON from both endpoints | `test_soak_storage_export.py::test_p8_real_session_capture_and_export_roundtrip` |
 

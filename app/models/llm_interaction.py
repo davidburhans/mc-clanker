@@ -116,7 +116,13 @@ class LLMInteraction(Base):
 
     show = relationship("Show", back_populates="llm_interactions")
 
-    __table_args__ = (Index("ix_llm_interactions_show_loop", "show_id", "loop_index"),)
+    __table_args__ = (
+        Index("ix_llm_interactions_show_loop", "show_id", "loop_index"),
+        # FU-4 (rel-13 §6 residual): covers the timeline detail scan's
+        # (show_id → relative_time_ms) filter+order — each chunk previously
+        # re-sorted the whole show's rows. Deployed PG: migrations/005.
+        Index("ix_llm_interactions_show_rel_time", "show_id", "relative_time_ms"),
+    )
 
     def to_dict(self):
         return {

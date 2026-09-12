@@ -186,6 +186,16 @@ class StreamFanout:
             except Exception:
                 with self._clients_lock:
                     self._discard_client_locked(session)  # roll the reservation back
+                # FU-4 (rel-10 review residual): _start can raise AFTER
+                # supervisor.spawn() — discarding the reservation alone
+                # strands a live transcoder on a singleton the factory then
+                # merely _retire()s (an immortal orphan nobody references).
+                # Funnel through the single idempotent stop path: proc killed
+                # and reaped, kill-list entry dropped, PCM queue unregistered,
+                # threads joined, singleton retired. Degrades to a no-op when
+                # the spawn itself failed (nothing to tear down) and
+                # early-returns if a concurrent teardown already began.
+                self._teardown()
                 raise
             self._teardown_if_start_orphaned()
         return session

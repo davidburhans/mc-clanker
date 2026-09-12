@@ -266,7 +266,7 @@ against fakes; documented how to run it.
 | FU-1 | rel-fu-health | mixer consecutive-failure counter + health + log rate-limit (rel-01); audit backlog/failed-flush health counters (rel-04); trigger_shutdown subprocess-kill outside sync_lock (rel-11); stems.py:23 sanitize (rel-01); psycopg2 TCP keepalives in db.py (rel-17) | `rel-fu-1-health` | **landed** (10 FU-1 regression tests red→green; full gate 1188p/26s) |
 | FU-2 | rel-fu-loop | pregen epoch/generation counter — stale pre-reset result acceptance (rel-02); outage streak resets on successful SUBMIT not read-probe (rel-12); loop_orchestrator.py split under 500 (rel-17) | `rel-fu-2-loop` | **landed** (9 FU-2 regression tests red→green (`tests/test_loop_epoch_recovery.py` E1–E4/O1–O4/S1); characterization + divergence suites untouched & green (pure move); full gate 1198p/26s) |
 | FU-3 | rel-fu-worker | consecutive_generation_timeouts in worker /health; breaker timeout->fail->timeout branch pin (rel-03); _refresh_lease worker_id-scoped; _mark_job_complete 0-rowcount not counted processed; py3.11 TimeoutError-alias note; worker.py split under 500 (rel-03/24) | `rel-fu-3-worker` | **landed** (6 FU-3 regression tests red→green (`tests/test_worker_fu3.py` H1/B5/B6/R1/C1/S1); keep-green worker suites untouched & green (pure move split first, then 4 behavior edits); full gate 1203p/26s, soak 9p/1s) |
-| FU-4 | rel-fu-exports | stats/timeline asyncio.to_thread + (show_id, relative_time_ms) index (rel-13); reasoning_logs.py split; export_chunks TYPE_CHECKING hints; fanout acquire_client rollback orphan kill (rel-10); soak P6 live PCM feed for dropped_pcm_blocks | `rel-fu-4-exports` | planned |
+| FU-4 | rel-fu-exports | stats/timeline asyncio.to_thread + (show_id, relative_time_ms) index (rel-13); reasoning_logs.py split; export_chunks TYPE_CHECKING hints; fanout acquire_client rollback orphan kill (rel-10); soak P6 live PCM feed for dropped_pcm_blocks | `rel-fu-4-exports` | **landed** (6 FU-4 regression tests red→green (`tests/test_fu4_exports.py` O1/O2/I1/S1/H1/R1); soak P6 live-PCM feed upgraded in place, red-proofed feed-disabled; keep-green reasoning/fanout/export suites untouched & green (pure move split); full gate 1209p/26s, soak 9p/1s) |
 
 ## Follow-ups (from unit reviews)
 
@@ -312,6 +312,11 @@ against fakes; documented how to run it.
   (narrow); client acquiring inside the teardown snapshot window gets one
   instantly-poisoned session (browser reconnects). Also:
   YouTubeRelay._write_block None-poison TypeError guard → U10.
+  **(acquire-rollback orphan DONE in FU-4:** `_start` raising AFTER
+  `supervisor.spawn()` funnels `acquire_client`'s rollback through the
+  idempotent `_teardown()` — proc reaped, queue unregistered, singleton
+  retired; pinned by `tests/test_fu4_exports.py` R1. The late-spawn race and
+  teardown-snapshot window remain report-only.**)
 
 - rel-11 (P2, report-only): trigger_shutdown holds sync_lock across
   p.kill()/p.wait(timeout=1) — pre-existing I/O-under-lock (rel-12/19
@@ -322,6 +327,12 @@ against fakes; documented how to run it.
   follow-up: asyncio.to_thread wrap or an (show_id, relative_time_ms) index.
   reasoning_logs.py at 497/500 lines — split timeline/stats helpers on next
   touch. export_chunks.py params want TYPE_CHECKING hints.
+  **(ALL DONE in FU-4:** compute split into `app/lib/reasoning_stats.py`
+  (pure move; 246 + 333 lines) behind `compute_*_payload` entry points run
+  via `asyncio.to_thread` — auth included, one short session per phase;
+  `ix_llm_interactions_show_rel_time` index (model + migrations/005);
+  `export_chunks.py` fully annotated. Pinned by
+  `tests/test_fu4_exports.py` O1/O2/I1/S1/H1.**)
 
 - rel-12 (from rel-17 review, report-only): read-only PG (hot standby) makes
   the recovery probe reset the streak while submits still fail — conductor
