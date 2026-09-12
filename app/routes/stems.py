@@ -1,9 +1,9 @@
 import io
 import wave
 
-import numpy as np
 from fastapi import APIRouter, HTTPException, Response
 
+from app.framework.framework_mixer import sanitize_pcm_block
 from app.framework.framework_state import state
 
 from .schemas import CustomStemCreate, StemVolumeUpdate
@@ -16,11 +16,13 @@ def _encode_wav_response(audio_data, index: int) -> Response:
 
     The cache stores float32 in [-1, 1] but the WAV header below declares
     16-bit PCM: convert instead of writing raw float32 bit patterns, which
-    players decoded as full-scale noise (review AUDIO-1). Same conversion as
-    the mixer in framework_mixer.py. Runs OUTSIDE state.lock (REL-31b) on a
+    players decoded as full-scale noise (review AUDIO-1). Same *sanitizer* as
+    the mixer — literally the shared helper (REL-21/FU-1): np.clip alone
+    preserves NaN, so a poisoned cached stem would download as
+    platform-defined int16 garbage. Runs OUTSIDE state.lock (REL-31b) on a
     copy taken under the lock.
     """
-    pcm = (np.clip(audio_data, -1.0, 1.0) * 32767).astype("<i2")
+    pcm = (sanitize_pcm_block(audio_data) * 32767).astype("<i2")
     channels = int(pcm.shape[1]) if pcm.ndim == 2 else 1
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:

@@ -31,6 +31,14 @@ _flush_lock = asyncio.Lock()
 # tests can pin/monkeypatch it.
 FLUSH_SHUTDOWN_FLUSH_TIMEOUT_SECONDS = 10.0
 
+# FU-1 (rel-04 follow-up): lifetime count of failed audit flushes, surfaced in
+# /api/health. Module-level because flush_recording_buffers is the single
+# writer (all flush paths serialize on _flush_lock); monotonic by design —
+# intermittent failures stay visible after recovery (consumers diff). Readers
+# must use the module attribute (audit_recording.audit_failed_flushes), never
+# a from-import (the int binding would go stale and break monkeypatching).
+audit_failed_flushes = 0
+
 
 def _insert_audit_batches(llm_buffer: list[dict[str, Any]], action_buffer: list[dict[str, Any]]) -> None:
     """Sync bulk-insert of one flush's copied buffers (U4: runs in a worker thread).
@@ -86,6 +94,11 @@ async def flush_recording_buffers() -> None:
             print("Flushed recording buffers to DB")
         except Exception as e:  # noqa: BLE001  # intentional: restore buffers + keep the show alive on DB blip
             print(f"Error flushing recording buffers: {e}")
+            # FU-1: health counter (module attr, D4) — incremented before the
+            # re-prepend so the failure is visible even if the re-prepend itself
+            # never gets retried.
+            global audit_failed_flushes
+            audit_failed_flushes += 1
             # Put buffers back on failure.
             async with state.lock:
                 state.llm_interaction_buffer = llm_buffer + state.llm_interaction_buffer

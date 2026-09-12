@@ -17,6 +17,13 @@ from .framework_state import state
 
 log = logging.getLogger(__name__)
 
+# FU-1 (rel-01 follow-up): log the render-tick failure traceback on the first
+# failure and every Nth consecutive one — the per-tick guard bounded log
+# volume only by tick cadence (~21.7/s under persistent failure); this caps it
+# at ~1 traceback per N ticks (≈4.6 s at N=100). Counter-based, not wall-clock:
+# deterministic and testable without sleeps.
+TICK_FAILURE_LOG_EVERY = 100
+
 
 class Track:
     def __init__(self, audio_data: np.ndarray, start_sample: int, stem_index: int = -1):
@@ -408,6 +415,10 @@ class Mixer:
         # never on the audio thread, so sync_lock here cannot stall a tick.
         with state.sync_lock:
             state.mixer_thread = self._stream_thread
+            # FU-1: fresh render run reports fresh failure counters (D1) —
+            # zeroed inside the same registration section, so a start() racing
+            # a stop-join-timed-out zombie thread is fully serialized.
+            state.mixer_tick_failures = {"consecutive": 0, "total": 0}
         self._stream_thread.start()
         log.info("Audio stream loop started")
 
@@ -427,8 +438,29 @@ class Mixer:
             try:
                 self._callback(outdata, self.blocksize, None, None)
             except Exception:
-                log.exception("Mixer render tick failed; emitting silence")
+                with state.sync_lock:
+                    failures = state.mixer_tick_failures["consecutive"] = (
+                        state.mixer_tick_failures["consecutive"] + 1
+                    )
+                    state.mixer_tick_failures["total"] += 1
+                # FU-1: rate-limit the traceback — first failure + every
+                # TICK_FAILURE_LOG_EVERY-th consecutive one. Logged OUTSIDE
+                # the lock section (invariant 1: no I/O under lock).
+                if failures == 1 or failures % TICK_FAILURE_LOG_EVERY == 0:
+                    log.exception(
+                        "Mixer render tick failed (%d consecutive); emitting silence",
+                        failures,
+                    )
                 outdata.fill(0)
+            else:
+                # Unlocked guard read (GIL-atomic dict read): the lock is taken
+                # only on a tick that actually follows failures, so the healthy
+                # per-tick path gains nothing but this check (FU-1/D1).
+                if state.mixer_tick_failures["consecutive"]:
+                    with state.sync_lock:
+                        recovered = state.mixer_tick_failures["consecutive"]
+                        state.mixer_tick_failures["consecutive"] = 0
+                    log.info("Mixer render recovered after %d failing ticks", recovered)
             # Sleep only the *remaining* time until the next deadline.
             remaining = deadline - time.monotonic()
             if remaining > 0:
@@ -449,3 +481,9 @@ class Mixer:
         with self.lock:
             self.tracks = []
         log.info("Mixer stopped")
+
+
+# Public module alias (FU-1): the stems download route reuses the exact mixer
+# sanitizer — np.clip alone preserves NaN (REL-21), and a second copy of the
+# NaN/Inf logic would silently drift. Same pattern as the ensure_stereo alias.
+sanitize_pcm_block = Mixer._sanitize_pcm_block

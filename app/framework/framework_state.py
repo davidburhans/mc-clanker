@@ -240,6 +240,12 @@ class GlobalState:
         # sync_lock; deliberately NOT cleared by reset() (see youtube_relay).
         self.mixer_thread = None
 
+        # Render-tick failure counters surfaced to /api/health (FU-1, rel-01
+        # follow-up). Written by the mixer render thread + Mixer.start under
+        # sync_lock; zeroed by reset() like recording_write_errors (health
+        # counters, not a live-resource handle — unlike mixer_thread).
+        self.mixer_tick_failures: dict[str, int] = {"consecutive": 0, "total": 0}
+
     # ------------------------------------------------------------------
     # E3 pass-1 additive slice views (read-only, over the same __dict__).
     # Legacy ``state.X`` access is unchanged; ``state.<slice>.X`` is a typed
@@ -341,6 +347,9 @@ class GlobalState:
         # running recording (same rationale as youtube_relay/stream_fanout).
         self.recording_write_errors = {"show": 0, "export": 0}
         self.recording_stop_reasons = {"show": None, "export": None}
+        # FU-1: render-tick failure counters back to a clean slate (test-fixture
+        # isolation; same rationale as recording_write_errors above).
+        self.mixer_tick_failures = {"consecutive": 0, "total": 0}
 
     # ------------------------------------------------------------------
     # Loop transition recording — called by main async loop when mixer
@@ -636,16 +645,25 @@ class GlobalState:
             except Exception as exc:  # noqa: BLE001 - shutdown must never hang on the row update
                 log.error("Shutdown could not end live show row %s: %r", show_id, exc)
 
-        # Terminate tracked subprocesses
+        # Terminate tracked subprocesses — kill/wait OUTSIDE sync_lock (FU-1,
+        # rel-11 follow-up): p.wait blocks up to 1 s per proc and the audio
+        # tick takes sync_lock every ~46 ms; under the lock, N slow-dying procs
+        # stall the audio path and every other sync_lock holder for up to N
+        # seconds. The snapshot+clear section is memory-only (no nested lock,
+        # no I/O — sync_lock stays a leaf lock), and the sweep itself holds no
+        # lock at all. A proc registered between snapshot and clear escapes the
+        # sweep — identical residual to the previous code, and shutdown_event
+        # is already set, so spawners are on teardown.
         with self.sync_lock:
-            for p in list(self.active_subprocesses):
-                try:
-                    log.info("Killing tracked process %s...", p.pid)
-                    p.kill()
-                    p.wait(timeout=1)
-                except Exception:
-                    pass
+            procs = list(self.active_subprocesses)
             self.active_subprocesses.clear()
+        for p in procs:
+            try:
+                log.info("Killing tracked process %s...", p.pid)
+                p.kill()
+                p.wait(timeout=1)
+            except Exception:
+                pass
 
     def _detach_recording_sinks_locked(self):
         """Detach both recording sink slots + all recording bookkeeping; caller

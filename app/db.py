@@ -16,6 +16,16 @@ DB_CONNECT_TIMEOUT_SECONDS = 5
 DB_STATEMENT_TIMEOUT_MS = 10_000
 DB_POOL_RECYCLE_SECONDS = 1800
 
+# FU-1 (rel-17 follow-up): TCP keepalives so a silently dropped (half-open,
+# no FIN) pooled conn is detected in ~idle + count*interval ≈ 60 s instead of
+# the OS default (often 2 h+). pre_ping covers conns that error; keepalives
+# cover the black-holed ones. libpq-only — never passed to SQLite paths
+# (SQLite conninfo would reject libpq params). Constants, not env knobs —
+# matching the REL-09 DB_* contract above.
+DB_KEEPALIVE_IDLE_SECONDS = 30
+DB_KEEPALIVE_INTERVAL_SECONDS = 10
+DB_KEEPALIVE_COUNT = 3
+
 
 class DatabaseManager:
     _instance = None
@@ -38,6 +48,10 @@ class DatabaseManager:
                 connect_args={
                     "connect_timeout": DB_CONNECT_TIMEOUT_SECONDS,
                     "options": f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS}",
+                    "keepalives": 1,
+                    "keepalives_idle": DB_KEEPALIVE_IDLE_SECONDS,
+                    "keepalives_interval": DB_KEEPALIVE_INTERVAL_SECONDS,
+                    "keepalives_count": DB_KEEPALIVE_COUNT,
                 },
             )
         elif database_url:

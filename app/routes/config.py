@@ -8,6 +8,7 @@ import time
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.framework import audit_recording
 from app.framework.framework_state import state
 
 from .schemas import AudienceMessage, CustomInstrumentCreate, GenerationConfig, LLMConfig, StateUpdate
@@ -142,6 +143,17 @@ def _mixer_thread_liveness() -> bool | None:
     return None if mixer_thread is None else mixer_thread.is_alive()
 
 
+def _mixer_tick_failures() -> dict:
+    """Mixer render-tick failure counters for /api/health (FU-1, rel-01).
+
+    Copy under sync_lock (zero I/O, same pattern as _recording_sink_status)
+    so a health probe never delays an audio tick. Always an object — zeroed
+    when idle/never started; "never started" is mixer_alive's null job.
+    """
+    with state.sync_lock:
+        return dict(state.mixer_tick_failures)
+
+
 def _recording_sink_status() -> dict:
     """Per-sink recording health for /api/health (REL-05c + REL-11).
 
@@ -189,11 +201,24 @@ async def health_check():
     """Liveness probe with embedded dependency readiness (review F4)."""
     async with state.lock:
         is_running = state.is_running
+        # FU-1: audit backlog lengths — same event-loop thread as every buffer
+        # mutation (asyncio.Lock-held sections), so these are plain len() reads
+        # (no I/O, no new lock ordering).
+        buffered_interactions = len(state.llm_interaction_buffer)
+        buffered_actions = len(state.action_buffer)
     checks = await _readiness_checks()
     return {
         "status": "healthy",
         "is_running": is_running,
         "mixer_alive": _mixer_thread_liveness(),
+        # FU-1 (rel-01/rel-04 follow-ups): additive degradation signals. The
+        # module-attr read (not a from-import) sees the counter's live value.
+        "mixer_tick_failures": _mixer_tick_failures(),
+        "audit": {
+            "buffered_interactions": buffered_interactions,
+            "buffered_actions": buffered_actions,
+            "failed_flushes": audit_recording.audit_failed_flushes,
+        },
         "recording": _recording_sink_status(),
         "ready": checks["ready"],
         "checks": checks,
