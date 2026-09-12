@@ -181,9 +181,9 @@ estimates:
 | Behavior | Consequence for 24/7 |
 |---|---|
 | `max_restarts=3` per session, then `_give_up()` permanently deactivates — **fixed-in rel-15-youtube**: a proc alive ≥ `stability_window_s` (300 s) earns a fresh budget (rate limit, not lifetime count), and the `youtube_lifecycle` watchdog re-arms a fully gave-up relay | Brief network blips self-heal twice over (relay-internal restart + watchdog re-arm). Only a sustained fast-crash loop (rejected key) stays down-ish: ~3 arms per 15 min with one ERROR alert, auto-healing once the key is fixed. `dropped_blocks` delta still worth alerting on. |
-| No auto-arm on app boot — relay starts only via `POST /api/youtube/stream/start` | Host reboot / app crash / deploy = stream stays dead. Need a boot-time hook when `YOUTUBE_STREAM_KEY` is set. |
+| No auto-arm on app boot — relay starts only via `POST /api/youtube/stream/start` — **fixed-in rel-15-youtube**: `youtube_lifecycle.auto_arm_youtube_relay` arms on lifespan startup whenever `YOUTUBE_STREAM_KEY` is set (never fatal; no key = silent no-op), and the watchdog keeps it armed | Host reboot / app crash / deploy self-heal within one watchdog tick (60 s) instead of staying dead. To keep a host down across restarts, remove `YOUTUBE_STREAM_KEY` (the disarm flag is in-memory only). |
 | Writer queue = 512 blocks (~24 s), overflow drops, never blocks | Every restart cycle drops the blocks drained while FFmpeg is down (backoff 2 s × restart #, plus spawn time) — seconds of dead air per blip. Acceptable occasionally; alert on `dropped_blocks` delta. |
-| Restart backoff is linear, 2 s × restart # | Fine. But a watchdog that restarts the *relay* (not FFmpeg) needs its own storm guard (cooldown ≥ 60 s). |
+| Restart backoff is linear, 2 s × restart # | Fine. The watchdog's own storm guard (rel-15) landed as specified here: 60 s arm cooldown; 3 consecutive fast-failure arms → ERROR alert + 15 min backoff, then retry. |
 | Cleanup reaps stale job leases; deletes expired Garage objects | Storage growth is handled *if* retention is configured — verify the env-driven retention window before continuous operation. |
 | Playback via `ShowPlayback` feeds the same broadcast path | Recorded shows can cover maintenance windows — but looping recordings overnight leans toward the "repetitious" pattern; prefer live generation, keep playback as failover only. |
 | FFmpeg `veryfast` @ 1080p30 = ~4.5 Mbps sustained ≈ **1.45 TB/month** upload | Check ISP caps/peering. Fallback: 720p30 (2.5 Mbps, ~810 GB/mo) via the `resolution` param. |
@@ -219,7 +219,9 @@ repeat audibly — which is simultaneously a UX bug and **policy evidence**
       worker, Postgres, Garage
 - [ ] Backlog/stall alerts (job queue depth, loop repeat counter,
       `dropped_blocks` delta, worker heartbeat)
-- [ ] Kill switch documented (single command → clean `/stream/stop`)
+- [x] Kill switch documented (single command → clean `/stream/stop`; rel-15
+      also sets `state.youtube_relay_disarmed` so auto-arm/watchdog respect
+      it — see [youtube_live.md](youtube_live.md))
 - [ ] Retention verified (cleanup cadence + Garage + VOD recordings)
 - [ ] 72-hour unlisted soak test, then a 2-week staffed-hours-only trial
       before true unattended 24/7

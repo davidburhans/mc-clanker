@@ -16,8 +16,11 @@ Mixer ──broadcast_audio()──▶ audio_clients queue ──▶ YouTubeRela
 The relay registers through the same `audio_clients` dispatch the browser
 streaming endpoint uses — the mixer loop is untouched. The queue stays
 registered across FFmpeg restarts; if the process dies it respawns with linear
-backoff (up to `max_restarts=3` per session) and drops only the blocks drained
-while down.
+backoff and drops only the blocks drained while down. Restarts are a rate
+limit, not a lifetime count: a process that stayed up ≥ `stability_window_s`
+(300 s) earns a fresh budget, so `max_restarts=3` caps *rapid* deaths. A relay
+that still gives up entirely is re-armed by the 24/7 supervision (see "Going
+24/7" below).
 
 ## First run
 
@@ -33,8 +36,11 @@ while down.
      -d '{"stream_key": "xxxx-xxxx-xxxx-xxxx"}'
    ```
 
-3. **Arm the relay** (before or during a set — YouTube shows "waiting for
-   stream data" until the first PCM block):
+3. **Arm the relay** (YouTube shows "waiting for stream data" until the first
+   PCM block). With `YOUTUBE_STREAM_KEY` set, the app arms itself on boot and
+   the watchdog keeps it armed — this step is only needed to pick non-default
+   visualizer/resolution/fps, or to re-arm after a `stream/stop` (which
+   disarms):
 
    ```bash
    curl -X POST http://localhost:8000/api/youtube/stream/start \
@@ -43,14 +49,19 @@ while down.
    ```
 
 4. **Start the music** (`is_generating=true` or play back a show).
-5. **Stop** with `POST /api/youtube/stream/stop`.
+5. **Stop** with `POST /api/youtube/stream/stop`. This is the operator kill
+   switch: it sets `state.youtube_relay_disarmed`, so the boot auto-arm and
+   the watchdog will not re-arm behind your back. `stream/start` or any
+   successful arm clears the disarm; a musical `reset()` does not. The flag
+   is in-memory only — an app restart re-arms while `YOUTUBE_STREAM_KEY` is
+   set, so remove the key to keep a host down across restarts.
 
 ## API
 
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /api/youtube/stream/start` | Spawn relay + FFmpeg (409 if active) |
-| `POST /api/youtube/stream/stop` | Graceful stop; idempotent |
+| `POST /api/youtube/stream/stop` | Graceful stop; idempotent; sets the operator disarm so auto-arm/watchdog stay off |
 | `GET /api/youtube/stream/status` | `active`, `process_alive`, `restarts`, `dropped_blocks`, `bytes_sent`, `last_error` (key-scrubbed) |
 | `GET/PUT /api/youtube/config` | Ingest URL + stream key (masked `****xxxx` in responses) |
 
@@ -66,12 +77,37 @@ Visualizers: `cqt` (spectrum, default), `waves` (oscilloscope lines),
 - Auth: these endpoints require DJ credentials like the rest of the
   owner-facing API.
 
-## Going 24/7 (roadmap)
+## Going 24/7 (implemented — rel-15)
 
-The relay was designed for it: call `relay.reset_restart_budget()` from a
-watchdog on an interval, and restart the relay when `status().active` is
-false. Persistent stream keys (`YOUTUBE_STREAM_KEY` in env) survive app
-restarts; pair with the existing cleanup/onboarding health checks.
+Supervision lives in `app/youtube_lifecycle.py`, wired into the FastAPI
+lifespan (`start_relay_services` / `stop_relay_services`):
+
+- **Auto-arm on boot** — with `YOUTUBE_STREAM_KEY` configured, the relay is
+  armed at startup. No key = silent no-op. Every failure (rejected config,
+  spawn error, even a bug) is caught and logged: streaming is optional
+  infrastructure and can never block app startup. An app restart or deploy no
+  longer leaves the stream dead until a human POSTs `stream/start`.
+- **Watchdog** — an asyncio task re-checks every 60 s and re-arms a relay
+  that is inactive and not disarmed. Re-arm builds a *fresh* relay from
+  current state: fresh restart counters, and a stream key fixed via
+  `PUT /api/youtube/config` heals on the next arm — no app restart needed.
+- **Storm guard** — an arm attempt that fails outright, or a relay that goes
+  inactive again before the watchdog observed it survive the 120 s trust
+  window, counts as a fast failure. 3 consecutive ones engage a 15-minute
+  backoff with a single ERROR alert, then retry. A rejected stream key
+  therefore costs ~3 arms per 15 minutes with an alert — never a spawn
+  storm — and heals by itself once the key is fixed. A relay observed alive
+  past the trust window resets the count.
+- **Operator override** — `POST /stream/stop` disarms (watchdog and boot
+  auto-arm skip a disarmed relay); `stream/start` or any successful arm
+  re-arms. `state.reset()` clears neither the relay nor the disarm flag.
+- **Shutdown** — the watchdog task is cancelled and the relay is stopped
+  gracefully (stdin EOF lets FFmpeg flush) alongside the framework task.
+
+The timers (`WatchdogConfig`) and `stability_window_s` are code-level
+defaults, deliberately not env knobs. Remaining 24/7 hygiene (process
+restarts, alerting, soak tests) is tracked in the
+[24/7 risk analysis](youtube_247_risk_analysis.md) §3 checklist.
 
 ## Compliance notes
 
