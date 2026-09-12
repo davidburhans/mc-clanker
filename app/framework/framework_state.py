@@ -389,29 +389,31 @@ class GlobalState:
 
         REL-20: the old body held sync_lock across ``open`` + ``json.dump``, so a
         slow instruments.json disk write stalled the next snapshot_mixer_state /
-        broadcast_audio tick. Payloads are snapshotted AFTER the mutation under the
-        same lock section, so a concurrent add's payload always contains it — the
-        file can never regress (only actual file writes serialize, on
-        ``_instruments_io_lock``, which the audio path never touches).
+        broadcast_audio tick. Review P2: the io lock must span snapshot AND write
+        — snapshotting under sync_lock but queueing the write separately let a
+        slow older writer overwrite a newer payload (lost update). Lock order
+        is io -> sync (the only nesting), so no deadlock; sync_lock is held
+        only for the in-memory copy, never for I/O.
         """
-        with self.sync_lock:
-            payload = {
-                "instruments": copy.deepcopy(self.categorized_instruments),
-                "_metadata": {"custom_instruments": copy.deepcopy(self.custom_instruments)},
-            }
-        self._write_instruments_payload(payload)
+        with self._instruments_io_lock:
+            with self.sync_lock:
+                payload = {
+                    "instruments": copy.deepcopy(self.categorized_instruments),
+                    "_metadata": {"custom_instruments": copy.deepcopy(self.custom_instruments)},
+                }
+            self._write_instruments_payload(payload)
 
     def _write_instruments_payload(self, payload: dict):
         """Write an already-snapshotted instruments payload to disk (REL-20).
 
-        Pure I/O: never call while holding sync_lock. Serialized by
-        _instruments_io_lock so two concurrent adds cannot interleave writes into
-        a torn file; that lock is a private writer coordination, not the audio
-        path's sync_lock.
+        Pure I/O, no locks of its own: the ONLY caller (save_instruments)
+        already holds _instruments_io_lock across snapshot + write, which is
+        what makes write order match snapshot order (review P2 lost-update
+        fix). Never call while holding sync_lock — the caller releases it
+        before entering this body's disk I/O.
         """
-        with self._instruments_io_lock:
-            with open(self.instruments_file, "w") as f:
-                json.dump(payload, f, indent=2)
+        with open(self.instruments_file, "w") as f:
+            json.dump(payload, f, indent=2)
 
     def add_custom_instrument(self, name, family=None):
         """Add a user-defined instrument, optionally with its major_family.

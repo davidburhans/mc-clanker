@@ -666,6 +666,10 @@ async def stop_export():
         start_time = state.recording_start_time
         state.export_sink = None
         state.is_recording = False
+        # Review P2: mirror the other detach paths — clear the stale path/time
+        # so nothing downstream can mistake a stopped export for a live one.
+        state.recording_file_path = None
+        state.recording_start_time = None
     duration = (time.time() - start_time) if start_time else 0.0
     if export_sink is not None:
         export_sink.stop_and_finalize()
