@@ -252,7 +252,7 @@ against fakes; documented how to run it.
 | 12 rel-loop-robustness | **landed** (1147p/16s green after round-1 fix) | 6da999e |
 | 13 rel-worker-correctness | **landed** (1165p/18s green after round-1 fix) | cf60523 |
 | 14 rel-p3-hygiene | **landed** (1178p/17s green after round-1 fixes; icecast deleted) | 1f1abb4 |
-| 15 rel-soak-harness | pending | — |
+| 15 rel-soak-harness | **landed** (1178p/26s green — 9 soak tests SKIPPED by default; SOAK=1 9-pass 3.1 s, SOAK_PROFILE=full 24 h-equivalent 9.3 s ×3 stable; green-on-main = red-phase inversion, documented; no production edits) | dff18d9 |
 
 ## Follow-ups (from unit reviews)
 
