@@ -97,6 +97,10 @@ class GlobalState:
         # ------------------------------------------------------------------
         self.lock = asyncio.Lock()
         self.sync_lock = threading.Lock()  # for Mixer._callback & broadcast_audio
+        # REL-20: serializes instruments.json file writers only. Never taken on
+        # the audio path — sync_lock stays I/O-free (snapshot-only), the write
+        # runs outside it under this private lock.
+        self._instruments_io_lock = threading.Lock()
 
         # Music state
         self.current_bpm = 120
@@ -171,18 +175,22 @@ class GlobalState:
         # OrderedDict used as an LRU: oldest at front, newest at back.
         self._stem_cache: OrderedDict = OrderedDict()
 
-        # Recording state. The five fields below are protected by sync_lock so that
-        # broadcast_audio (mixer thread) and the route handlers that open/close these
-        # handles can never race on a half-closed file (review finding A1):
-        #   is_recording, recording_file_handle,
-        #   is_show_recording, current_show_audio_file, current_show_id
+        # Recording state. The sink slots below hold per-recording writer-thread
+        # objects (app.framework.recording_sink.RecordingSink, REL-11), NOT raw
+        # file handles: the slots are protected by sync_lock so broadcast_audio
+        # (mixer thread) and the route handlers that start/stop recordings can
+        # never race on a slot (review finding A1 lineage). The file handles
+        # themselves are owned exclusively by each sink's writer thread, which is
+        # the only thread that finalizes/closes them (single-owner finalize).
+        #   is_recording, export_sink,
+        #   is_show_recording, current_show_sink, current_show_id
         self.is_recording = False
         self.recording_format = "wav"
         self.recording_file_path = None
         self.recording_start_time = None
-        # Streaming recording: write to a temp file rather than buffering in RAM.
-        # Set to an open file-like object by the export/start endpoint.
-        self.recording_file_handle = None
+        # Export recording sink (REL-11): armed by /api/export/start; the sink's
+        # writer thread streams queued PCM into the file off the audio path.
+        self.export_sink = None
 
         # Show recording state
         self.current_show_id = None
@@ -190,12 +198,8 @@ class GlobalState:
         self.is_show_recording = False
         self.llm_interaction_buffer = []
         self.action_buffer = []
-        self.current_show_audio_file = None
-
-        # Last recording handle whose write errored. broadcast_audio logs each
-        # distinct handle's failure at most once (review B9), so a multi-hour show
-        # recording does not spam the log per PCM chunk.
-        self._last_recording_error_handle = None
+        # Show recording sink (REL-11): same contract as export_sink.
+        self.current_show_sink = None
 
         # REL-05c: consecutive failed writes per recording sink ("show"/"export")
         # and why a sink auto-stopped. Mutated by the mixer thread (write path)
@@ -331,6 +335,9 @@ class GlobalState:
         self.loop_history = []
         # REL-05c recording-health dicts back to a clean slate (test-fixture
         # isolation; not a live resource, unlike youtube_relay/mixer_thread).
+        # The sink slots (current_show_sink/export_sink) are deliberately NOT
+        # touched: they are live resources — a musical reset must not kill a
+        # running recording (same rationale as youtube_relay/stream_fanout).
         self.recording_write_errors = {"show": 0, "export": 0}
         self.recording_stop_reasons = {"show": None, "export": None}
 
@@ -378,31 +385,59 @@ class GlobalState:
         return DEFAULT_INSTRUMENTS.copy()
 
     def save_instruments(self):
-        with open(self.instruments_file, "w") as f:
+        """Snapshot the instrument catalog under sync_lock, then write outside it.
+
+        REL-20: the old body held sync_lock across ``open`` + ``json.dump``, so a
+        slow instruments.json disk write stalled the next snapshot_mixer_state /
+        broadcast_audio tick. Payloads are snapshotted AFTER the mutation under the
+        same lock section, so a concurrent add's payload always contains it — the
+        file can never regress (only actual file writes serialize, on
+        ``_instruments_io_lock``, which the audio path never touches).
+        """
+        with self.sync_lock:
             payload = {
-                "instruments": self.categorized_instruments,
-                "_metadata": {"custom_instruments": self.custom_instruments},
+                "instruments": copy.deepcopy(self.categorized_instruments),
+                "_metadata": {"custom_instruments": copy.deepcopy(self.custom_instruments)},
             }
-            json.dump(payload, f, indent=2)
+        self._write_instruments_payload(payload)
+
+    def _write_instruments_payload(self, payload: dict):
+        """Write an already-snapshotted instruments payload to disk (REL-20).
+
+        Pure I/O: never call while holding sync_lock. Serialized by
+        _instruments_io_lock so two concurrent adds cannot interleave writes into
+        a torn file; that lock is a private writer coordination, not the audio
+        path's sync_lock.
+        """
+        with self._instruments_io_lock:
+            with open(self.instruments_file, "w") as f:
+                json.dump(payload, f, indent=2)
 
     def add_custom_instrument(self, name, family=None):
         """Add a user-defined instrument, optionally with its major_family.
 
         When family is provided, registers it with the LLM schema so the LLM
         can use that family in its response.
+
+        REL-20: mutate + snapshot under sync_lock; the file write (and the
+        schema-constants registration) run outside it so a slow disk never
+        delays the audio tick.
         """
         with self.sync_lock:
             if "Custom" not in self.categorized_instruments:
                 self.categorized_instruments["Custom"] = []
-            if name and name not in self.categorized_instruments["Custom"]:
+            changed = bool(name) and name not in self.categorized_instruments["Custom"]
+            if changed:
                 self.categorized_instruments["Custom"].append(name)
-                self.save_instruments()
             if family:
                 self.custom_instruments[name] = family
-                # Register with schema constants so LLM can use this family
-                from app.lib.constants import add_custom_major_family
+        if changed:
+            self.save_instruments()
+        if family:
+            # Register with schema constants so LLM can use this family
+            from app.lib.constants import add_custom_major_family
 
-                add_custom_major_family(family)
+            add_custom_major_family(family)
         return self.categorized_instruments
 
     def get_custom_instruments(self) -> dict:
@@ -458,23 +493,21 @@ class GlobalState:
     def broadcast_audio(self, pcm_data: bytes):
         """Distribute PCM bytes to all streaming clients + recording sinks.
 
-        Recording handles/flags are protected by sync_lock. We snapshot the
-        handles + flags under sync_lock, then write OUTSIDE the lock so the
-        real-time mixer thread never holds sync_lock across file I/O. Route
-        handlers that open/close these handles MUST also hold sync_lock, so the
-        snapshot is never a handle being closed concurrently; the rare
-        close-after-snapshot case is logged once (B9) instead of silently
-        corrupting the recording.
+        REL-11: the recording slots hold writer-thread sink objects, so this
+        mixer-thread hot path only snapshots them + the flags under sync_lock and
+        then ``put_nowait()``s outside the lock — it never touches a file handle,
+        so a stalled disk cannot delay the audio tick (the sink's bounded queue
+        drops-oldest and counts what it sheds). Route handlers that start/stop
+        recordings MUST also hold sync_lock, so the snapshot is never a slot
+        being detached concurrently.
         """
         if self.shutdown_event.is_set():
             return
 
         with self.sync_lock:
             clients = list(self.audio_clients)
-            show_recording = self.is_show_recording
-            show_file = self.current_show_audio_file
-            export_recording = self.is_recording
-            export_handle = self.recording_file_handle
+            show_sink = self.current_show_sink if self.is_show_recording else None
+            export_sink = self.export_sink if self.is_recording else None
 
         for q in clients:
             try:
@@ -482,88 +515,63 @@ class GlobalState:
             except Exception:
                 pass  # full/disconnected client; drop this chunk for it
 
-        if show_recording and show_file is not None:
-            self._write_recording_sink(show_file, pcm_data, "show")
-        if export_recording and export_handle is not None:
-            self._write_recording_sink(export_handle, pcm_data, "export")
+        if show_sink is not None:
+            show_sink.submit(pcm_data)
+        if export_sink is not None:
+            export_sink.submit(pcm_data)
 
-    def _write_recording_sink(self, handle, pcm_data: bytes, sink_name: str):
-        """Write PCM to one recording sink; count failures, auto-stop past threshold.
+    # ------------------------------------------------------------------
+    # REL-05c recording-sink failure hooks — driven by the sinks' writer
+    # threads (app.framework.recording_sink). The health dicts stay here so
+    # /api/health keeps one surface (routes/config._recording_sink_status).
+    # ------------------------------------------------------------------
 
-        Replaces the prior ``except Exception: pass`` which silently corrupted
-        recordings (disk full, bad handle). Logs at most once per distinct handle
-        object so a multi-hour show does not spam per PCM chunk. REL-05c: a
-        sustained failure now stops the sink cleanly instead of "continuing" a
-        corrupt recording at ~176 kB/s of futile writes (see
-        RECORDING_WRITE_FAILURE_STOP_THRESHOLD).
+    def _note_sink_write_failure(self, sink, sink_name: str) -> bool:
+        """Count one failed sink write (REL-05c). True once the threshold is hit.
+
+        The SINK auto-stops itself when this returns True: its writer thread owns
+        the handle, so the stop/finalize runs entirely on that thread (REL-11
+        single-owner finalize) — state only detaches the slot.
         """
-        try:
-            handle.write(pcm_data)
-        except Exception as exc:  # noqa: BLE001 - any write failure is a recording fault
-            if handle is not self._last_recording_error_handle:
-                log.warning("Recording write to %s sink failed: %r", sink_name, exc)
-                self._last_recording_error_handle = handle
-            self._note_sink_write_failure(handle, sink_name)
-            return
-        # Success resets the CONSECUTIVE counter. Guarded by a non-zero check so
-        # the per-tick hot path stays a bare dict read (no lock) when healthy.
-        if self.recording_write_errors[sink_name]:
-            self.recording_write_errors[sink_name] = 0
-
-    def _note_sink_write_failure(self, handle, sink_name: str) -> None:
-        """Count one failed sink write; auto-stop the sink past the threshold (REL-05c)."""
         with self.sync_lock:
             self.recording_write_errors[sink_name] += 1
-            exceeded = self.recording_write_errors[sink_name] >= RECORDING_WRITE_FAILURE_STOP_THRESHOLD
-        if exceeded:
-            self._stop_failing_recording_sink(handle, sink_name)
+            return self.recording_write_errors[sink_name] >= RECORDING_WRITE_FAILURE_STOP_THRESHOLD
 
-    def _stop_failing_recording_sink(self, handle, sink_name: str) -> None:
-        """Cleanly stop one persistently-failing recording sink (REL-05c).
+    def _reset_sink_write_errors(self, sink_name: str) -> None:
+        """Zero one sink's consecutive-failure counter after a successful write.
 
-        Detach under sync_lock (broadcast_audio snapshots handles under it); the
-        finalize runs OUTSIDE the lock — safe here because the caller IS the
-        mixer thread, so no concurrent tick can interleave a write (unlike
-        stop_show's CONC-4 cross-thread finalize-under-lock). The show slot
-        KEEPS ``current_show_id``: append_loop_audit gates on it, so the
-        fine-tuning corpus keeps capturing after the audio sink dies (invariant 4).
+        Only called when the counter was observed non-zero (bare dict read on the
+        writer thread), so the healthy per-block hot path never takes sync_lock.
         """
-        from app.lib.wav import finalize_wav
-
         with self.sync_lock:
-            if not self._detach_failing_sink_locked(handle, sink_name):
-                return
-        finalize_wav(handle)
-        log.error(
-            "Recording %s sink auto-stopped after %d consecutive write failures",
-            sink_name,
-            RECORDING_WRITE_FAILURE_STOP_THRESHOLD,
-        )
+            self.recording_write_errors[sink_name] = 0
 
-    def _detach_failing_sink_locked(self, handle, sink_name: str) -> bool:
-        """Detach ``handle`` from its sink slot; caller MUST hold sync_lock.
+    def _detach_failing_sink(self, sink, sink_name: str) -> bool:
+        """Detach a threshold-breached sink from its slot (takes sync_lock itself).
 
         Returns False when the slot changed hands (a concurrent stop_show/
         stop_export already detached it) — the stale threshold breach is then a
-        no-op: no finalize, no flag writes. Mirrors stop_export's clears exactly
-        for the export slot; the show slot clears everything EXCEPT
-        ``current_show_id`` (invariant 4).
+        no-op: no finalize, no flag writes (rel-05 F5). Mirrors stop_export's
+        clears exactly for the export slot; the show slot clears everything
+        EXCEPT ``current_show_id`` (invariant 4: append_loop_audit gates on it,
+        so the fine-tuning corpus keeps capturing after the audio sink dies).
         """
-        if sink_name == "show":
-            if self.current_show_audio_file is not handle:
-                return False
-            self.is_show_recording = False
-            self.current_show_audio_file = None
-            self.current_show_start_time = None
-        else:
-            if self.recording_file_handle is not handle:
-                return False
-            self.is_recording = False
-            self.recording_file_handle = None
-            self.recording_file_path = None
-            self.recording_start_time = None
-        self.recording_stop_reasons[sink_name] = "write_failure_threshold"
-        return True
+        with self.sync_lock:
+            if sink_name == "show":
+                if self.current_show_sink is not sink:
+                    return False
+                self.is_show_recording = False
+                self.current_show_sink = None
+                self.current_show_start_time = None
+            else:
+                if self.export_sink is not sink:
+                    return False
+                self.is_recording = False
+                self.export_sink = None
+                self.recording_file_path = None
+                self.recording_start_time = None
+            self.recording_stop_reasons[sink_name] = "write_failure_threshold"
+            return True
 
     # ------------------------------------------------------------------
     # Subprocess tracking
@@ -582,11 +590,15 @@ class GlobalState:
     # ------------------------------------------------------------------
 
     def trigger_shutdown(self):
-        """Force immediate shutdown: stop generation, close recordings, poison
-        clients, kill subprocesses.
+        """Force immediate shutdown: stop generation, finalize recordings, end the
+        live show row, poison clients, kill subprocesses.
 
         Called from the event-loop thread (lifespan) and from signal-handler
         threads, so all shared mutations here go under sync_lock (review A4).
+        REL-11/REL-22: the sink slots are detached under the lock, but the
+        drain→flush→finalize runs OUTSIDE it — the sinks' writer threads own the
+        handles (single-owner finalize), so every exit path leaves valid WAV
+        sizes. The DB write is bounded (rel-09 engine timeouts) and non-fatal.
         """
         log.warning("FORCING IMMEDIATE SHUTDOWN...")
         self.shutdown_event.set()
@@ -596,16 +608,30 @@ class GlobalState:
             # set them under lock so the write is visible/ordered (review A4).
             self.is_running = False
             self.is_generating = False
-            # Flush + close recording sinks so SIGTERM doesn't leave truncated
-            # files (review B8). Handles are sync_lock-protected, so close them
-            # under the same lock broadcast_audio snapshots them under (review A1).
-            self._close_recording_handles_locked()
+            # Detach (no I/O) the recording sinks so SIGTERM doesn't leave
+            # truncated files (review B8); their writers drain + finalize below.
+            sinks, show_id = self._detach_recording_sinks_locked()
             # Poison all audio client queues
             for q in list(self.audio_clients):
                 try:
                     q.put_nowait(None)
                 except Exception:
                     pass
+
+        # Drain + finalize OUTSIDE the lock — single-owner finalize (REL-11): the
+        # stopper never touches a handle; a bounded join defers to the writer.
+        for sink in sinks:
+            sink.stop_and_finalize()
+        # REL-22: the process is going down — a 'live' Show row must not survive
+        # the close path. Best-effort: a DB-down shutdown costs a log line.
+        if show_id is not None:
+            try:
+                from app.framework.recording_sink import end_live_show_row
+
+                if not end_live_show_row(show_id):
+                    log.info("Shutdown: show %s row not 'live' — nothing to end", show_id)
+            except Exception as exc:  # noqa: BLE001 - shutdown must never hang on the row update
+                log.error("Shutdown could not end live show row %s: %r", show_id, exc)
 
         # Terminate tracked subprocesses
         with self.sync_lock:
@@ -618,34 +644,34 @@ class GlobalState:
                     pass
             self.active_subprocesses.clear()
 
-    def _close_recording_handles_locked(self):
-        """Flush + close recording file handles and clear their flags.
+    def _detach_recording_sinks_locked(self):
+        """Detach both recording sink slots + all recording bookkeeping; caller
+        MUST hold sync_lock.
 
-        Caller MUST hold sync_lock (these fields are sync_lock-protected and shared
-        with broadcast_audio on the mixer thread). I/O under lock is acceptable
-        here because this only runs on the one-time shutdown path, not per tick.
+        No handle I/O here (REL-11): the returned sinks' writer threads drain,
+        flush and finalize once the caller runs them outside the lock. Shutdown
+        ENDS the show, so ``current_show_id`` is cleared too — contrast the
+        rel-05 auto-stop, which keeps it because the show continues while only
+        the audio sink died (invariant 4 applies per-path, not per-field).
+
+        Returns ``(sinks, show_id)`` — sinks in [show, export] order, and the
+        show id whose live row the caller should end (REL-22), or None.
         """
+        sinks = [s for s in (self.current_show_sink, self.export_sink) if s is not None]
+        show_id = self.current_show_id
         self.is_recording = False
         self.is_show_recording = False
-        for handle_attr in ("recording_file_handle", "current_show_audio_file"):
-            handle = getattr(self, handle_attr)
-            if handle is None:
-                continue
-            try:
-                handle.flush()
-            except (OSError, ValueError):
-                pass
-            try:
-                handle.close()
-            except (OSError, ValueError):
-                pass
-            setattr(self, handle_attr, None)
-        # Reset the once-per-handle error log so a fresh recording logs cleanly.
-        self._last_recording_error_handle = None
+        self.current_show_sink = None
+        self.export_sink = None
+        self.current_show_id = None
+        self.current_show_start_time = None
+        self.recording_file_path = None
+        self.recording_start_time = None
         # Shutdown ends both sinks (cleanly or not) — clear the REL-05c health
         # dicts so a restart inside the same process starts from a clean slate.
         self.recording_write_errors = {"show": 0, "export": 0}
         self.recording_stop_reasons = {"show": None, "export": None}
+        return sinks, show_id
 
 
 state = GlobalState()

@@ -52,9 +52,9 @@ def reset_state():
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.llm_interaction_buffer = []
     state.action_buffer = []
     yield
@@ -64,9 +64,9 @@ def reset_state():
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.llm_interaction_buffer = []
     state.action_buffer = []
 

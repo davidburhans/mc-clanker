@@ -28,6 +28,7 @@ import math
 import os
 import queue
 import struct
+import time
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -60,6 +61,16 @@ def init_db():
     db.create_tables()
 
 
+def wait_until(cond, timeout: float = 3.0) -> bool:
+    """Poll ``cond`` until true — recording blocks now land on the sink writer thread."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 @pytest.fixture(autouse=True)
 def reset_state():
     """Reset global state (incl. the recording fields state.reset() keeps)."""
@@ -70,23 +81,31 @@ def reset_state():
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.recording_file_path = None
     state.llm_interaction_buffer = []
     state.action_buffer = []
     state.llm_api_key = "sk-conductor-secret"
     yield
+    # Stop any writer sink a test left armed (a leaked sink is a daemon thread
+    # + open fd); none of these tests need its bytes after the asserts.
+    for slot in (state.current_show_sink, state.export_sink):
+        if slot is not None and hasattr(slot, "stop_and_finalize"):
+            try:
+                slot.stop_and_finalize(timeout=1.0)
+            except Exception:
+                pass
     state.shutdown_event.clear()
     state.is_running = True
     state.dj_password = ""
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.recording_file_path = None
     state.llm_interaction_buffer = []
     state.action_buffer = []
@@ -172,7 +191,7 @@ class TestD1LiveShowTeardown:
         assert deleted.status_code == 204, deleted.text
         assert state.current_show_id is None
         assert state.is_show_recording is False
-        assert state.current_show_audio_file is None
+        assert state.current_show_sink is None
         assert state.is_show_started is False
 
         # The wedge: before the fix EVERY later start 409'd until a restart.
@@ -219,8 +238,12 @@ class TestD2NoTruncateOnRestart:
     def test_restart_keeps_the_previous_take_and_records_to_a_fresh_path(self, app_client, db_user):
         show_id = _make_show(db_user.id)
         audio_path = _start_show(app_client, db_user, show_id).json()["audio_file_path"]
-        with state.sync_lock:
-            state.current_show_audio_file.write(b"\0" * 4096)
+        # REL-11: blocks are streamed through the show sink's writer thread, so
+        # drive PCM via broadcast_audio and wait for bytes_written (the
+        # flush-per-block writer makes the on-disk size deterministic).
+        state.broadcast_audio(b"\0" * 4096)
+        sink_while_writing = state.current_show_sink
+        assert wait_until(lambda: sink_while_writing is not None and sink_while_writing.status().bytes_written == 4096)
         with patch_owner(db_user):
             stopped = app_client.post(f"/api/shows/{show_id}/stop")
         assert stopped.status_code == 200, stopped.text
@@ -234,8 +257,8 @@ class TestD2NoTruncateOnRestart:
         assert os.path.getsize(audio_path) == recorded_bytes, "prior recording was truncated"
         new_path = restarted.json()["audio_file_path"]
         assert new_path != audio_path
-        with state.sync_lock:
-            assert state.current_show_audio_file.name == new_path
+        assert state.current_show_sink is not None
+        assert state.current_show_sink._handle.name == new_path
 
     def test_allocator_skips_paths_that_already_hold_audio(self, tmp_path):
         from datetime import datetime, timezone
@@ -267,8 +290,9 @@ class TestD3ExportConflictBeforeOpen:
         first = app_client.post("/api/export/start", json={"format": "wav"})
         assert first.status_code == 200, first.text
         file_path = first.json()["file_path"]
-        with state.sync_lock:
-            state.recording_file_handle.write(b"\0" * 8000)
+        # REL-11: drive the PCM through the export sink's writer (deterministic size).
+        state.broadcast_audio(b"\0" * 8000)
+        assert wait_until(lambda: state.export_sink is not None and state.export_sink.status().bytes_written == 8000)
         recorded_bytes = os.path.getsize(file_path)
         assert recorded_bytes > 44
 
@@ -731,19 +755,21 @@ class TestD13WavOverFourGiB:
         shows_routes._write_wav_header(handle)
         handle.write(b"\0" * 1024)
 
-        shows_routes._finalize_wav(handle)
+        wav_module.finalize_wav(handle)  # REL-11: finalize is owned by the sink writer / wav module
 
         raw = path.read_bytes()
         assert struct.unpack("<I", raw[4:8])[0] == 0xFFFFFFFF, "RIFF size left at 0"
         assert struct.unpack("<I", raw[40:44])[0] == 0xFFFFFFFF, "data size left at 0"
 
     def test_normal_recording_still_gets_exact_sizes(self, tmp_path):
+        import app.lib.wav as wav_module
+
         path = tmp_path / "small.wav"
         handle = open(path, "wb")
         shows_routes._write_wav_header(handle)
         handle.write(b"\0" * 1000)
 
-        shows_routes._finalize_wav(handle)
+        wav_module.finalize_wav(handle)  # REL-11: finalize is owned by the sink writer / wav module
 
         raw = path.read_bytes()
         assert struct.unpack("<I", raw[4:8])[0] == 36 + 1000
@@ -755,8 +781,10 @@ class TestD13WavOverFourGiB:
 
         show_id = _make_show(db_user.id)
         audio_path = _start_show(app_client, db_user, show_id).json()["audio_file_path"]
-        with state.sync_lock:
-            state.current_show_audio_file.write(b"\0" * 2048)
+        # REL-11: stream through the show sink's writer and wait for the bytes.
+        state.broadcast_audio(b"\0" * 2048)
+        sink_while_writing = state.current_show_sink
+        assert wait_until(lambda: sink_while_writing is not None and sink_while_writing.status().bytes_written == 2048)
 
         with patch_owner(db_user):
             assert app_client.post(f"/api/shows/{show_id}/stop").status_code == 200

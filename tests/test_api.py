@@ -8,6 +8,16 @@ from fastapi.testclient import TestClient
 from app.framework.framework_state import state
 
 
+def wait_until(cond, timeout: float = 3.0) -> bool:
+    """Poll ``cond`` until true — export blocks now land on the sink writer thread."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 @pytest.fixture
 def client():
     from app.app_ui import app
@@ -22,6 +32,11 @@ def reset_state():
     state.stem_volumes = {}
     state.muted_stems = set()
     state.soloed_stems = set()
+    # broadcast_audio no-ops once shutdown_event is set; earlier suites (e.g.
+    # trigger_shutdown tests) leave it set on the global state, and the export
+    # tests drive PCM through broadcast_audio (REL-11), so clear it here.
+    state.shutdown_event.clear()
+    state.is_running = True
     yield
 
 
@@ -201,11 +216,16 @@ def test_export_start(client, monkeypatch, tmp_path):
         assert "file_path" in data
         file_path = data["file_path"]
 
-        # Simulate broadcast_audio streaming 1000 frames of stereo int16 LE PCM
-        # straight into the data chunk via handle.write().
-        handle = state.recording_file_handle
-        assert handle is not None, "export start must open a recording handle"
-        handle.write(b"\x00\x00" * (1000 * 2))
+        # Simulate broadcast_audio streaming 1000 frames of stereo int16 LE PCM:
+        # REL-11 routes it through the export sink's writer (flush-per-block, so
+        # the size on disk is deterministic once bytes_written reports it).
+        export_sink = state.export_sink
+        assert export_sink is not None, "export start must arm a recording sink"
+        payload = b"\x00\x00" * (1000 * 2)
+        state.broadcast_audio(payload)
+        assert wait_until(lambda: export_sink.status().bytes_written == len(payload)), (
+            "the export sink writer must land the block"
+        )
 
         stop = client.post("/api/export/stop")
         assert stop.status_code == 200
@@ -217,13 +237,13 @@ def test_export_start(client, monkeypatch, tmp_path):
             assert wf.getnframes() == 1000
     finally:
         # reset_state autouse does not reset recording flags; clean up explicitly
-        # so a leaked open handle does not poison later tests.
-        if getattr(state, "recording_file_handle", None) is not None:
+        # so a leaked writer thread + open handle does not poison later tests.
+        if getattr(state, "export_sink", None) is not None:
             try:
-                state.recording_file_handle.close()
-            except OSError:
+                state.export_sink.stop_and_finalize(timeout=1.0)
+            except Exception:
                 pass
-        state.recording_file_handle = None
+        state.export_sink = None
         state.is_recording = False
 
 
@@ -518,12 +538,12 @@ def test_export_start_default_format(client, monkeypatch, tmp_path):
         data = response.json()
         assert data["status"] == "started"
     finally:
-        if getattr(state, "recording_file_handle", None) is not None:
+        if getattr(state, "export_sink", None) is not None:
             try:
-                state.recording_file_handle.close()
-            except OSError:
+                state.export_sink.stop_and_finalize(timeout=1.0)
+            except Exception:
                 pass
-        state.recording_file_handle = None
+        state.export_sink = None
         state.is_recording = False
 
 

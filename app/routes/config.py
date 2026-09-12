@@ -92,23 +92,29 @@ def _mixer_thread_liveness() -> bool | None:
 
 
 def _recording_sink_status() -> dict:
-    """Per-sink recording health for /api/health (REL-05c).
+    """Per-sink recording health for /api/health (REL-05c + REL-11).
 
     The ENOSPC state that used to be one WARNING line and a silently
-    "continuing" recording: consecutive write-failure counters and why a sink
-    auto-stopped. Copy under sync_lock, zero I/O — safe next to the audio tick.
+    "continuing" recording: consecutive write-failure counters, why a sink
+    auto-stopped, and — REL-11 — how many bytes the bounded queue shed under
+    disk stall (dropped_bytes). Copy under sync_lock, zero I/O — safe next to
+    the audio tick (status() is pure counter reads).
     """
     with state.sync_lock:
+        show_sink = state.current_show_sink if state.is_show_recording else None
+        export_sink = state.export_sink if state.is_recording else None
         return {
             "show": {
                 "active": state.is_show_recording,
                 "write_errors": state.recording_write_errors["show"],
                 "stopped_reason": state.recording_stop_reasons["show"],
+                "dropped_bytes": show_sink.status().dropped_bytes if show_sink is not None else 0,
             },
             "export": {
                 "active": state.is_recording,
                 "write_errors": state.recording_write_errors["export"],
                 "stopped_reason": state.recording_stop_reasons["export"],
+                "dropped_bytes": export_sink.status().dropped_bytes if export_sink is not None else 0,
             },
         }
 

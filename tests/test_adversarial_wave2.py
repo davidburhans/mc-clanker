@@ -49,15 +49,22 @@ def reset_state():
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.currently_playing_show_id = None
     state.is_playback_active = False
     yield
+    # Stop any writer sink a test armed (a leaked sink is a daemon thread + fd).
+    for slot in (state.current_show_sink, state.export_sink):
+        if slot is not None and hasattr(slot, "stop_and_finalize"):
+            try:
+                slot.stop_and_finalize(timeout=1.0)
+            except Exception:
+                pass
     state.dj_password = ""
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.currently_playing_show_id = None
     state.is_playback_active = False
     # Stop (not just forget) any player a test left running: a live
@@ -318,19 +325,26 @@ class TestData4LeaseOwnershipGuards:
 
 class TestData5CrossShowRecordingGuards:
     def test_stop_show_recording_ignores_foreign_show(self):
-        """Stopping a stale 'live' row must not detach another show's handle."""
-        handle = object()
+        """Stopping a stale 'live' row must not detach another show's recording."""
+        import io as io_module
+
+        from app.framework.recording_sink import RecordingSink
+
+        handle = io_module.BytesIO()  # full WAV-finalize surface for the writer
+        sink = RecordingSink(handle, "show", state)
+        sink.start()
         state.current_show_id = 1
-        state.current_show_audio_file = handle
+        state.current_show_sink = sink
         state.is_show_recording = True
 
         assert shows_routes._stop_show_recording(2) is None
-        assert state.current_show_audio_file is handle, "foreign show's handle must stay attached"
+        assert state.current_show_sink is sink, "foreign show's recording must stay attached"
         assert state.is_show_recording is True
 
-        assert shows_routes._stop_show_recording(1) is handle, "owner stop still detaches"
-        assert state.current_show_audio_file is None
+        assert shows_routes._stop_show_recording(1) is sink, "owner stop still detaches"
+        assert state.current_show_sink is None
         assert state.is_show_recording is False
+        sink.stop_and_finalize(timeout=1.0)
 
     def test_start_show_conflicts_while_another_recording(self, app_client, tmp_path, monkeypatch):
         """Starting a second show while one records must 409, not overwrite the

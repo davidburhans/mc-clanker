@@ -14,8 +14,8 @@ from app.auth import get_current_user_from_request, hash_password
 from app.db import DatabaseManager
 from app.framework.audit_recording import drop_buffered_rows_for_show, flush_recording_buffers
 from app.framework.framework_state import state
+from app.framework.recording_sink import RecordingSink
 from app.lib.paths import exports_dir, recordings_dir
-from app.lib.wav import finalize_wav as _finalize_wav
 from app.lib.wav import write_wav_header as _write_wav_header
 from app.models import LLMInteraction, Show, ShowAction
 from app.playback import ShowPlayback
@@ -102,26 +102,27 @@ def _transition_show_to_live(session, show_id, request, audio_file_path, started
 
 
 def _stop_show_recording(show_id: int):
-    """Clear show-recording flags + detach the handle under sync_lock (A1/B8).
+    """Clear show-recording flags + detach the sink under sync_lock (A1/B8).
 
-    Returns the detached handle so the caller can finalize/close it OUTSIDE the
-    lock (no I/O in the critical section). These fields are sync_lock-protected so
-    ``broadcast_audio``'s snapshot is consistent with the close.
+    Returns the detached RecordingSink so the caller can ``stop_and_finalize()``
+    it OUTSIDE the lock (REL-11: no I/O in the critical section — the sink's
+    writer thread is the single owner of the handle and drains, flushes and
+    patches the WAV sizes itself).
 
     Only detaches when ``show_id`` actually owns the live recording: stopping a
-    stale 'live' row must not finalize/close another show's in-flight handle
+    stale 'live' row must not stop another show's in-flight recording
     (review DATA-5 — starting show B orphaned A's handle, then stopping A
     killed B's recording).
     """
     with state.sync_lock:
         if state.current_show_id != show_id:
             return None
-        show_file = state.current_show_audio_file
-        state.current_show_audio_file = None
+        show_sink = state.current_show_sink
+        state.current_show_sink = None
         state.is_show_recording = False
         state.current_show_id = None
         state.current_show_start_time = None
-        return show_file
+        return show_sink
 
 
 def _current_recording_show_id() -> int | None:
@@ -222,12 +223,13 @@ async def _teardown_live_recording(show_id: int) -> bool:
 
     Returns True when this show actually owned (and stopped) the recording.
     """
-    show_file = _stop_show_recording(show_id)
-    owned = show_file is not None
+    show_sink = _stop_show_recording(show_id)
+    owned = show_sink is not None
     if owned:
-        # Finalize under sync_lock, same precedent as stop_show (CONC-4).
-        with state.sync_lock:
-            _finalize_wav(show_file)
+        # REL-11: the sink's writer drains + finalizes; correctness moved from
+        # lock-across-I/O (the old CONC-4 argument) to single-owner
+        # drain-then-finalize, so no sync_lock wraps this.
+        show_sink.stop_and_finalize()
     await _release_show_started_flag_if_idle()
     return owned
 
@@ -418,11 +420,16 @@ async def start_show(show_id: int, request: Request):
             f"start_show: retaining {retained_llm} buffered llm rows + {retained_actions} action rows "
             f"after a failed flush (they will persist on the next flush)"
         )
+    # REL-11: arm the sink writer over the opened file BEFORE the flags go live —
+    # the flags still gate broadcast_audio's snapshot, so the missed-tick window
+    # is byte-identical to the pre-writer code (flags set last, under the lock).
+    show_sink = RecordingSink(audio_file, "show", state)
+    show_sink.start()
     with state.sync_lock:
         state.is_show_recording = True
         state.current_show_id = show_id
         state.current_show_start_time = time.time()
-        state.current_show_audio_file = audio_file
+        state.current_show_sink = show_sink
         # REL-05c: a new recording starts from a clean per-sink fault slate.
         state.recording_write_errors["show"] = 0
         state.recording_stop_reasons["show"] = None
@@ -461,16 +468,15 @@ async def stop_show(show_id: int, request: Request):
         if show.started_at:
             show.duration_seconds = int((ended_at - show.started_at).total_seconds())
         response = show.to_dict(include_audience_password=True)
-    # COMMIT succeeded — finalize/close the WAV + clear recording flags (A1/B8/C4).
-    show_file = _stop_show_recording(show_id)
-    if show_file is not None:
-        # Finalize under sync_lock (CONC-4): the mixer thread snapshots this
-        # handle under the same lock, so finalizing unlocked could interleave a
-        # stale tick's pcm write between the header seeks and silently corrupt
-        # the RIFF sizes. One-shot stop path — same lock-across-file-I/O
-        # precedent as framework_state._close_recording_handles_locked.
-        with state.sync_lock:
-            _finalize_wav(show_file)
+    # COMMIT succeeded — stop the recording + clear the flags (A1/B8/C4).
+    show_sink = _stop_show_recording(show_id)
+    if show_sink is not None:
+        # REL-11: the sink's writer thread is the single owner — it drains the
+        # queued blocks, flushes and patches the WAV sizes. No sync_lock here:
+        # the old CONC-4 lock-across-finalize is retired by single-owner
+        # finalize (submit-drops-after-stop make a stale tick's interleave
+        # impossible, and only the writer ever touches the handle).
+        show_sink.stop_and_finalize()
     # Round-3 D4: only clear the audience-facing flag when THIS show owned the
     # recording (or nothing is recording at all).
     await _release_show_started_flag_if_idle()
@@ -585,7 +591,7 @@ async def start_export(req: ExportStartRequest):
 
     The file is opened OUTSIDE the sync_lock (no I/O in the critical section);
     the check+set is atomic under sync_lock so two concurrent starts can't both
-    win (A1/B8: is_recording/recording_file_handle are sync_lock-protected).
+    win (A1/B8: is_recording/export_sink are sync_lock-protected).
     """
     fmt = (req.format or "wav").lower()
     export_dir = exports_dir()  # EXPORT_DIR at call time (app.lib.paths)
@@ -597,14 +603,15 @@ async def start_export(req: ExportStartRequest):
     # Round-3 D3: the conflict check must happen BEFORE the O_TRUNC open. The
     # second-resolution filename means a duplicate (rejected) start resolved to the
     # ACTIVE export's own path and truncated it before returning 400.
-    # The slot is claimed under sync_lock (handle stays None until the open wins),
-    # so check+set remains atomic while no rejected request ever touches a file.
+    # The slot is claimed under sync_lock (the sink is armed only after the open
+    # wins), so check+set remains atomic while no rejected request ever touches a
+    # file.
     with state.sync_lock:
         if state.is_recording:
             conflict = True
         else:
             conflict = False
-            state.recording_file_handle = None
+            state.export_sink = None
             state.is_recording = True
             state.recording_format = fmt
             state.recording_file_path = file_path
@@ -622,8 +629,13 @@ async def start_export(req: ExportStartRequest):
         raise HTTPException(status_code=500, detail=f"Could not open export file {file_path}: {exc}") from exc
     if fmt == "wav":
         _write_wav_header(file_handle)
+    # REL-11: hand the handle to a writer-thread sink; broadcast_audio only
+    # submit()s into its bounded queue (wav=False exports must never get a RIFF
+    # header patched, so the mode rides on the sink).
+    export_sink = RecordingSink(file_handle, "export", state, wav=(fmt == "wav"))
+    export_sink.start()
     with state.sync_lock:
-        state.recording_file_handle = file_handle
+        state.export_sink = export_sink
 
     return {"status": "started", "file_path": file_path}
 
@@ -632,37 +644,31 @@ def _release_export_claim() -> None:
     """Roll back an export slot claimed under sync_lock when the open fails (D3)."""
     with state.sync_lock:
         state.is_recording = False
-        state.recording_file_handle = None
+        state.export_sink = None
         state.recording_file_path = None
         state.recording_start_time = None
 
 
 @router.post("/export/stop")
 async def stop_export():
-    """Stop recording, finalize WAV (if wav), return file path."""
+    """Stop recording, finalize WAV (if wav), return file path.
+
+    REL-11: the detached sink's writer drains, flushes and — for wav — patches
+    the RIFF sizes, so the route's manual finalize branch is gone (the sink
+    knows its own wav mode). Stop runs OUTSIDE the lock (no I/O in the critical
+    section).
+    """
     with state.sync_lock:
         if not state.is_recording:
             raise HTTPException(status_code=400, detail="Not recording")
-        handle = state.recording_file_handle
+        export_sink = state.export_sink
         file_path = state.recording_file_path
-        fmt = state.recording_format
         start_time = state.recording_start_time
-        state.recording_file_handle = None
+        state.export_sink = None
         state.is_recording = False
     duration = (time.time() - start_time) if start_time else 0.0
-    # Close/finalize OUTSIDE the lock (no I/O in the critical section).
-    if handle is not None:
-        if fmt == "wav":
-            _finalize_wav(handle)
-        else:
-            try:
-                handle.flush()
-            except OSError:
-                pass
-            try:
-                handle.close()
-            except OSError:
-                pass
+    if export_sink is not None:
+        export_sink.stop_and_finalize()
     return {"file_path": file_path, "duration": duration}
 
 

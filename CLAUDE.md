@@ -149,6 +149,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `loop_orchestrator.py` | `AsyncFrameworkLoop` | Async DJ set orchestrator — coordinates conductor, jobs, fetching, mixing; ctor-injects `ConductorPort` + `MixerController` (via `mixer_factory`) |
 | `ports.py` | `ConductorPort`, `MixerController`, `JobQueuePort`, `AudioFetchPort`, `AuditSinkPort` | Hexagonal port protocols (E5) |
 | `framework_state.py` | `GlobalState`, `state` | Thread-safe shared state |
+| `recording_sink.py` | `RecordingSink`, `SinkStatus`, `end_live_show_row` | Per-recording writer threads (REL-11): bounded queue, drop-oldest + dropped-bytes counter, `put_nowait`-only audio path; the writer owns the handle and is the single owner of WAV finalize; `end_live_show_row` ends a live Show row on shutdown (REL-22) |
 | `framework_conductor_async.py` | `ConductorLLMAsync`, `ConductorPromptBuilder` | Async LLM client, prompt construction, JSON parsing |
 | `framework_generator.py` | `GeneratorRegistry`, `generate_stem()` | Audio model management (Foundation-1, ACE-Step) |
 | `framework_mixer.py` | `Mixer` | Real-time mixing thread, MP3 broadcasting via FFmpeg; exposes the public `MixerController` surface (`prime_loop`, `loop_position_seconds`) |
@@ -233,7 +234,9 @@ state.llm_reasoning  # str — Conductor's decision text
 # Recording
 state.is_recording  # bool — Session recording active
 state.recording_format  # str — "wav" or "mp3"
+state.export_sink  # RecordingSink|None — export recording writer thread (REL-11; slot cleared only by stop/auto-stop/shutdown, never reset())
 state.is_show_recording  # bool — Show recording active
+state.current_show_sink  # RecordingSink|None — show recording writer thread (REL-11; keeps flowing to disk off the audio path)
 
 # Show/playback
 state.is_show_started  # bool — Audience can access

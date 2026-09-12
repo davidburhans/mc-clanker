@@ -8,6 +8,7 @@ straight back at the review item.
 import asyncio
 import json
 import os
+import time
 import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,7 +21,6 @@ os.environ["DATABASE_URL"] = ""  # Force SQLite for tests
 
 from app.app_ui import app  # noqa: E402  (must import after the env override)
 from app.framework.framework_state import state  # noqa: E402
-from app.routes import shows as shows_routes  # noqa: E402
 
 
 @pytest.fixture
@@ -46,19 +46,24 @@ def reset_state():
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.llm_interaction_buffer = []
     state.action_buffer = []
+    # broadcast_audio no-ops once shutdown_event is set; earlier suites leave it
+    # set on the global state and the REL-11 tests here drive PCM through
+    # broadcast_audio, so clear it (same as test_api's fixture).
+    state.shutdown_event.clear()
+    state.is_running = True
     yield
     state.dj_password = ""
     state.audience_password = ""
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.llm_interaction_buffer = []
     state.action_buffer = []
 
@@ -329,27 +334,54 @@ class TestConc2BufferResetOrder:
 
 class TestConc4FinalizeUnderSyncLock:
     """CONC-4: _finalize_wav seeked/wrote the recording handle unlocked while
-    the mixer thread could interleave a pcm write and corrupt the WAV header."""
+    the mixer thread could interleave a pcm write and corrupt the WAV header.
 
-    def test_stop_show_finalizes_wav_under_sync_lock(self, app_client, db_user, tmp_path, monkeypatch):
+    REL-11 retires the lock-across-I/O remedy: the WAV finalize now runs on the
+    sink's writer thread, which is the SINGLE OWNER of the handle — a stale
+    mixer tick can no longer interleave a write because broadcast_audio only
+    put_nowait()s into the (detached) sink's queue and submit() drops after
+    stop. The corruption-free contract is re-pinned as: finalize happens
+    OUTSIDE sync_lock (the audio path stays I/O-free) AND the recording on disk
+    is a valid, correctly-sized WAV after stop."""
+
+    def test_stop_show_finalizes_wav_outside_sync_lock_single_owner(
+        self, app_client, db_user, tmp_path, monkeypatch
+    ):
+        import wave
+
+        import app.framework.recording_sink as recording_sink_module
+        import app.lib.wav as wav_module
+
         monkeypatch.setenv("SHOWS_DIR", str(tmp_path))
         show_id = _make_show(db_user.id, status="draft")
 
         lock_states_during_finalize = []
-        real_finalize = shows_routes._finalize_wav
+        real_finalize = wav_module.finalize_wav
 
         def spy_finalize(handle):
             lock_states_during_finalize.append(state.sync_lock.locked())
             real_finalize(handle)
 
-        monkeypatch.setattr(shows_routes, "_finalize_wav", spy_finalize)
+        monkeypatch.setattr(recording_sink_module, "finalize_wav", spy_finalize)
 
         with patch_owner(db_user):
             start_resp = app_client.post(f"/api/shows/{show_id}/start")
             assert start_resp.status_code == 200, start_resp.text
+            # Drive one block through the mixer-thread path so the recording has
+            # real payload, then stop.
+            state.broadcast_audio(b"\x00" * 2048)
+            sink = state.current_show_sink
+            assert sink is not None
+            deadline = time.time() + 3.0
+            while time.time() < deadline and sink.status().bytes_written < 2048:
+                time.sleep(0.01)
             stop_resp = app_client.post(f"/api/shows/{show_id}/stop")
 
         assert stop_resp.status_code == 200, stop_resp.text
-        assert lock_states_during_finalize == [True], (
-            "_finalize_wav must run while holding state.sync_lock"
+        assert lock_states_during_finalize == [False], (
+            "the WAV finalize must run OUTSIDE sync_lock (REL-11 single-owner "
+            "writer; the audio path never waits on disk I/O)"
         )
+        audio_path = start_resp.json()["audio_file_path"]
+        with wave.open(audio_path, "rb") as wav:
+            assert wav.getnframes() == 2048 // 4, "the queued block must be drained, not lost"

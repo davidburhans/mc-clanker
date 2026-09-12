@@ -109,7 +109,11 @@ class SlowHandle(_MemoryHandle):
 
 
 class BlockingHandle(_MemoryHandle):
-    """write() parks on an Event — a hung disk; unblock it to let the writer finish."""
+    """write() parks on an Event — a hung disk; unblock it to let the writer finish.
+
+    ``write_calls`` is an ATTEMPT counter (incremented at entry, before the
+    park) so tests can gate on "the writer is parked inside write()".
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -117,10 +121,12 @@ class BlockingHandle(_MemoryHandle):
         self.write_started = threading.Event()
 
     def write(self, pcm: bytes) -> int:
+        self.write_calls += 1  # attempt counter — see class docstring
         self.write_started.set()
         if not self.unblock.wait(timeout=10.0):
             raise OSError("BlockingHandle.write: unblock was never set within 10s")
-        return super().write(pcm)
+        self._buf.write(pcm)
+        return len(pcm)
 
 
 class FailingSinkHandle:

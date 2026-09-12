@@ -295,6 +295,24 @@ for **all** listeners — periodic dropouts that correlate with long recording
 sessions.
 **Fix:** bounded-queue + dedicated writer thread per sink (mirror
 `YouTubeRelay`), drop-oldest with a counter.
+**Status: fixed-in rel-11-recwriter** — `app/framework/recording_sink.py:
+RecordingSink`: the state slots (`current_show_sink`/`export_sink`) hold
+writer-thread sink objects; `broadcast_audio` only snapshots them under
+`sync_lock` and `put_nowait()`s outside it (256-block queue ≈ 12 s grace,
+drop-oldest, per-sink `dropped_bytes` surfaced in `/api/health`). The writer
+thread owns the handle end-to-end and is the ONLY thread that finalizes it
+(single-owner finalize: drain → flush → finalize; a timed-out stop defers to
+the writer, so two threads can never seek/write one handle and rel-05 F5's
+concurrent-stop race became structural). The rel-05 failure machinery moved
+onto the writer (consecutive counter, threshold auto-stop through
+`_note_sink_write_failure`/`_detach_failing_sink` hooks; the health dicts
+stay the `/api/health` surface). Flush-per-block bounds a crash's userspace
+loss to zero and makes on-disk sizes deterministic. Residuals: a sustained
+disk stall truncates the recording by design (drop-oldest; the live mix is
+never held hostage — surfaced via `dropped_bytes`); a sub-µs
+submit/finalize race can leave ≤ 1 block (~46 ms) uncounted per stop. Pinned
+by `tests/test_recording_writer.py` (T1–T3, T15–T19) + the re-pinned
+`tests/test_recording_fault_stop.py` F1–F7.
 
 ### REL-12 [High] Abandoned jobs are immortal; `pending` rows never reaped; no submission backpressure
 `loop_steps.py:61` — batch budget 600 s + 30 s grace; on expiry the loop
@@ -391,9 +409,9 @@ on lifespan startup when the env key is present. (Already an item in
 | REL-17 | Job-waiter holds PG conn across full 600 s wait; dead conn undetected until timeout; `pool max_size=10` coupling | `job_waiter.py` | poll event in 5 s slices + `conn.is_closed()` check, or asyncpg connection-loss callback |
 | REL-18 | Flat 2 s retry backoff, no escalation/jitter; full LLM call repeated every cycle during DB outage | `loop_orchestrator.py:307-313` | exponential backoff w/ cap; skip conductor call after N submit failures |
 | REL-19 | Loop startup failure calls whole-app `trigger_shutdown()` — poisons audience streams/recordings/YouTube relay | `loop_orchestrator.py:436-445` | set `is_running=False` only; reserve the kill switch for process shutdown |
-| REL-20 | `sync_lock` held across `instruments.json` disk write — stalls every audio tick | `framework_state.py:367-373` | mutate under lock, write outside |
+| REL-20 | `sync_lock` held across `instruments.json` disk write — stalls every audio tick | `framework_state.py:367-373` | mutate under lock, write outside — **fixed-in rel-11-recwriter** (`save_instruments` snapshots the payload (deepcopy) under `sync_lock` then delegates to `_write_instruments_payload`, which runs outside it serialized by a private `_instruments_io_lock` the audio path never touches — writers can't interleave a torn file and can't lose updates since payloads are snapshotted after mutation under the same lock; `add_custom_instrument` + `add_custom_major_family` also moved outside; pinned by `tests/test_recording_writer.py` T13–T14) |
 | REL-21 | No NaN/Inf sanitization: `np.clip` preserves NaN; one bad stem poisons the whole mix for a loop | `aac_encoder.py:52-62`, `framework_mixer.py:375-377` | `np.nan_to_num` in decode/normalize — **fixed-in rel-01-mixer** (`Mixer._sanitize_pcm_block` at both broadcast sites + AAC float branch) |
-| REL-22 | Unclean shutdown never finalizes WAV headers (sizes stay 0; show row stays `live`) | `framework_state.py` close path | finalize from file length in shutdown close |
+| REL-22 | Unclean shutdown never finalizes WAV headers (sizes stay 0; show row stays `live`) | `framework_state.py` close path | finalize from file length in shutdown close — **fixed-in rel-11-recwriter** (`trigger_shutdown` detaches both sinks under `sync_lock` via `_detach_recording_sinks_locked` — no handle I/O — then runs `stop_and_finalize()` on each outside the lock: the writers drain, flush and patch the RIFF/data sizes; then `end_live_show_row(show_id)` (recording_sink.py) load-conditionally ends a still-`live` row (naive-UTC `ended_at` per DATA-1, `duration_seconds` from `started_at`, idempotent — a second shutdown or an already-stopped show is a no-op returning False). Shutdown also clears `current_show_id`/`current_show_start_time` + export bookkeeping (the process is ending — contrast the rel-05 auto-stop which keeps the id). DB failure is a logged, non-fatal line (rel-09 engine timeouts bound it). Pinned by `tests/test_recording_writer.py` T10–T12 |
 | REL-23 | Worker never evicts models; `GPUMonitor` offload is dead code | `worker.py` (no unload refs) | LRU-evict non-default model when VRAM critical between jobs — **fixed-in rel-03-worker** (`GPUMonitor` wired into `GeneratorRegistry` for load/unload attribution; new `model_last_used` + `lru_eviction_candidates()` give true LRU order; worker evicts between jobs via `_maybe_evict_idle_models`, bounded 30 s so a lock-holding zombie can't stall the loop, graceful no-op without CUDA; pinned by `tests/test_worker_vram.py` E1–E7) |
 | REL-24 | Upload runs before lease-ownership check — zombie worker can overwrite completed audio or orphan Garage objects | `worker.py:340-341` | re-check `_still_own_job_row` after generation, before upload |
 | REL-25 | Worker hard-codes 44.1 kHz, drops engine sample rate; `generation_steps`/`cfg_scale` never reach the worker (config UI is a silent no-op) | `worker.py:337,344`, `framework_generator.py:408-415` | thread `(array, sr)` through; persist cfg/steps on the job row |

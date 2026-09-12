@@ -352,11 +352,11 @@ def _reset_capture_state():
     state.audience_password = ""
     state.current_show_id = None
     state.current_show_start_time = None
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_show_recording = False
     state.is_show_started = False
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.recording_file_path = None
     state.llm_interaction_buffer = []
     state.action_buffer = []
@@ -366,7 +366,7 @@ def _reset_capture_state():
     state.is_generating = False
     state.current_show_id = None
     state.current_show_start_time = None
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_show_recording = False
     state.is_show_started = False
     state.llm_interaction_buffer = []
@@ -691,7 +691,7 @@ def test_delete_live_show_drops_only_its_buffered_rows(client, capsys):
     show_b = _make_show("draft")
     _seed_mixed_buffers(show_a, show_b)
     state.current_show_id = show_a
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_show_recording = True
     state.is_show_started = True
 
@@ -712,7 +712,7 @@ async def test_delete_live_show_then_more_loops_and_flush_succeeds(client):
     show_b = _make_show("draft")
     _seed_llm_rows_for(show_a, 4)
     state.current_show_id = show_a
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_show_recording = True
     state.is_show_started = True
 

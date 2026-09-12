@@ -102,7 +102,11 @@ class LoopCoordination(_Slice):
 
 
 class RecordingState(_Slice):
-    """Export + show recording handles/buffers (sync_lock-protected on state)."""
+    """Export + show recording bookkeeping (sync_lock-protected on state).
+
+    The sink slots (REL-11) hold RecordingSink writer-thread objects, not raw
+    file handles — each sink's writer owns its handle exclusively.
+    """
 
     _attrs = frozenset(
         {
@@ -110,13 +114,13 @@ class RecordingState(_Slice):
             "recording_format",
             "recording_file_path",
             "recording_start_time",
-            "recording_file_handle",
+            "export_sink",
             "current_show_id",
             "current_show_start_time",
             "is_show_recording",
             "llm_interaction_buffer",
             "action_buffer",
-            "current_show_audio_file",
+            "current_show_sink",
             # REL-05c: per-sink consecutive write-failure counters + stop reasons.
             "recording_write_errors",
             "recording_stop_reasons",

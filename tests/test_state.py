@@ -1,7 +1,27 @@
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 from app.framework.framework_state import GlobalState
+from app.framework.recording_sink import RecordingSink
+
+
+def wait_until(cond, timeout: float = 3.0) -> bool:
+    """Poll ``cond`` until true — sink writes now land on the writer thread."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _started_sink(handle, sink_name: str, state) -> RecordingSink:
+    """Start a RecordingSink over ``handle``; the test stops it in a finally
+    (a leaked sink is a daemon thread + open fd)."""
+    sink = RecordingSink(handle, sink_name, state)
+    sink.start()
+    return sink
 
 
 def test_initial_state():
@@ -179,7 +199,7 @@ def test_show_recording_state_initialization():
     assert state.is_show_recording is False
     assert state.llm_interaction_buffer == []
     assert state.action_buffer == []
-    assert state.current_show_audio_file is None
+    assert state.current_show_sink is None
 
     # Playback state
     assert state.currently_playing_show_id is None
@@ -214,25 +234,32 @@ def test_show_recording_state_transitions():
 
 
 def test_broadcast_audio_writes_to_show_file():
-    """Test that broadcast_audio writes to show audio file when recording."""
+    """Test that broadcast_audio feeds the show sink whose writer writes the file."""
     state = GlobalState()
 
-    # Create a mock file
+    # Create a mock file + the REL-11 writer sink that owns it. tell returns a
+    # real int so the writer's finalize_wav can pack the RIFF sizes from it.
     mock_file = MagicMock()
-    state.current_show_audio_file = mock_file
-    state.is_show_recording = True
+    mock_file.tell.return_value = 44
+    sink = _started_sink(mock_file, "show", state)
+    try:
+        state.current_show_sink = sink
+        state.is_show_recording = True
 
-    state.broadcast_audio(b"test_audio_data")
+        state.broadcast_audio(b"test_audio_data")
 
-    # Verify file.write was called
-    mock_file.write.assert_called_once_with(b"test_audio_data")
+        # Verify the writer delivered the block to the file
+        assert wait_until(lambda: mock_file.write.called), "the sink writer must write the block"
+        mock_file.write.assert_called_once_with(b"test_audio_data")
+    finally:
+        sink.stop_and_finalize(timeout=1.0)
 
 
 def test_broadcast_audio_skips_show_file_when_none():
-    """Test that broadcast_audio doesn't fail when show file is None."""
+    """Test that broadcast_audio doesn't fail when the show sink slot is None."""
     state = GlobalState()
 
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.is_show_recording = True
 
     # Should not raise
@@ -240,17 +267,23 @@ def test_broadcast_audio_skips_show_file_when_none():
 
 
 def test_broadcast_audio_skips_when_not_recording():
-    """Test that broadcast_audio doesn't write to show file when not recording."""
+    """Test that broadcast_audio doesn't write to the show sink when not recording."""
     state = GlobalState()
 
     mock_file = MagicMock()
-    state.current_show_audio_file = mock_file
-    state.is_show_recording = False
+    mock_file.tell.return_value = 44  # the writer's finalize_wav packs sizes from it
+    sink = _started_sink(mock_file, "show", state)
+    try:
+        state.current_show_sink = sink
+        state.is_show_recording = False
 
-    state.broadcast_audio(b"test_audio_data")
+        state.broadcast_audio(b"test_audio_data")
 
-    # Verify file.write was NOT called
-    mock_file.write.assert_not_called()
+        # Verify the sink never received a block (write was NOT called)
+        assert wait_until(lambda: sink.status().bytes_written == 0)
+        assert sink.status().dropped_bytes == 0
+    finally:
+        sink.stop_and_finalize(timeout=1.0)
 
 
 def test_flatten_instruments():
@@ -448,25 +481,31 @@ def test_load_instruments_with_invalid_json():
 
 
 def test_broadcast_audio_with_recording():
-    """Test broadcast_audio writes to file handle when recording (not buffered list)."""
+    """Test broadcast_audio feeds the export sink when recording (not buffered list)."""
     state = GlobalState()
     import queue
 
     mock_handle = MagicMock()
-    state.is_recording = True
-    state.recording_file_handle = mock_handle
-    state.current_show_audio_file = None
-    state.shutdown_event.clear()
+    mock_handle.tell.return_value = 44  # the writer's finalize_wav packs sizes from it
+    sink = _started_sink(mock_handle, "export", state)
+    try:
+        state.is_recording = True
+        state.export_sink = sink
+        state.current_show_sink = None
+        state.shutdown_event.clear()
 
-    q = queue.Queue()
-    state.audio_clients = [q]
+        q = queue.Queue()
+        state.audio_clients = [q]
 
-    state.broadcast_audio(b"test_data")
+        state.broadcast_audio(b"test_data")
 
-    # Should write to file handle (streaming, not buffered)
-    mock_handle.write.assert_called_once_with(b"test_data")
-    # And put in queue
-    assert q.get() == b"test_data"
+        # Should stream to the export sink's writer (not buffered)
+        assert wait_until(lambda: mock_handle.write.called), "the export writer must write the block"
+        mock_handle.write.assert_called_once_with(b"test_data")
+        # And put in queue
+        assert q.get() == b"test_data"
+    finally:
+        sink.stop_and_finalize(timeout=1.0)
 
 
 def test_trigger_shutdown_with_no_audio_clients():
@@ -596,8 +635,8 @@ class TestStateDefaults:
         assert state.is_recording is False
         assert state.recording_file_path is None
         assert state.recording_format == "wav"
-        # recording_chunks removed; data streams to recording_file_handle instead
-        assert state.recording_file_handle is None
+        # recording_chunks removed; data streams through the REL-11 export sink instead
+        assert state.export_sink is None
         assert not hasattr(state, "recording_chunks")
 
 

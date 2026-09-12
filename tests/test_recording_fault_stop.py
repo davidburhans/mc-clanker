@@ -1,9 +1,11 @@
 """REL-05c regression tests — a failing recording sink must fail loudly, stop cleanly.
 
-Pins the U5 ENOSPC contract (refactor/plans/units/rel-05-plan.md §3.2). A disk-full
-write used to log ONE warning and then "continue recording" forever: silently
-corrupt audio, ~635 MB/hr of futile writes, and a green /api/health. The contract
-here:
+Pins the U5 ENOSPC contract (refactor/plans/units/rel-05-plan.md §3.2), re-pinned
+through the REL-11 writer-thread sink architecture (refactor/plans/units/rel-11-plan.md
+§2.7: the failure machinery moved ONTO the sink's writer thread; the state health
+dicts stay the /api/health surface). A disk-full write used to log ONE warning and
+then "continue recording" forever: silently corrupt audio, ~635 MB/hr of futile
+writes, and a green /api/health. The contract here:
 
 - F1  consecutive write failures are counted per sink and surfaced in /api/health
 - F2  a sustained show-sink failure auto-stops that sink cleanly and exactly once,
@@ -22,6 +24,7 @@ here:
 import asyncio
 import io
 import os
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +33,9 @@ os.environ["DATABASE_URL"] = ""  # Force SQLite for tests
 
 from app.app_ui import app  # noqa: E402  (must import after the env override)
 from app.framework import audit_recording  # noqa: E402
+from app.framework import recording_sink as recording_sink_module  # noqa: E402
 from app.framework.framework_state import state  # noqa: E402
+from app.framework.recording_sink import RecordingSink  # noqa: E402
 from app.routes import shows as shows_routes  # noqa: E402
 
 
@@ -62,10 +67,29 @@ class FailingSinkHandle:
         self.closed = True
 
 
+def wait_until(cond, timeout: float = 3.0) -> bool:
+    """Poll ``cond`` until true — same shape as tests/test_youtube_relay.py.
+
+    The failure counters now move on the sink's writer thread, so the
+    previously-synchronous asserts must wait for the async write path.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 @pytest.fixture
 def app_client():
     """Returns a TestClient with the real app."""
     return TestClient(app)
+
+
+# Sinks a test armed; the fixture stops them on teardown (a leaked sink is a
+# daemon thread + open fd — registration here is load-bearing).
+_LIVE_SINKS: list = []
 
 
 @pytest.fixture(autouse=True)
@@ -81,50 +105,73 @@ def fresh_state():
     state.shutdown_event.clear()
     state.current_show_id = None
     state.is_show_recording = False
-    state.current_show_audio_file = None
+    state.current_show_sink = None
     state.current_show_start_time = None
     state.is_recording = False
-    state.recording_file_handle = None
+    state.export_sink = None
     state.recording_file_path = None
     state.recording_start_time = None
+    _LIVE_SINKS.clear()
     yield
+    for sink in _LIVE_SINKS:
+        try:
+            sink.stop_and_finalize(timeout=1.0)
+        except Exception:
+            pass
+    _LIVE_SINKS.clear()
+    state.current_show_sink = None
+    state.export_sink = None
     state.dj_password = ""
     state.audience_password = ""
 
 
-def _arm_show_sink(handle) -> None:
-    """Point the show recording slot at ``handle`` (direct test manipulation)."""
+def _arm_show_sink(handle) -> RecordingSink:
+    """Arm the show recording slot with a started writer sink over ``handle``."""
+    sink = RecordingSink(handle, "show", state)
+    sink.start()
+    _LIVE_SINKS.append(sink)
     state.current_show_id = 7
     state.is_show_recording = True
-    state.current_show_audio_file = handle
+    state.current_show_sink = sink
+    return sink
 
 
-def _arm_export_sink(handle, file_path) -> None:
-    """Point the export recording slot at ``handle`` (stop_export's field set)."""
+def _arm_export_sink(handle, file_path) -> RecordingSink:
+    """Arm the export recording slot with a started writer sink (stop_export's field set)."""
+    sink = RecordingSink(handle, "export", state)
+    sink.start()
+    _LIVE_SINKS.append(sink)
     state.is_recording = True
     state.recording_format = "wav"
     state.recording_file_path = str(file_path)
     state.recording_start_time = 1_000.0
-    state.recording_file_handle = handle
+    state.export_sink = sink
+    return sink
 
 
 def test_failing_show_sink_counts_errors_and_surfaces_in_health(app_client):
     """F1 (REL-05c acceptance): every failed sink write bumps the per-sink
-    consecutive counter, and /api/health shows counters + stop reason."""
+    consecutive counter, and /api/health shows counters + stop reason (+ the
+    REL-11 dropped_bytes counter)."""
     _arm_show_sink(FailingSinkHandle())
     for _ in range(5):
         state.broadcast_audio(b"\x00" * 64)
 
-    assert state.recording_write_errors["show"] == 5
+    assert wait_until(lambda: state.recording_write_errors["show"] == 5), "failures must surface via the writer"
     payload = app_client.get("/api/health").json()
-    assert payload["recording"]["show"] == {"active": True, "write_errors": 5, "stopped_reason": None}
+    assert payload["recording"]["show"] == {
+        "active": True,
+        "write_errors": 5,
+        "stopped_reason": None,
+        "dropped_bytes": 0,
+    }
     assert payload["recording"]["export"]["active"] is False
 
 
 def test_sustained_failures_stop_show_sink_cleanly(monkeypatch):
     """F2 (REL-05c acceptance): past the threshold the show sink auto-stops once,
     cleanly, and the audit corpus keeps capturing (current_show_id survives)."""
-    import app.lib.wav as wav_module  # extracted from shows.py in this same unit
+    import app.lib.wav as wav_module  # the finalize the sink's writer calls
     from app.framework.framework_state import RECORDING_WRITE_FAILURE_STOP_THRESHOLD
 
     handle = FailingSinkHandle()
@@ -136,18 +183,17 @@ def test_sustained_failures_stop_show_sink_cleanly(monkeypatch):
         finalized.append(handle_being_finalized)
         real_finalize(handle_being_finalized)
 
-    monkeypatch.setattr(wav_module, "finalize_wav", spy)
+    monkeypatch.setattr(recording_sink_module, "finalize_wav", spy)
 
     for _ in range(RECORDING_WRITE_FAILURE_STOP_THRESHOLD):
         state.broadcast_audio(b"\x00" * 64)
 
-    assert state.is_show_recording is False
-    assert state.current_show_audio_file is None
+    assert wait_until(lambda: state.is_show_recording is False), "auto-stop runs on the writer thread"
+    assert wait_until(lambda: handle.closed), "the writer finalized the dead handle exactly once"
     assert state.current_show_start_time is None
     assert state.current_show_id == 7, "the audit gate must survive the dead audio sink (invariant 4)"
     assert state.recording_stop_reasons["show"] == "write_failure_threshold"
     assert finalized == [handle]
-    assert handle.closed is True, "finalize closed the sink exactly once"
 
     writes_after_stop = handle.write_attempts
     for _ in range(3):
@@ -169,53 +215,56 @@ def test_sustained_failures_stop_export_sink_cleanly(tmp_path):
     for _ in range(RECORDING_WRITE_FAILURE_STOP_THRESHOLD):
         state.broadcast_audio(b"\x00" * 64)
 
-    assert state.is_recording is False
-    assert state.recording_file_handle is None
+    assert wait_until(lambda: state.is_recording is False), "auto-stop runs on the writer thread"
+    assert state.export_sink is None
     assert state.recording_file_path is None
     assert state.recording_start_time is None
     assert state.recording_stop_reasons["export"] == "write_failure_threshold"
-    assert handle.closed is True
+    assert wait_until(lambda: handle.closed), "the writer finalized the dead export handle"
 
 
 def test_recovery_resets_consecutive_counter():
     """F4: one good write resets the consecutive counter — transient hiccups
-    never accumulate into an auto-stop."""
+    never accumulate into an auto-stop. A recovered disk is pinned by REBUILDING
+    the sink over the healthy handle (REL-11 slots hold sinks, not handles)."""
     bad = FailingSinkHandle()
     _arm_show_sink(bad)
     for _ in range(10):
         state.broadcast_audio(b"\x00" * 64)
-    assert state.recording_write_errors["show"] == 10
+    assert wait_until(lambda: state.recording_write_errors["show"] == 10)
 
-    state.current_show_audio_file = io.BytesIO()  # the disk recovered
+    _arm_show_sink(io.BytesIO())  # the disk recovered: a fresh sink over a healthy handle
     state.broadcast_audio(b"\x00" * 64)
-    assert state.recording_write_errors["show"] == 0
+    assert wait_until(lambda: state.recording_write_errors["show"] == 0), "one success resets the counter"
 
-    state.current_show_audio_file = bad
+    _arm_show_sink(bad)  # the disk regressed: a fresh sink over the bad handle again
     for _ in range(10):
         state.broadcast_audio(b"\x00" * 64)
-    assert state.recording_write_errors["show"] == 10
+    assert wait_until(lambda: state.recording_write_errors["show"] == 10)
     assert state.is_show_recording is True, "20 total failures, 10 consecutive — far below the stop threshold"
 
 
 def test_concurrent_stop_wins_no_double_finalize(monkeypatch):
-    """F5: a stop_show that detached the slot wins the race against the mixer's
+    """F5: a stop_show that detached the slot wins the race against the writer's
     in-flight threshold breach — the stale handle is never finalized twice."""
-    import app.lib.wav as wav_module
     from app.framework.framework_state import RECORDING_WRITE_FAILURE_STOP_THRESHOLD
 
-    stale = FailingSinkHandle()
-    _arm_show_sink(stale)
+    stale_handle = FailingSinkHandle()
+    sink = _arm_show_sink(stale_handle)
     state.recording_write_errors["show"] = RECORDING_WRITE_FAILURE_STOP_THRESHOLD - 1
-    assert shows_routes._stop_show_recording(7) is stale  # the concurrent stop detaches the slot
 
     finalized = []
-    monkeypatch.setattr(wav_module, "finalize_wav", lambda handle: finalized.append(handle))
-    state._note_sink_write_failure(stale, "show")  # the raced 32nd failure lands late
+    monkeypatch.setattr(recording_sink_module, "finalize_wav", lambda handle: finalized.append(handle))
+    assert shows_routes._stop_show_recording(7) is sink, "stop_show detaches and returns the sink object"
+    assert sink.stop_and_finalize() is True, "the detached sink finalizes exactly once via its writer"
+    assert finalized == [stale_handle]
 
-    assert finalized == [], "no double finalize"
+    sink._note_failure(OSError(28, "No space left on device"))  # the raced 32nd failure lands late
+
+    assert finalized == [stale_handle], "no double finalize"
     assert state.recording_stop_reasons["show"] is None, "no flag writes after the slot changed hands"
     assert state.is_show_recording is False
-    assert state.current_show_audio_file is None
+    assert state.current_show_sink is None
 
 
 def test_reset_clears_recording_health_fields():
