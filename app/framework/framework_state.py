@@ -132,6 +132,10 @@ class GlobalState:
         )
         self.youtube_relay = None
 
+        # MP3 stream fan-out singleton (route-managed, REL-10); deliberately NOT
+        # cleared by reset() — a musical reset must not kill the audience stream.
+        self.stream_fanout = None
+
         self.is_generating = False
         self.is_show_started = False
 

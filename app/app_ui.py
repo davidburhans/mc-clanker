@@ -3,11 +3,8 @@ import atexit
 import base64
 import logging
 import os
-import queue
 import re
 import socket
-import subprocess
-import threading
 import uuid
 from contextlib import asynccontextmanager, suppress
 
@@ -21,6 +18,7 @@ from app.framework.framework_main_async import run_framework_loop_async
 from app.framework.framework_state import state
 from app.middleware_db import fetch_bearer_user, fetch_show_gate_fields, lookup_session_server
 from app.routes import api_router
+from app.stream_fanout import mp3_client_stream
 
 log = logging.getLogger(__name__)
 
@@ -571,170 +569,12 @@ async def save_setup_config(request: Request):
     return JSONResponse({"status": "ok", "restarting": True})
 
 
-def _discard_stream_client(client_q, process) -> None:
-    """Tear down a stream that failed during setup (round-3 D10).
-
-    Without this, a Popen/pre-feed failure leaked the spawned ffmpeg (never
-    killed/reaped) and — when the failure happened before the streaming
-    ``try/finally`` was reached — left ``client_q`` registered in
-    ``state.audio_clients`` forever, so the mixer kept queueing PCM into a queue
-    nobody drains.
-    """
-    if process is not None:
-        try:
-            process.kill()
-        except Exception as exc:  # noqa: BLE001 - best-effort teardown
-            print(f"Warning: could not kill stream ffmpeg: {exc}")
-        try:
-            process.wait(timeout=2)
-        except Exception:  # noqa: BLE001 - best-effort teardown
-            pass
-        for pipe in (getattr(process, "stdin", None), getattr(process, "stdout", None)):
-            try:
-                if pipe is not None:
-                    pipe.close()
-            except Exception:  # noqa: BLE001 - best-effort teardown
-                pass
-    state.remove_audio_client(client_q)
-
-
-def audio_stream_generator():
-    """Generator that yields infinite MP3 stream using ffmpeg for transcoding"""
-    print("DEBUG: audio_stream_generator() called")
-    client_q = queue.Queue(maxsize=100)
-    state.add_audio_client(client_q)
-
-    ffmpeg_exe = "/usr/bin/ffmpeg"
-    if not os.path.exists(ffmpeg_exe):
-        ffmpeg_exe = "ffmpeg"
-
-    # Check if ffmpeg exists and has libmp3lame
-    try:
-        check = subprocess.run([ffmpeg_exe, "-codecs"], capture_output=True, text=True, timeout=5)
-        if "libmp3lame" not in check.stdout:
-            print("WARNING: ffmpeg does not have libmp3lame encoder. MP3 streaming may not work.")
-    except Exception as e:
-        print(f"WARNING: Could not verify ffmpeg capabilities: {e}")
-
-    # Wait for actual audio data before starting FFmpeg
-    # This prevents the browser from timing out waiting for MP3 frames
-    # when is_generating=false (only silence being produced)
-    try:
-        first_chunk = client_q.get(timeout=300.0)
-        if first_chunk is None:
-            print("DEBUG: audio_stream_generator received poison pill before first chunk")
-            state.remove_audio_client(client_q)
-            return
-    except queue.Empty:
-        print("DEBUG: audio_stream_generator timed out waiting for first audio chunk")
-        state.remove_audio_client(client_q)
-        return
-
-    # ffmpeg tuned for low-latency streaming
-    ffmpeg_cmd = [
-        ffmpeg_exe,
-        "-y",
-        "-f",
-        "s16le",
-        "-ar",
-        "44100",
-        "-ac",
-        "2",
-        "-i",
-        "pipe:0",
-        "-f",
-        "mp3",
-        "-acodec",
-        "libmp3lame",
-        "-b:a",
-        "192k",
-        "pipe:1",
-    ]
-
-    print(f"Starting audio stream with ffmpeg: {' '.join(ffmpeg_cmd)}")
-    # Round-3 D10: Popen AND the pre-feed are wrapped so any failure kills + reaps
-    # the process, closes its pipes and unregisters client_q before returning.
-    process = None
-    try:
-        # Use DEVNULL for stderr to prevent pipe buffer deadlocks (fix 3.4).
-        # FFmpeg writes metadata/stats to stderr; with a pipe the buffer can fill
-        # and deadlock the encoder if no one drains it.  We don't need stderr output.
-        process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        # Pre-feed the first chunk we already received
-        process.stdin.write(first_chunk)
-        process.stdin.flush()
-        print("DEBUG: Pre-fed first audio chunk to ffmpeg")
-    except Exception as e:
-        print(f"Warning: Could not start ffmpeg stream / pre-feed first chunk: {e}")
-        _discard_stream_client(client_q, process)
-        return
-
-    def feeder():
-        try:
-            while state.is_running:
-                try:
-                    chunk = client_q.get(timeout=1.0)
-                    if chunk is None:  # Poison pill
-                        print("DEBUG: Feeder received poison pill")
-                        break
-                    if process.poll() is not None:
-                        print(f"FFmpeg process died with code {process.returncode}")
-                        break
-                    process.stdin.write(chunk)
-                    process.stdin.flush()
-                except (queue.Empty, BrokenPipeError):
-                    if not state.is_running:
-                        break
-                    continue
-                except Exception as e:
-                    print(f"Feeder error: {e}")
-                    break
-        finally:
-            try:
-                process.stdin.close()
-            except Exception:
-                pass
-
-    # Register for cleanup
-    state.register_subprocess(process)
-
-    threading.Thread(target=feeder, daemon=True).start()
-
-    try:
-        bytes_yielded = 0
-        initial_read = False
-        while state.is_running:
-            data = process.stdout.read(4096)
-            if not data:
-                stderr = process.stderr.read().decode() if process.stderr else ""
-                print(f"FFmpeg stdout ended. stderr: {stderr}")
-                break
-            if not initial_read:
-                print(f"DEBUG: First MP3 data received: {len(data)} bytes")
-                initial_read = True
-            bytes_yielded += len(data)
-            yield data
-        print(f"Audio stream ended. Total bytes yielded: {bytes_yielded}")
-    finally:
-        state.remove_audio_client(client_q)
-        state.unregister_subprocess(process)
-        try:
-            process.kill()
-            process.wait(timeout=2)
-        except Exception:
-            pass
-        print("Audio stream generator closed")
-
-
 @app.get("/stream.mp3")
 def stream_mp3():
+    # REL-10: one process-wide transcoder fans MP3 out to per-client bounded
+    # queues; this client owns no subprocess and leaks nothing on disconnect.
     return StreamingResponse(
-        audio_stream_generator(),
+        mp3_client_stream(state),
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
