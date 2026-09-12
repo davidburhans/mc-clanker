@@ -353,3 +353,61 @@ class TestEngineResilienceRel09:
             "keepalives_interval": 10,
             "keepalives_count": 3,
         }
+
+
+class TestLibpqDriverGatingFu5:
+    """FU-5 item 3: libpq connect_args must be gated on the PG *driver*
+    (unit plan §1.3, refactor/plans/units/rel-fu-5-plan.md) — FU-1's
+    keepalives/timeouts are libpq connection params that a non-libpq driver
+    (asyncpg, pg8000) rejects at connect time. The backend-name-only gate
+    feeds them to every ``postgresql*://`` URL today. ``postgresql://`` and
+    ``+psycopg2://`` keep the exact T1 dict; a non-libpq driver must build
+    with ``connect_args == {}`` while the REL-09 pool kwargs stay for every
+    PG dialect."""
+
+    def test_asyncpg_url_builds_without_libpq_kwargs(self, monkeypatch):
+        """D1: a postgresql+asyncpg:// URL must NOT receive the libpq connect_args."""
+        from app.db import DatabaseManager
+
+        DatabaseManager._instance = None
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+        with patch("app.db.create_engine") as mock_engine, patch("app.db.sessionmaker"):
+            DatabaseManager.get_instance()
+        DatabaseManager._instance = None
+
+        mock_engine.assert_called_once()
+        call_args, call_kwargs = mock_engine.call_args
+        assert call_args == ("postgresql+asyncpg://u:p@h/db",)
+        # REL-09 pool resilience stays for every PG dialect (plan §1.3) — only
+        # the libpq-only connect_args are driver-gated away.
+        assert call_kwargs["pool_pre_ping"] is True
+        assert call_kwargs["pool_recycle"] == 1800
+        # libpq-only kwargs must be absent for a non-libpq driver — exact dict.
+        assert call_kwargs["connect_args"] == {}
+
+    def test_psycopg2_url_keeps_exact_libpq_kwargs(self, monkeypatch):
+        """D2 (characterization, green pre-fix): an explicit +psycopg2 driver
+        stays inside the libpq set — exact T1 kwargs, byte-identical. Mirrors
+        T4 above within the D1/D2 pair so both halves live side by side."""
+        from app.db import DatabaseManager
+
+        DatabaseManager._instance = None
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg2://u:p@h/db")
+        with patch("app.db.create_engine") as mock_engine, patch("app.db.sessionmaker"):
+            DatabaseManager.get_instance()
+        DatabaseManager._instance = None
+
+        call_args, call_kwargs = mock_engine.call_args
+        assert call_args == ("postgresql+psycopg2://u:p@h/db",)
+        assert call_kwargs["pool_size"] == 10
+        assert call_kwargs["max_overflow"] == 20
+        assert call_kwargs["pool_pre_ping"] is True
+        assert call_kwargs["pool_recycle"] == 1800
+        assert call_kwargs["connect_args"] == {
+            "connect_timeout": 5,
+            "options": "-c statement_timeout=10000",
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        }
