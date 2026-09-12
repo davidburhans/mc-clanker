@@ -245,7 +245,7 @@ against fakes; documented how to run it.
 | 5 rel-storage-retention | **landed** (1013p/16s green after round-1 fixes; invariant 4 preserved) | b53a981 |
 | 6 rel-job-queue | **landed** (1032p/16s green; pending-only abandon + reaper + depth throttle; claim SQL untouched) | b0e794c |
 | 7 rel-db-offloop | **landed** (1047p/16s green; dialect-gated PG engine resilience; middleware + audio-route DB off-loop via to_thread; SQLite fallback byte-identical; T6 fast-subcase test corrected to its documented Basic-auth intent) | 0b2ee6a |
-| 8 rel-stream-fanout | **landed** (1071p/16s green; one shared ffmpeg + per-client bounded queues, stale-client eviction reaper for abandoned frames, capped-backoff respawn — zero zombie ffmpeg on abrupt disconnect) | b83ccee |
+| 8 rel-stream-fanout | **landed** (1072p/16s green after review fix; reviewer OK-no-blockers) | eb060fa |
 | 9 rel-recording-writer | pending | — |
 | 10 rel-youtube-247 | pending | — |
 | 11 rel-exports | pending | — |
@@ -286,6 +286,13 @@ against fakes; documented how to run it.
   thread. Harmless today (poison only flies during process exit, and
   `stop()`'s join sees a dead thread) — fold into U10; the fan-out handles
   `None` correctly.
+
+- rel-10 (review P2/P3 residuals, report-only): late-spawn race in
+  ensure_alive (proc still kill-listed at shutdown — reaped); acquire_client
+  rollback after supervisor.spawn leaves orphaned proc on a retired singleton
+  (narrow); client acquiring inside the teardown snapshot window gets one
+  instantly-poisoned session (browser reconnects). Also:
+  YouTubeRelay._write_block None-poison TypeError guard → U10.
 
 ## Decisions log
 
