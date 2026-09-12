@@ -259,6 +259,15 @@ against fakes; documented how to run it.
 | 14 rel-p3-hygiene | **landed** (1178p/17s green after round-1 fixes; icecast deleted) | 1f1abb4 |
 | 15 rel-soak-harness | **landed** (SOAK=1: 9p/1s fast 3.1s + full 9.3s; normal 1178p/26s) | 33f3a1f |
 
+## Follow-ups round 2 — FU units (post-push, user-directed)
+
+| # | Unit | Items | Branch |
+|---|------|-------|--------|
+| FU-1 | rel-fu-health | mixer consecutive-failure counter + health + log rate-limit (rel-01); audit backlog/failed-flush health counters (rel-04); trigger_shutdown subprocess-kill outside sync_lock (rel-11); stems.py:23 sanitize (rel-01); psycopg2 TCP keepalives in db.py (rel-17) | `rel-fu-1-health` |
+| FU-2 | rel-fu-loop | pregen epoch/generation counter — stale pre-reset result acceptance (rel-02); outage streak resets on successful SUBMIT not read-probe (rel-12); loop_orchestrator.py split under 500 (rel-17) | `rel-fu-2-loop` |
+| FU-3 | rel-fu-worker | consecutive_generation_timeouts in worker /health; breaker timeout->fail->timeout branch pin (rel-03); _refresh_lease worker_id-scoped; _mark_job_complete 0-rowcount not counted processed; py3.11 TimeoutError-alias note; worker.py split under 500 (rel-03/24) | `rel-fu-3-worker` |
+| FU-4 | rel-fu-exports | stats/timeline asyncio.to_thread + (show_id, relative_time_ms) index (rel-13); reasoning_logs.py split; export_chunks TYPE_CHECKING hints; fanout acquire_client rollback orphan kill (rel-10); soak P6 live PCM feed for dropped_pcm_blocks | `rel-fu-4-exports` |
+
 ## Follow-ups (from unit reviews)
 
 - rel-01: guard log is tick-cadence-bounded (~21.7 lines/s under persistent
@@ -284,13 +293,7 @@ against fakes; documented how to run it.
   without bound (retain-over-drop is the invariant-4-correct choice) —
   surface a failed-flush/backlog counter in /api/health during U15.
 
-- rel-10 (P2, report-only): adjacent live bug found, out of scope —
-  `YouTubeRelay._write_block` does not guard `None`: a `trigger_shutdown`
-  poison delivered to a non-full relay queue raises `TypeError` (outside its
-  `except (BrokenPipeError, OSError, ValueError)` tuple) and kills the writer
-  thread. Harmless today (poison only flies during process exit, and
-  `stop()`'s join sees a dead thread) — fold into U10; the fan-out handles
-  `None` correctly.
+- (DONE in U10) rel-10: `YouTubeRelay._write_block` None-poison guard.
 
 - rel-10 (review P2/P3 residuals, report-only): late-spawn race in
   ensure_alive (proc still kill-listed at shutdown — reaped); acquire_client
