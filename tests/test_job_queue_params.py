@@ -61,6 +61,26 @@ def init_db():
 
 
 @pytest.fixture(autouse=True)
+def _no_pending_job_row_leak():
+    """Sweep the generator_jobs rows this module's SQLite-real tests create.
+
+    WHY: C1/C2/C5 rows stay 'pending' forever (nothing completes them), and
+    they land in the SHARED dev fallback DB. Once >64 accumulate across runs,
+    the REL-12c backpressure throttle (pending_depth > JOB_PENDING_DEPTH_LIMIT)
+    makes every default-adapter pregen test skip its submission — a cross-RUN
+    landmine this suite hit at +3 rows/run (U15 soak-branch finding).
+    """
+    db = DatabaseManager.get_instance()
+    with db.session() as session:
+        before = {row.id for row in session.query(GeneratorJob).all()}
+    yield
+    with db.session() as session:
+        created = [row for row in session.query(GeneratorJob).all() if row.id not in before]
+        for row in created:
+            session.delete(row)
+
+
+@pytest.fixture(autouse=True)
 def generation_params_state():
     """Snapshot/restore the two state attrs these tests drive (pattern:
     test_reset_reprime.py) so no test leaks its config into a sibling."""
