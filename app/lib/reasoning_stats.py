@@ -31,7 +31,7 @@ from app.lib.export_chunks import chunked_shaped_rows
 from app.models import LLMInteraction
 
 if TYPE_CHECKING:
-    from sqlalchemy import ColumnElement, Row
+    from sqlalchemy import ColumnElement, Query, Row
     from sqlalchemy.orm import Session
 
     from app.db import DatabaseManager
@@ -76,7 +76,7 @@ def _timeline_detail_rows(db_manager: DatabaseManager, show_id: int) -> Iterator
     fragment segments.
     """
 
-    def build_query(session):
+    def build_query(session: Session) -> Query:
         return session.query(
             LLMInteraction.id,
             LLMInteraction.loop_index,
@@ -219,7 +219,7 @@ def _stats_instruments_used(db_manager: DatabaseManager, show_id: int) -> list[s
     columns, so the scan stays page-bounded like every other rel-13 read.
     """
 
-    def build_query(session):
+    def build_query(session: Session) -> Query:
         return session.query(LLMInteraction.id, LLMInteraction.instruments).filter(
             LLMInteraction.show_id == show_id
         )

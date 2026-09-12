@@ -64,9 +64,10 @@ run instructions.
   backoff plus the `job-queue submit outage` fallback reasoning; PG restart / worker down →
   `Abandoned N job(s) (loop_abandoned)` and `Pending backlog over 64; skipping submit`;
   stuck generation → the structured `circuit_breaker_open` JSON exactly once (the breaker trip is
-  the episode end); failing mixer `_callback` → ONE `Mixer render tick failed (N consecutive);
-  emitting silence` line per failure EPISODE (FU-1's consecutive-counter bound, recovery logged
-  once at `Mixer render recovered`). Any marker repeating at per-tick cadence inside one episode
+  the episode end); failing mixer `_callback` → the FIRST failure plus every
+  100th-consecutive `Mixer render tick failed (N consecutive); emitting silence` line
+  (FU-1's `TICK_FAILURE_LOG_EVERY = 100` bound, framework_mixer.py), recovery logged
+  once at `Mixer render recovered`. Any marker repeating at per-tick cadence inside one episode
   is a soak FINDING, not noise.
 - **Scope-to-soak seams** (module-attr monkeypatches, restored per test):
   `AUDIT_FLUSH_THRESHOLD_ROWS` is lowered in P1 so the real P12 flush trigger
