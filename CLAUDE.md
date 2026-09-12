@@ -250,8 +250,8 @@ state.is_playback_active  # bool
 state.next_loop_ready  # threading.Event — signals mixer to crossfade
 state.currently_playing_loop_index  # int — authoritative loop count
 state.loop_history  # list — rolling buffer of past loops
-state.generation_cfg_scale  # float — CFG scale for generation
-state.generation_steps  # int — Steps for generation
+state.generation_cfg_scale  # float — CFG scale for generation (REL-25b: snapshotted at job submit → generator_jobs.cfg_scale; NULL/absent falls back to 7.0 at the worker)
+state.generation_steps  # int — Steps for generation (REL-25b: snapshotted at job submit → generator_jobs.steps; NULL/absent falls back to 50 at the worker)
 ```
 
 ### Stem Data Structure
@@ -574,6 +574,38 @@ set_name: str(255)|null
 
 Existing PostgreSQL deployments gain `applied_actions` only via
 `migrations/003_llm_capture_additive.sql` (`Base.metadata.create_all()` does
+not add columns to existing tables).
+
+### GeneratorJob
+```
+id: uuid (PK)
+session_id: uuid (indexed)
+instrument: str(255)
+prompt: text
+major_family: str(100)|null
+model_id: str(100)  # default "foundation-1"
+key: str(50)|null
+bpm: int|null
+timbre_tags: JSON  # JSONB on PostgreSQL, JSON on SQLite
+bars: int  # default 4
+cfg_scale: float|null  # rel-24/25-worker (REL-25b): diffusion params captured at submit; NULL/absent → worker defaults 7.0/50; 0.0 is legal and passes uncoerced
+steps: int|null  # rel-24/25-worker (REL-25b), see cfg_scale
+status: str(20)  # pending, processing, completed, failed, expired
+priority: int
+created_at: datetime  # tz-aware
+started_at: datetime|null
+completed_at: datetime|null
+audio_path: str(500)|null
+duration_seconds: float|null
+error_message: text|null
+worker_id: str(255)|null
+expires_at: datetime  # cleanup deletes terminal rows past this time
+lease_expires_at: datetime|null  # lapsed lease → the job is reclaimable by another worker
+content_hash: str(64)|null  # dedup of identical in-flight jobs (C8)
+```
+
+Existing PostgreSQL deployments gain `cfg_scale`/`steps` only via
+`migrations/004_generation_params.sql` (`Base.metadata.create_all()` does
 not add columns to existing tables).
 
 ---
