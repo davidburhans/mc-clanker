@@ -218,3 +218,23 @@ def test_wav_chunk_to_s16le_rejects_unknown_width():
     _require_playback()
     with pytest.raises(ValueError, match="sample width"):
         playback_module.wav_chunk_to_s16le(b"\x00" * 15, 5)
+
+
+def test_scipy_fallback_normalizes_int_dtypes():
+    """Review P2 pin: int-dtype scipy decodes (WAVE_FORMAT_EXTENSIBLE on
+    py3.10/3.11) must scale to [-1,1] floats, not clip raw ints to ±1."""
+    import numpy as np
+
+    from app.playback import _normalized_to_float
+
+    int16 = np.array([[-32768, 0], [16000, 32767]], dtype=np.int16)
+    scaled = _normalized_to_float(int16)
+    assert scaled.dtype == np.float32
+    assert np.isclose(scaled[0, 0], -1.0) and np.isclose(scaled[1, 1], 1.0, atol=1e-4)
+    assert abs(scaled[1, 0]) < 0.5  # 16000/32767, not clipped to 1.0
+
+    int32 = np.array([[2**31 - 1]], dtype=np.int32)
+    assert np.isclose(_normalized_to_float(int32)[0, 0], 1.0, atol=1e-6)
+
+    floats = np.array([[0.25]], dtype=np.float32)
+    assert _normalized_to_float(floats) is floats  # float passthrough, no copy

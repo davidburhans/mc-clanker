@@ -34,6 +34,21 @@ def _wav_chunk_to_float(data: bytes, sampwidth: int) -> np.ndarray:
     raise ValueError(f"Unsupported WAV sample width {sampwidth} (expected 1-4)")
 
 
+def _normalized_to_float(audio: np.ndarray) -> np.ndarray:
+    """Scale int-dtype decoded audio to the [-1, 1] float convention.
+
+    scipy's wavfile.read returns int arrays for int-PCM files (incl. the
+    WAVE_FORMAT_EXTENSIBLE variants stdlib wave rejects) — feeding them to
+    _float_block_to_s16le raw would clip the integers themselves to ±1.
+    Divisor is 2**(bits-1) so int-min maps to exactly -1.0 (iinfo.max would
+    overshoot to -1.00003); the downstream clip still bounds +max.
+    """
+    if np.issubdtype(audio.dtype, np.integer):
+        divisor = float(1 << (audio.dtype.itemsize * 8 - 1))
+        return audio.astype(np.float32) / divisor
+    return audio
+
+
 def _float_block_to_s16le(block: np.ndarray) -> bytes:
     """Mixer-convention float -> s16le bytes (stems.py AUDIO-1 math).
 
@@ -192,11 +207,22 @@ class ShowPlayback:
         time.sleep(frames_per_chunk / sample_rate)
 
     def _stream_decoded_array(self) -> None:
-        """Fallback streamer for non-PCM WAVs (float32 format 3) via scipy."""
-        from scipy.io import wavfile as scipy_wavfile  # lazy: keeps module import light
+        """Fallback streamer for non-PCM WAVs (float32 format 3) via scipy.
 
-        sample_rate, audio = scipy_wavfile.read(self.audio_file_path)
-        self._stream_audio_array(np.asarray(audio), int(sample_rate))
+        Review P2 x2: (a) scipy wavfile.read also decodes the int-PCM
+        WAVE_FORMAT_EXTENSIBLE files stdlib wave rejects on py3.10/3.11 — as
+        INT arrays; without normalization they would clip raw ints to ±1
+        (square-wave garbage), so int dtypes are scaled here. (b) this runs
+        inside an except wave.Error handler — a scipy failure must not
+        propagate uncaught out of the daemon thread.
+        """
+        try:
+            from scipy.io import wavfile as scipy_wavfile  # lazy: keeps module import light
+
+            sample_rate, audio = scipy_wavfile.read(self.audio_file_path)
+            self._stream_audio_array(_normalized_to_float(np.asarray(audio)), int(sample_rate))
+        except Exception as exc:  # noqa: BLE001 - daemon thread: log + stop, never raise
+            print(f"Playback decode fallback failed: {exc}")
 
     def _stream_audio_array(self, audio: np.ndarray, sample_rate: int) -> None:
         """Chunk + broadcast an in-memory decoded array, rewind on EOF."""
