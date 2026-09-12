@@ -250,7 +250,7 @@ against fakes; documented how to run it.
 | 10 rel-youtube-247 | **landed** (1116p/16s green after round-1 fixes) | 690f8c2 |
 | 11 rel-exports | **landed** (1129p/16s green after round-1 fix) | 67effaa |
 | 12 rel-loop-robustness | **landed** (1147p/16s green after round-1 fix) | 6da999e |
-| 13 rel-worker-correctness | **landed** (1165p/18s green in the torch-less dev venv — the +2 skips are the new torch-gated `test_generator.py` G1–G2, same gate as that module's existing 7; red-first commit 18ce6b0, impl + docs land as one commit with this table) | 18ce6b0 |
+| 13 rel-worker-correctness | **landed** (1165p/18s green after round-1 fix) | cf60523 |
 | 14 rel-p3-hygiene | pending | — |
 | 15 rel-soak-harness | pending | — |
 
@@ -309,6 +309,12 @@ against fakes; documented how to run it.
   call repeats every cycle in that mode (inherent to a read probe); asyncpg
   connection-loss callback / TCP keepalives remain the half-open-conn
   follow-up; loop_orchestrator.py 508/500 lines — split on next touch.
+
+- rel-13 (from rel-24 review): residual lost-lease window bounded by
+  encode(≤60s)+S3 timeouts (not ~1s typical) — row stays unclobberable via the
+  guarded complete UPDATE; _mark_job_complete 0-rowcount no-op still counts
+  jobs_processed (cosmetic, pre-existing); _refresh_lease not worker_id-scoped;
+  cfg/steps not in the stem-cache key — U14 triage candidates.
 
 ## Decisions log
 
