@@ -47,9 +47,9 @@ from app.framework.framework_mixer import Mixer
 from app.framework.framework_state import state
 from app.framework.job_queue import PostgresJobQueueAdapter
 from app.framework.loop_steps import (
-    LOOP_RETRY_BACKOFF_SECONDS,
     _LoopSteps,
     _StepResult,
+    loop_retry_backoff_delay,
 )
 from app.framework.ports import AudioFetchPort, AuditSinkPort, ConductorPort, JobQueuePort
 from app.framework.pregeneration import run_pregeneration
@@ -148,6 +148,11 @@ class AsyncFrameworkLoop(_LoopSteps):
         # which the mixer has not consumed at its boundary yet (0 = nothing staged).
         self._staged_loop_idx = 0
         self._loop_idx = 0  # Advanced by _step_wait_for_start (P1) on each PROCEED iteration
+        # REL-18 (U12): B1 consecutive-iteration failures (backoff input) and
+        # consecutive job-submit failures (conductor-skip input) — two counters,
+        # two semantics (a conductor-phase failure is not a submit failure).
+        self._consecutive_loop_errors = 0
+        self._consecutive_submit_failures = 0
 
     @property
     def _audio(self) -> AudioFetchPort:
@@ -310,6 +315,7 @@ class AsyncFrameworkLoop(_LoopSteps):
                 commit = await self._step_commit_state(pregen_ready, tracks_to_use, duration_samples)
                 await self._step_post_commit(commit, tracks_to_use, duration_samples)
                 await self._step_await_pregen()
+                self._consecutive_loop_errors = 0  # REL-18: clean pass resets the backoff ladder
                 # B1 (round 3): unconditional suspension point per iteration, so no
                 # combination of fast paths can ever turn the driver into a busy
                 # spin that starves the event loop (routes, WS, the pre-gen task).
@@ -321,11 +327,15 @@ class AsyncFrameworkLoop(_LoopSteps):
                 raise
             except Exception as e:
                 # B1: don't let one bad iteration kill the set permanently.
-                print(f"[AsyncFrameworkLoop] Loop iteration error (will retry): {e}")
+                # REL-18 (U12): flat 2 s -> exponential with cap + jitter; the
+                # ladder resets on the next clean pass.
+                self._consecutive_loop_errors += 1
+                delay = loop_retry_backoff_delay(self._consecutive_loop_errors)
+                print(f"[AsyncFrameworkLoop] Loop iteration error (retry in {delay:.1f}s): {e}")
                 import traceback
 
                 traceback.print_exc()
-                await asyncio.sleep(LOOP_RETRY_BACKOFF_SECONDS)
+                await asyncio.sleep(delay)
                 continue
 
         self._finish_loop()
@@ -356,17 +366,24 @@ class AsyncFrameworkLoop(_LoopSteps):
         call site (loop_steps._step_submit_jobs, pregeneration.run_pregeneration)
         and every test patch is transparent.
         """
-        return await self._jobs.submit(
-            session_id=session_id,
-            instrument=instrument,
-            prompt=prompt,
-            major_family=major_family,
-            model_id=model_id,
-            key=key,
-            bpm=bpm,
-            timbre_tags=timbre_tags,
-            bars=bars,
-        )
+        try:
+            job_id = await self._jobs.submit(
+                session_id=session_id,
+                instrument=instrument,
+                prompt=prompt,
+                major_family=major_family,
+                model_id=model_id,
+                key=key,
+                bpm=bpm,
+                timbre_tags=timbre_tags,
+                bars=bars,
+            )
+        except Exception:
+            # REL-18 (U12): submit-failure streak — drives the conductor skip.
+            self._consecutive_submit_failures += 1
+            raise
+        self._consecutive_submit_failures = 0  # any successful submit proves the queue writable
+        return job_id
 
     async def _await_jobs(
         self,
@@ -470,10 +487,15 @@ async def run_framework_loop_async(session_id: uuid.UUID):
         print(f"[AsyncFrameworkLoop] Framework startup failed, music loop never started: {e}")
         traceback.print_exc()
         await loop.stop()
-        # Flip is_running so /api/health stops claiming a live framework. The
-        # exception is NOT re-raised: the lifespan awaits framework_task on
-        # shutdown and must not blow up on an already-handled startup failure.
-        state.trigger_shutdown()
+        # Flip is_running so /api/health stops claiming a live framework.
+        # REL-19 (U12): a MUSICAL failure must not run the whole-app kill
+        # switch — trigger_shutdown() would poison audience streams, finalize
+        # recordings and kill the YouTube relay; the process is not dying, only
+        # the music loop failed to start. Flip the health flag only and keep
+        # serving. The exception is NOT re-raised: the lifespan awaits
+        # framework_task on shutdown.
+        with state.sync_lock:
+            state.is_running = False
         return
 
     try:
@@ -483,21 +505,3 @@ async def run_framework_loop_async(session_id: uuid.UUID):
         pass
     finally:
         await loop.stop()
-
-
-# Standalone test
-if __name__ == "__main__":
-
-    async def main():
-        session_id = uuid.uuid4()
-        print(f"Starting async framework loop for session: {session_id}")
-
-        # For testing without actual generation
-        state.is_generating = True
-
-        try:
-            await run_framework_loop_async(session_id)
-        except KeyboardInterrupt:
-            print("\nShutdown requested...")
-
-    asyncio.run(main())

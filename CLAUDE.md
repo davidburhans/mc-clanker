@@ -582,6 +582,8 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | `test_frontend_constants.py` | Frontend constant definitions |
 | `test_generator.py` | Audio model loading and generation |
 | `test_job_waiter.py` | LISTEN/NOTIFY job completion |
+| `test_job_waiter_slicing.py` | REL-17: waiter wait slicing — dead LISTEN conn detected within one slice; notify/timeout/dead-conn exits share one final status fetch; missed-notify race coverage preserved |
+| `test_loop_robustness.py` | REL-18: escalated jittered B1 backoff + conductor skip after consecutive submit failures (recovery probe, pregen gate); REL-19: startup failure scoped to `is_running` (kill switch intact) |
 | `test_mixer.py` | Audio mixing and crossfades |
 | `test_shows_api.py` | Show management endpoints |
 | `test_shows_model.py` | Show SQLAlchemy model |

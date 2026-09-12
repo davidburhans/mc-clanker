@@ -340,6 +340,12 @@ def _fresh_path_pregen_clearer(loop: AsyncFrameworkLoop, spawns: dict[str, int])
 async def _drive_loop(loop: AsyncFrameworkLoop, *, timeout: float = 30.0) -> None:
     """Drive ``_run_loop`` directly (start() never ran — mirror test_loop_fixes)."""
     loop.mixer = _FakeMixerWithPosition()
+    # Pre-establish the mixer boundary (REL-02): a boundary-0 mixer makes P10
+    # re-prime with loop-1 semantics, fabricating a loop-2 replay result whose
+    # consumption skips P4 — that would steal one audit append without a
+    # conductor call and break B2's strict audit↔conductor 1:1 mapping. The
+    # backoff ladder under test is orthogonal to the boundaryless re-prime.
+    loop.mixer.current_loop_end_sample = 1
     loop.running = True
     state.is_generating = True
     state.is_running = True
@@ -425,9 +431,11 @@ async def test_conductor_resumes_after_queue_recovery(sleep_recorder):
     """B4 (REL-18 acceptance): once the recovery probe sees the queue healthy,
     the NEXT iteration calls the conductor and submits again."""
     conductor = _CountingConductor()
-    # 6 failing probes: 3 P7 backlog gauges + guard probes at fallback iters 1-2;
-    # the guard probe at fallback iter 3 is the one that observes recovery.
-    jobs = _OutageJobQueuePort(probes_before_recovery=6)
+    # 7 failing probes: 3 P7 backlog gauges (the outage iterations) + guard
+    # probes at fallback iterations 1-3; the guard probe at fallback iteration 4
+    # is the one that observes recovery, so the recovered iteration is the 4th
+    # (stop_after) audit append and the loop ends right after it.
+    jobs = _OutageJobQueuePort(probes_before_recovery=7)
     loop = _make_robust_loop(conductor, jobs)
     conductor.bind_stop(loop, stop_after_calls=10)
     audit = _ScriptedAudit(set(), stop_after=4)

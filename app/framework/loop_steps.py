@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -53,6 +54,39 @@ if TYPE_CHECKING:
 # Backoff between loop retries after a transient body error (review B1 watchdog).
 # Kept short so the set recovers quickly; overridable by tests / config.
 LOOP_RETRY_BACKOFF_SECONDS = 2.0
+
+# REL-18 (U12): the B1 retry backoff escalates exponentially with a cap and
+# uniform jitter so a persistent outage backs off instead of hot-looping (and
+# synchronized instances don't stampede in lockstep). The FIRST failure still
+# waits the flat base — a single transient blip keeps today's fast retry.
+LOOP_RETRY_BACKOFF_MAX_SECONDS = 30.0
+LOOP_RETRY_BACKOFF_JITTER_FRACTION = 0.25
+
+# REL-18 (U12): once this many consecutive job submits have failed, the loop
+# presumes a DB outage and skips the conductor call (audit finding: the full
+# LLM call was repeated every cycle while every submit failed). While skipped,
+# each pass probes the queue once and resumes the conductor within one loop of
+# the DB returning. Module attr so tests monkeypatch it.
+LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES = 3
+
+
+def loop_retry_backoff_delay(consecutive_failures: int) -> float:
+    """B1 watchdog sleep for the n-th consecutive failed iteration (REL-18).
+
+    min(cap, base * 2**(n-1)) with uniform ±JITTER_FRACTION jitter; n <= 1
+    returns the un-jittered base so the first (common, transient) failure
+    keeps the flat 2 s retry. Example::
+
+        loop_retry_backoff_delay(1)  # -> 2.0 exactly
+    """
+    if consecutive_failures <= 1:
+        return LOOP_RETRY_BACKOFF_SECONDS
+    exponential = min(
+        LOOP_RETRY_BACKOFF_MAX_SECONDS,
+        LOOP_RETRY_BACKOFF_SECONDS * 2 ** (consecutive_failures - 1),
+    )
+    span = exponential * LOOP_RETRY_BACKOFF_JITTER_FRACTION
+    return exponential + random.uniform(-span, span)
 
 # Round-3 fix B3 (review 03/Q1): ONE worker drains a 4-6 stem batch strictly
 # SEQUENTIALLY at 5-30 s/stem (30-90 s for the first job while the weights load),
@@ -279,6 +313,9 @@ class _LoopSteps:
     # Round-3 fix B2: loop index whose audio P10 handed to Mixer.set_next_loop and
     # which the mixer has NOT yet consumed at its boundary (0 = nothing staged).
     _staged_loop_idx: int
+    # REL-18 (U12): consecutive job-submit failures (drives the conductor skip);
+    # owned/mutated by AsyncFrameworkLoop.__init__/_submit_job.
+    _consecutive_submit_failures: int
 
     def _build_prompt(self, track: dict, key: str, bpm: int) -> str:
         """Delegate provided by ``AsyncFrameworkLoop``."""
@@ -505,6 +542,14 @@ class _LoopSteps:
         is deliberately NOT merged with B1's outer retry try. The skeleton only
         calls this when ``not pregen_ready``.
         """
+        # REL-18 (U12): DB presumed down — skip the LLM call (retain-all
+        # fallback keeps the set running from cache) and probe for recovery so
+        # the conductor resumes within one loop of the queue returning.
+        if self._consecutive_submit_failures >= LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES:
+            if await self._probe_queue_recovered():
+                self._consecutive_submit_failures = 0
+            else:
+                return build_fallback_response(current_bpm, current_key, active_stems, "job-queue submit outage")
         try:
             conductor_response = await self.conductor.get_next_state_async(
                 current_bpm=current_bpm,
@@ -700,6 +745,18 @@ class _LoopSteps:
             print(f"[AsyncLoop-{self._loop_idx}] pending-depth probe failed ({exc}); submitting anyway")
             return False
         return depth > JOB_PENDING_DEPTH_LIMIT
+
+    async def _probe_queue_recovered(self) -> bool:
+        """REL-18: one cheap queue round-trip; True resets the submit streak.
+
+        Runs at most once per loop and only while the conductor is being
+        skipped — steady state pays nothing.
+        """
+        try:
+            await self._pending_depth()
+            return True
+        except Exception:  # noqa: BLE001 - a failed probe just keeps the skip
+            return False
 
     async def _reawait_late_completions(
         self,

@@ -23,6 +23,14 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
+# REL-17 (U12): the LISTEN connection is held for the whole wait — poll the
+# notify event in bounded slices so a connection that died mid-wait (PG
+# restart, network partition, pool eviction) is detected within one slice
+# instead of silently blocking until the full job timeout (and starving the
+# pool's max_size with corpses). Module attr so tests monkeypatch it
+# (JOB_WAIT_TIMEOUT_SECONDS precedent in loop_steps).
+WAITER_SLICE_SECONDS = 5.0
+
 # Module-level asyncpg pool singleton (created lazily on first use)
 _asyncpg_pool: Optional["asyncpg.Pool"] = None
 _asyncpg_pool_lock = asyncio.Lock()
@@ -153,17 +161,13 @@ class JobWaiter:
                 if job is not None and job["status"] in ("completed", "failed"):
                     return job["audio_path"] if job["status"] == "completed" else None
 
-                # Wait with timeout
-                try:
-                    await asyncio.wait_for(event.wait(), timeout)
-                except asyncio.TimeoutError:
-                    # Timeout - check final status
-                    job = await self._get_job(job_id)
-                    if job and job["status"] == "completed":
-                        return job["audio_path"]
-                    return None
-
-                # Notification received - fetch final status
+                # REL-17 (U12): wait in slices; a dead listener conn is caught
+                # within one slice. All exits (notify / deadline / dead conn)
+                # funnel into the SAME final status fetch on a fresh pool conn,
+                # so a job that completed just as its connection died is still
+                # honored. The pre-listen check above and the post-subscribe
+                # re-check keep the missed-notify race covered (review A7/C6).
+                await self._wait_for_notify(conn, event, timeout)
                 job = await self._get_job(job_id)
                 if job and job["status"] == "completed":
                     return job["audio_path"]
@@ -174,6 +178,23 @@ class JobWaiter:
 
         finally:
             await self.db_pool.release(conn)
+
+    async def _wait_for_notify(self, conn, event: asyncio.Event, timeout: float) -> None:
+        """Wait for the notify event in WAITER_SLICE_SECONDS slices (REL-17).
+
+        Returns on notify, deadline, or listener-conn death — the caller's
+        final _get_job fetch resolves the outcome in every case.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while not event.is_set() and not conn.is_closed():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return
+            try:
+                await asyncio.wait_for(event.wait(), min(WAITER_SLICE_SECONDS, remaining))
+            except asyncio.TimeoutError:
+                continue
 
     async def _get_job(self, job_id: uuid.UUID) -> dict | None:
         """Fetch job from database."""

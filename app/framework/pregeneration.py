@@ -30,6 +30,7 @@ from app.framework.domain_audio import tile_to_loop
 from app.framework.loop_steps import (
     JOB_PENDING_DEPTH_LIMIT,
     JOB_WAIT_TIMEOUT_SECONDS,
+    LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES,
     _collect_uncached_stems,
     reawait_late_job_completions,
     sanitize_master_bpm,
@@ -49,20 +50,28 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
         available_models = load_available_models()
 
         # Call LLM (conductor patched on the loop instance by tests).
-        try:
-            conductor_response = await loop.conductor.get_next_state_async(
-                current_bpm=current_bpm,
-                current_key=current_key,
-                active_stems=active_stems,
-                user_override=snapshot.get("user_override"),
-                available_instruments=snapshot.get("available_instruments", []),
-                stem_history=snapshot.get("stem_history", []),
-                llm_config=llm_config,
-                available_models=available_models,
+        # REL-18 (U12): same gate as the foreground P4 path — once the submit
+        # streak says the DB is down, the background LLM call is skipped too
+        # (retain-all fallback; the foreground probe owns recovery — no probe here).
+        if loop._consecutive_submit_failures >= LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES:
+            conductor_response = build_fallback_response(
+                current_bpm, current_key, active_stems, "job-queue submit outage"
             )
-        except Exception as e:  # noqa: BLE001
-            print(f"[AsyncFrameworkLoop] Pre-gen LLM call failed: {e}")
-            conductor_response = build_fallback_response(current_bpm, current_key, active_stems, e)
+        else:
+            try:
+                conductor_response = await loop.conductor.get_next_state_async(
+                    current_bpm=current_bpm,
+                    current_key=current_key,
+                    active_stems=active_stems,
+                    user_override=snapshot.get("user_override"),
+                    available_instruments=snapshot.get("available_instruments", []),
+                    stem_history=snapshot.get("stem_history", []),
+                    llm_config=llm_config,
+                    available_models=available_models,
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"[AsyncFrameworkLoop] Pre-gen LLM call failed: {e}")
+                conductor_response = build_fallback_response(current_bpm, current_key, active_stems, e)
 
         deduped_tracks = process_actions(conductor_response.get("actions", []), active_stems)
 
