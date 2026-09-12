@@ -172,7 +172,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/db.py` | SQLAlchemy DatabaseManager singleton (thread-safe); REL-09: PG engines get pool_pre_ping/pool_recycle + connect/statement timeouts (dialect-gated; SQLite paths unchanged) |
 | `app/middleware_db.py` | Sync DB helpers the auth/session middlewares run off the event loop via `asyncio.to_thread` (REL-09); returns detached-safe data (expunged user / scalars) |
 | `app/models/` | SQLAlchemy ORM models (User, Show, GeneratorJob, etc.) |
-| `app/playback.py` | Pre-recorded show playback |
+| `app/playback.py` | Pre-recorded show playback (REL-32a: every broadcast chunk is normalized to the s16le the downstream chain assumes — s16le, this app's recording format, passes through byte-identical; other int-PCM widths decode through float32 with NaN-safety; non-PCM/float WAVs fall back to a scipy whole-file streamer) |
 | `app/worker.py` | Async job processor (separate container) |
 | `app/worker_routes.py` | Worker health check/stats endpoints |
 | `app/garage_client.py` | Async boto3 wrapper for Garage/MinIO S3 |

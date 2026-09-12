@@ -467,13 +467,27 @@ disarm toggle, config-heal, key-never-in-logs-or-responses).
 | REL-23 | Worker never evicts models; `GPUMonitor` offload is dead code | `worker.py` (no unload refs) | LRU-evict non-default model when VRAM critical between jobs — **fixed-in rel-03-worker** (`GPUMonitor` wired into `GeneratorRegistry` for load/unload attribution; new `model_last_used` + `lru_eviction_candidates()` give true LRU order; worker evicts between jobs via `_maybe_evict_idle_models`, bounded 30 s so a lock-holding zombie can't stall the loop, graceful no-op without CUDA; pinned by `tests/test_worker_vram.py` E1–E7) |
 | REL-24 | Upload runs before lease-ownership check — zombie worker can overwrite completed audio or orphan Garage objects | `worker.py:340-341` | re-check ownership after generation, before upload — **fixed-in rel-24-25-worker** (new strict `_lease_still_held` predicate runs after the generate await and BEFORE encode: row must exist ∧ `status='processing'` ∧ `worker_id` ours — unlike the delete-guard `_still_own_job_row`, a GONE row or an unreadable row here means NO upload (the object would be orphaned with no row left to delete it); a lost lease raises `LostLeaseError` and `_process_claimed_job` stands down — no mark-failed, no `jobs_failed`, no breaker-counter reset; residual ~1 s race inside encode+upload accepted, the row itself stays unclobberable via the guarded `WHERE status='processing' AND worker_id=$n` complete UPDATE; pinned by `tests/test_worker_correctness.py` L1–L7) |
 | REL-25 | Worker hard-codes 44.1 kHz, drops engine sample rate; `generation_steps`/`cfg_scale` never reach the worker (config UI is a silent no-op) | `worker.py:337,344`, `framework_generator.py:408-415` | thread `(array, sr)` through; persist cfg/steps on the job row — **fixed-in rel-24-25-worker** (`generate_stem` returns `(audio, engine_sample_rate)`; the worker normalizes ONCE to `MIXER_SAMPLE_RATE = 44100` via `resample_poly` — the whole playback chain (fetch-decode, mixer, fan-out, relay) is hard-coded 44.1 kHz and nothing resamples, so worker-side normalization keeps the "stored AAC is 44.1 kHz" invariant actually true; 44.1 kHz output passes through by identity; NULLable `generator_jobs.cfg_scale/steps` columns (`migrations/004_generation_params.sql`) are threaded from `state` through `JobQueuePort.submit`/both submit paths + `POST /api/jobs` (same SEC-1 bounds as `GenerationConfig`) to the worker, which falls back to 7.0/50 on NULL/absent — `cfg_scale=0.0` passes uncoerced; pinned by `tests/test_worker_correctness.py` S1–S5, `tests/test_job_queue_params.py` C1–C6, `tests/test_generator.py` G1–G2) |
-| REL-26 | Icecast module is dead code carrying three 24/7 hazards if ever wired (`is_connected` can never be true, no auto-restart, permanent disable on slow first chunk) | `framework_icecast.py` | fix or delete before wiring |
+| REL-26 | Icecast module is dead code carrying three 24/7 hazards if ever wired (`is_connected` can never be true, no auto-restart, permanent disable on slow first chunk) | `framework_icecast.py` | fix or delete before wiring — **fixed-in rel-26-32-p3** (DELETED per the 2026-09-11 decision log, not fixed: module (373 L) + `tests/test_icecast.py` + every live-surface reference removed in one commit — `app/`, `static/`, `tests/`, `docker/compose.yaml`, README, `.env.example`, `state.icecast_enabled` and the `icecast_enabled` key in the llm-config GET/POST; dead code is git-revivable; `docs/` + `refactor/` keep the historical record; grep-pinned by `tests/test_p3_hygiene.py` T1) |
 
 ## P3 — Low / hygiene
 
 - REL-27 `encode_aac` orphans temp WAV if `wavfile.write` raises (disk-full moment); `print` logging throughout `framework_generator.py` — `aac_encoder.py:102-105`
+  **Status: fixed-in rel-26-32-p3** — `wavfile.write` moved inside the
+  existing `try` so the `finally` unlink covers a disk-full write
+  (REL-27a, pinned `tests/test_p3_hygiene.py` T2–T3); all 14
+  `framework_generator.py` prints became a module logger with
+  info/warning/error mapped per site (REL-27b, AST no-print pin T4).
 - REL-28 Per-stem audio fetch is strictly serial (~5–15 s/batch) — `loop_steps.py:556-570` → `asyncio.gather`
+  **Status: fixed-in rel-26-32-p3** — shared bounded `gather_stem_audio`
+  (`STEM_FETCH_CONCURRENCY = 4`, order-preserving, per-call semaphore)
+  used by BOTH the foreground results loop and the pregen mirror; cache
+  writes and the `state.cache_stem` foreground-only divergence stay in
+  the callers; pinned by `tests/test_stem_fetch_concurrency.py`.
 - REL-29 Per-250 ms debug print in pregen wait; tens of thousands of stdout lines/day — `loop_steps.py` → `logger.debug`
+  **Status: fixed-in rel-26-32-p3** — the per-250 ms wait line is now
+  `log.debug` and the once-per-loop completion line `log.info`
+  (`loop_steps` gained a module logger); no stdout on the wait path,
+  pinned by `tests/test_p3_hygiene.py` T6.
 - REL-30 List endpoints accept unbounded `limit` — `jobs.py:180`, `shows.py:246,492,513` (clamp like `reasoning_logs.py:96-98`)
   **Status: fixed-in rel-13-exports** — `Query(ge=, le=)` clamps on
   `/api/jobs` (50/500), `/api/shows` (50/500), and the per-show
@@ -481,7 +495,23 @@ disarm toggle, config-heal, key-never-in-logs-or-responses).
   clamp 5000); out-of-range values now 422 like the reasoning-logs search
   route (client-visible contract change, intended).
 - REL-31 `/api/health` builds a fresh boto3 client per probe; `download_stem` WAV-encodes under `state.lock` — `config.py:60-80`, `stems.py:55-85`
+  **Status: fixed-in rel-26-32-p3** — `/api/health` caches one probe
+  client keyed on the GARAGE_* env fingerprint (`threading.Lock` — the
+  probe runs via `asyncio.to_thread`), rebuilt automatically when env
+  changes; shares only the pure botocore-Config builder, never the
+  storage adapter (REL-31a, pinned T7–T9); `download_stem` copies the
+  audio under `state.lock` and encodes the WAV response outside it
+  (`_encode_wav_response`, REL-31b).
 - REL-32 `ShowPlayback` broadcasts any WAV format as s16le (24-bit/48 kHz = noise); WS topic broadcast is sequential (one slow client head-of-line-blocks the topic) — `playback.py:84-97`, `routes/ws.py:66-71`
+  **Status: fixed-in rel-26-32-p3** — `ShowPlayback` normalizes every
+  broadcast chunk to s16le via `wav_chunk_to_s16le` (sampwidth 2 identity
+  fast path; 8/24/32-bit decoded through float32 with the REL-21
+  NaN-safety; non-PCM/float WAVs that stdlib `wave` rejects at open fall
+  back to a scipy whole-file streamer; sample-RATE mismatch remains out
+  of scope) (REL-32a, pinned by `tests/test_playback_format.py`); WS
+  topic broadcast sends concurrently, each send bounded by
+  `WS_SEND_TIMEOUT_SECONDS = 5.0`, stale/timed-out subscribers dropped
+  like broken sockets (REL-32b, pinned by `tests/test_websocket.py`).
 
 ---
 
