@@ -60,11 +60,15 @@ dev = [
   "pytest-mock>=3.10.0",
   "httpx>=0.25.0",
   "ruff>=0.4.0",
+  "psutil>=5.9.0", # RSS plateau assertions in the rel-soak harness (U15)
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "soak: 24h-equivalent fault-injection soak (opt-in: SOAK=1 pytest -m soak; SOAK_PROFILE=full for the audit-literal schedule)",
+]
 
 [tool.ruff]
 line-length = 120
