@@ -47,9 +47,8 @@ def test_stream_fanout_sessions_seam_and_sentinel_identity():
     pure move plus re-import — zero test edits); _STOP_SENTINEL must be ONE
     object across both namespaces (queue-feeder poison-pill identity is
     load-bearing: _write_block drops None, the sentinel ends clients)."""
-    import app.stream_fanout_sessions as sessions
-
     import app.stream_fanout as fanout
+    import app.stream_fanout_sessions as sessions
 
     moved = ("_STOP_SENTINEL", "_ClientSession", "_drain_one", "_drain_queue", "_residual_blocks")
     for name in moved:
