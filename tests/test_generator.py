@@ -281,3 +281,30 @@ def test_load_model_error():
 
     assert registry.model_states["model_a"] == ModelState.ERROR
     assert registry.model_errors["model_a"] is not None
+
+
+def test_generate_stem_returns_audio_and_engine_sample_rate():
+    """REL-25a: generate_stem no longer drops the engine's native sample rate.
+    Callers feeding the 44.1 kHz playback chain normalize once from it
+    (worker-side resample, see app/worker.py MIXER_SAMPLE_RATE)."""
+    _require_generator()
+    registry = GeneratorRegistry()
+
+    with patch.object(registry, "generate_batch", return_value=(["audio"], 44100)):
+        result = registry.generate_stem(model_id="model_a", prompt="pad")
+
+    assert result == ("audio", 44100)
+
+
+def test_generate_stem_forwards_cfg_scale_and_steps():
+    """REL-25b: the per-job diffusion params (from the job row) must reach
+    generate_batch — generate_stem already accepted them; this pins the
+    forwarding the worker now relies on."""
+    _require_generator()
+    registry = GeneratorRegistry()
+
+    with patch.object(registry, "generate_batch", return_value=(["audio"], 44100)) as batch:
+        registry.generate_stem(model_id="model_a", prompt="pad", cfg_scale=9.5, steps=30)
+
+    assert batch.call_args.kwargs["cfg_scale"] == 9.5
+    assert batch.call_args.kwargs["steps"] == 30
