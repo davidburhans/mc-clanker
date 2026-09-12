@@ -118,6 +118,10 @@ class JobSubmission(BaseModel):
     bpm: int | None = None
     timbre_tags: list[str] = []
     bars: int = Field(default=4, ge=1, le=32)
+    # REL-25b: same SEC-1 bounds as GenerationConfig — the job-submit route must
+    # not become the unbounded backdoor the config route closed.
+    cfg_scale: float | None = Field(default=None, ge=0.0, le=20.0)
+    steps: int | None = Field(default=None, ge=1, le=100)
 
     @field_validator("session_id", mode="before")
     @classmethod

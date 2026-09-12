@@ -32,6 +32,7 @@ from app.framework.loop_steps import (
     JOB_WAIT_TIMEOUT_SECONDS,
     LOOP_CONDUCTOR_SKIP_AFTER_SUBMIT_FAILURES,
     _collect_uncached_stems,
+    read_generation_params,
     reawait_late_job_completions,
     sanitize_master_bpm,
     sanitize_master_key,
@@ -108,6 +109,10 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
                 f"skipping {len(skipped_idxs)} submission(s) this cycle"
             )
         else:
+            # REL-25b: same shared state snapshot as the foreground P7 — one
+            # read per submit phase, after the throttle gate (zero lock takes
+            # on the skip path).
+            cfg_scale, steps = await read_generation_params()
             for i, t, cache_key in uncached:
                 prompt = t["prompt"]
                 track_bars = t["bars"]
@@ -124,6 +129,8 @@ async def run_pregeneration(loop: Any, for_loop_idx: int, snapshot: dict[str, An
                     bpm=current_bpm,
                     timbre_tags=orig.get("timbre_tags", []),
                     bars=track_bars,
+                    cfg_scale=cfg_scale,
+                    steps=steps,
                 )
                 pending_jobs.append((job_id, i, cache_key))
 

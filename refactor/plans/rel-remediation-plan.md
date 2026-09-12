@@ -250,7 +250,7 @@ against fakes; documented how to run it.
 | 10 rel-youtube-247 | **landed** (1116p/16s green after round-1 fixes) | 690f8c2 |
 | 11 rel-exports | **landed** (1129p/16s green after round-1 fix) | 67effaa |
 | 12 rel-loop-robustness | **landed** (1147p/16s green after round-1 fix) | 6da999e |
-| 13 rel-worker-correctness | pending | — |
+| 13 rel-worker-correctness | **landed** (1165p/18s green in the torch-less dev venv — the +2 skips are the new torch-gated `test_generator.py` G1–G2, same gate as that module's existing 7; red-first commit 18ce6b0, impl + docs land as one commit with this table) | 18ce6b0 |
 | 14 rel-p3-hygiene | pending | — |
 | 15 rel-soak-harness | pending | — |
 

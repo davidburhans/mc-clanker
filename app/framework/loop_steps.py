@@ -238,6 +238,17 @@ def _collect_uncached_stems(
     return uncached
 
 
+async def read_generation_params() -> tuple[float, int]:
+    """Snapshot the DJ's cfg/steps for job submission (REL-25b).
+
+    Short lock section, two attribute reads, no I/O (invariant 1). Both submit
+    paths (P7 foreground + pregeneration) read here so a config change takes
+    effect on the next submitted job — one spelling, one source of truth.
+    """
+    async with state.lock:
+        return state.generation_cfg_scale, state.generation_steps
+
+
 class _StepResult(enum.Enum):
     """Outer-while control-flow signal for _step_* methods (brief-05 decomp).
 
@@ -338,6 +349,8 @@ class _LoopSteps:
         bpm: int,
         timbre_tags: list[str],
         bars: int,
+        cfg_scale: float | None = None,
+        steps: int | None = None,
     ) -> uuid.UUID:
         """Delegate provided by ``AsyncFrameworkLoop``."""
         raise NotImplementedError
@@ -654,6 +667,9 @@ class _LoopSteps:
             return _SubmitJobsResult([], skipped)
 
         pending_jobs = []  # List of (job_id, original_index, cache_key)
+        # REL-25b: one state snapshot per submit phase, AFTER the backpressure
+        # early-return so a skipped cycle costs zero lock takes.
+        cfg_scale, steps = await read_generation_params()
         for i, t, cache_key in uncached:
             orig = t.get("_original_details", {})
             job_id = await self._submit_job(
@@ -666,6 +682,8 @@ class _LoopSteps:
                 bpm=local_current_bpm,
                 timbre_tags=orig.get("timbre_tags", []),
                 bars=t["bars"],
+                cfg_scale=cfg_scale,
+                steps=steps,
             )
             pending_jobs.append((job_id, i, cache_key))
 

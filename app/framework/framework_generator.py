@@ -442,7 +442,7 @@ class GeneratorRegistry:
         bars: int = 4,
         cfg_scale: float = 7.0,
         steps: int = 50,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, int]:
         """
         Generate a single audio stem.
 
@@ -459,7 +459,14 @@ class GeneratorRegistry:
             steps: Number of diffusion steps
 
         Returns:
-            numpy array of shape (samples, channels) with float32 values in [-1, 1]
+            Tuple of (audio, sample_rate): audio is a numpy array of shape
+            (samples, channels) with float32 values in [-1, 1]; sample_rate is
+            the ENGINE's native rate (REL-25a). Callers feeding the 44.1 kHz
+            playback chain normalize once from it (worker-side resample, see
+            app/worker.py MIXER_SAMPLE_RATE).
+
+        Example:
+            audio, sr = registry.generate_stem(model_id="foundation-1", prompt="warm pad")
 
         Raises:
             RuntimeError: If no models are available
@@ -483,7 +490,7 @@ class GeneratorRegistry:
         if not results or results[0] is None:
             raise RuntimeError("Generation failed: no audio returned")
 
-        return results[0]
+        return results[0], sample_rate
 
 
 # Keep Generator alias for backwards compatibility if needed

@@ -114,9 +114,13 @@ def _pool_yielding(conn) -> MagicMock:
 
 
 def _make_conn() -> MagicMock:
-    """An asyncpg-like connection whose transaction() is an async context manager."""
+    """An asyncpg-like connection whose transaction() is an async context manager.
+
+    fetchrow (the REL-24 ownership recheck) defaults to an owned-processing
+    row so happy-path pipelines complete; tests that pin the guard override it.
+    """
     conn = MagicMock()
-    conn.fetchrow = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"status": "processing", "worker_id": "wave2-worker"})
     conn.fetch = AsyncMock()
     conn.execute = AsyncMock()
     conn.fetchval = AsyncMock()
@@ -200,7 +204,8 @@ class TestAsync2PrivateGenerationPool:
 
         def record_thread(**kwargs):
             seen_threads.append(threading.current_thread().name)
-            return fake_audio
+            # REL-25a: generate_stem returns the (audio, engine_sample_rate) tuple.
+            return fake_audio, 44100
 
         worker.generators = MagicMock()
         worker.generators.generate_stem.side_effect = record_thread

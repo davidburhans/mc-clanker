@@ -106,6 +106,8 @@ async def submit_job(job: JobSubmission, request: Request):
             bpm=job.bpm,
             timbre_tags=job.timbre_tags,
             bars=job.bars,
+            cfg_scale=job.cfg_scale,
+            steps=job.steps,
             status="pending",
             expires_at=expires_at,
         )

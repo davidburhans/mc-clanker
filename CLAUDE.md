@@ -151,7 +151,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `framework_state.py` | `GlobalState`, `state` | Thread-safe shared state |
 | `recording_sink.py` | `RecordingSink`, `SinkStatus`, `end_live_show_row` | Per-recording writer threads (REL-11): bounded queue, drop-oldest + dropped-bytes counter, `put_nowait`-only audio path; the writer owns the handle and is the single owner of WAV finalize; `end_live_show_row` ends a live Show row on shutdown (REL-22) |
 | `framework_conductor_async.py` | `ConductorLLMAsync`, `ConductorPromptBuilder` | Async LLM client, prompt construction, JSON parsing |
-| `framework_generator.py` | `GeneratorRegistry`, `generate_stem()` | Audio model management (Foundation-1, ACE-Step) |
+| `framework_generator.py` | `GeneratorRegistry`, `generate_stem()` | Audio model management (Foundation-1, ACE-Step); `generate_stem()` returns `(audio, sample_rate)` — the ENGINE's native rate (REL-25a); callers feeding the 44.1 kHz playback chain normalize once (worker-side) |
 | `framework_mixer.py` | `Mixer` | Real-time mixing thread, MP3 broadcasting via FFmpeg; exposes the public `MixerController` surface (`prime_loop`, `loop_position_seconds`) |
 | `audit_recording.py` | `AuditAdapter`, `flush_recording_buffers`, `append_loop_audit` | Audit capture (LLMInteraction/ShowAction buffers) + DB flush — see "Audit capture & flush (rel-04-capture)" under Framework Loop |
 
@@ -402,6 +402,36 @@ The async framework uses PostgreSQL as a job queue:
   `GeneratorRegistry._generation_lock` — a zombie escalates the next job to
   the timeout path instead of racing it for 2× VRAM.
 
+#### Upload guard & audio normalization (rel-24/25-worker)
+
+- **Lease-ownership recheck before upload (REL-24)**: the Garage key is
+  deterministic (`audio/{job_id}.aac`), so `_generate_and_upload` re-verifies
+  ownership AFTER generating and BEFORE encoding (`_lease_still_held`: row
+  exists ∧ `status='processing'` ∧ `worker_id` ours; False on row-gone or read
+  error — unprovable ownership never uploads). A lost lease raises
+  `LostLeaseError` and `_process_claimed_job` stands down: no upload, no
+  mark-failed, no `jobs_failed`, no breaker-counter reset (a lease loss
+  usually means this worker's event loop stalled — the wedged shape the
+  breaker counts). Residual: a reclaim landing during encode+upload (~1 s)
+  still races, but the row stays unclobberable via the guarded complete
+  UPDATE. Unlike `_still_own_job_row` (delete-safety: row-gone → True), the
+  upload guard treats row-gone as lost. Pinned by `tests/test_worker_correctness.py`.
+- **One-shot sample-rate normalization (REL-25a)**: `generate_stem` returns
+  `(audio, engine_sample_rate)`; the worker resamples ONCE to
+  `MIXER_SAMPLE_RATE = 44100` (`scipy.signal.resample_poly`, lazily imported
+  so the module import stays torch-free) before encode/duration — the entire
+  playback chain (`decode_aac@44100` at fetch, mixer, MP3 fan-out, YouTube
+  relay) is hard-coded 44.1 kHz and nothing downstream resamples. 44.1 kHz
+  output passes through by identity (zero copy).
+- **cfg/steps reach the worker (REL-25b)**: nullable `generator_jobs.cfg_scale`
+  / `steps` columns (`migrations/004_generation_params.sql`) are captured at
+  submit from `state.generation_cfg_scale/steps` via
+  `loop_steps.read_generation_params()` (both loop submit paths) and
+  `POST /api/jobs` (same SEC-1 bounds as `GenerationConfig`). NULL/absent
+  (pre-migration rows) fall back to 7.0/50; `cfg_scale=0.0` passes uncoerced
+  (explicit-None check). cfg/steps are deliberately NOT part of the stem
+  cache key — a cached stem ignores later changes until TTL eviction.
+
 #### Audit capture & flush (rel-04-capture)
 
 - **Buffers**: `append_loop_audit` appends one `LLMInteraction` + N
@@ -583,6 +613,7 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | `test_generator.py` | Audio model loading and generation |
 | `test_job_waiter.py` | LISTEN/NOTIFY job completion |
 | `test_job_waiter_slicing.py` | REL-17: waiter wait slicing — dead LISTEN conn detected within one slice; notify/timeout/dead-conn exits share one final status fetch; missed-notify race coverage preserved |
+| `test_job_queue_params.py` | REL-25b: cfg/steps reach the worker end-to-end — job-row columns, both loop submit paths read `state` via `loop_steps.read_generation_params`, `POST /api/jobs` persists with SEC-1 bounds (422 out-of-range), config-UI change observable at the next submit |
 | `test_loop_robustness.py` | REL-18: escalated jittered B1 backoff + conductor skip after consecutive submit failures (recovery probe, pregen gate); REL-19: startup failure scoped to `is_running` (kill switch intact) |
 | `test_mixer.py` | Audio mixing and crossfades |
 | `test_shows_api.py` | Show management endpoints |
@@ -590,6 +621,7 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | `test_simulation.py` | Stateful DJ session simulation |
 | `test_state.py` | GlobalState lock behavior |
 | `test_worker.py` | Job queue worker and job claiming |
+| `test_worker_correctness.py` | REL-24: post-generation lease recheck (`_lease_still_held`) — lost lease skips upload/encode, stands down without mark-fail/counters, gone-or-unreadable row never uploads, delete-guard `_still_own_job_row` semantics unchanged, breaker counter untouched; REL-25a: 48 kHz engine output resampled once to 44.1 kHz (identity fast path); REL-25b: job-row cfg/steps reach `generate_stem`, NULL/absent → 7.0/50 defaults (`cfg_scale=0.0` uncoerced) |
 | `test_worker_fetch_audio.py` | Worker audio fetching from storage |
 | `test_youtube_relay.py` | RTMP relay argv/lifecycle/restarts + /api/youtube routes |
 | `test_youtube_lifecycle.py` | REL-15: stability-window restart budget, watchdog (re-arm/storm guard/disarm/shutdown), boot auto-arm, None-poison guard, key masking |

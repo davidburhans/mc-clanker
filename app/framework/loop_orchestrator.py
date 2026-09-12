@@ -357,6 +357,8 @@ class AsyncFrameworkLoop(_LoopSteps):
         bpm: int,
         timbre_tags: list[str],
         bars: int,
+        cfg_scale: float | None = None,
+        steps: int | None = None,
     ) -> uuid.UUID:
         """Submit a generation job; delegates to the injected JobQueuePort (U2).
 
@@ -364,7 +366,8 @@ class AsyncFrameworkLoop(_LoopSteps):
         Routes through ``self._jobs.submit`` (ctor-injected, defaults to
         ``PostgresJobQueueAdapter``); identical signature + kwargs, so every
         call site (loop_steps._step_submit_jobs, pregeneration.run_pregeneration)
-        and every test patch is transparent.
+        and every test patch is transparent. REL-25b: the cfg/steps diffusion
+        params ride along (None -> NULL column, worker falls back to defaults).
         """
         try:
             job_id = await self._jobs.submit(
@@ -377,6 +380,8 @@ class AsyncFrameworkLoop(_LoopSteps):
                 bpm=bpm,
                 timbre_tags=timbre_tags,
                 bars=bars,
+                cfg_scale=cfg_scale,
+                steps=steps,
             )
         except Exception:
             # REL-18 (U12): submit-failure streak — drives the conductor skip.

@@ -39,12 +39,17 @@ async def submit_generator_job(
     bpm: int,
     timbre_tags: list[str],
     bars: int,
+    cfg_scale: float | None = None,
+    steps: int | None = None,
 ) -> uuid.UUID:
     """Insert one pending ``GeneratorJob`` row and return its id.
 
     Row shape: status="pending", expires_at = now + 24h (the worker reaper +
     cleanup rely on these). Lazy-imports the model + DB manager to avoid circular
     imports and so tests that mock the entry point never touch SQLAlchemy.
+
+    REL-25b: cfg_scale/steps are captured on the row (NULL when omitted, so the
+    worker falls back to its defaults).
     """
     from app.db import DatabaseManager
     from app.models.generator_job import GeneratorJob
@@ -63,6 +68,8 @@ async def submit_generator_job(
             bpm=bpm,
             timbre_tags=timbre_tags,
             bars=bars,
+            cfg_scale=cfg_scale,
+            steps=steps,
             status="pending",
             expires_at=expires_at,
         )
@@ -173,6 +180,8 @@ class PostgresJobQueueAdapter:
         bpm: int,
         timbre_tags: list[str],
         bars: int,
+        cfg_scale: float | None = None,
+        steps: int | None = None,
     ) -> uuid.UUID:
         """Insert one pending ``GeneratorJob`` row and return its id.
 
@@ -189,6 +198,8 @@ class PostgresJobQueueAdapter:
             bpm=bpm,
             timbre_tags=timbre_tags,
             bars=bars,
+            cfg_scale=cfg_scale,
+            steps=steps,
         )
 
     async def await_jobs(

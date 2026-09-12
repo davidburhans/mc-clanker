@@ -96,8 +96,14 @@ class JobQueuePort(Protocol):
         bpm: int,
         timbre_tags: list[str],
         bars: int,
+        cfg_scale: float | None = None,
+        steps: int | None = None,
     ) -> UUID:
-        """Insert one pending ``GeneratorJob`` row and return its id."""
+        """Insert one pending ``GeneratorJob`` row and return its id.
+
+        Diffusion params captured at submit (REL-25b); None -> NULL column,
+        the worker falls back to its defaults.
+        """
         ...
 
     async def await_jobs(self, job_ids: list[UUID], timeout: float = 120.0) -> dict[UUID, str | None]:

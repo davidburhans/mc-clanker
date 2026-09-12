@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 import asyncpg
+import numpy as np
 
 from app.aac_encoder import encode_aac, get_audio_duration
 from app.cleanup import (
@@ -64,6 +65,46 @@ GENERATION_TIMEOUT_BREAKER_THRESHOLD = 2
 # REL-23: bound on one between-jobs VRAM eviction pass — a zombie holding the
 # registry lock must not stall the loop (see _maybe_evict_idle_models).
 VRAM_EVICTION_TIMEOUT_SECONDS = 30.0
+# REL-25a: the entire playback chain assumes 44.1 kHz and nothing downstream
+# resamples — GarageAudioAdapter.fetch decodes with decode_aac(sample_rate=44100)
+# (which RAISES on mismatch), the Mixer, the MP3 fan-out and the YouTube relay
+# are all hard-coded 44100. Engine output is therefore normalized ONCE, here.
+MIXER_SAMPLE_RATE = 44100
+# REL-25b: worker-side fallbacks for rows predating the cfg/steps columns;
+# mirror generate_stem()'s signature defaults and GlobalState's initial values.
+DEFAULT_CFG_SCALE = 7.0
+DEFAULT_STEPS = 50
+
+
+class LostLeaseError(RuntimeError):
+    """REL-24: the processing lease was lost mid-generation (row reclaimed,
+    reaped or deleted).
+
+    The Garage key is deterministic (audio/{job_id}.aac), so uploading would
+    overwrite the new owner's completed audio or orphan an unreferenced object
+    — the caller must skip upload and stand down.
+    """
+
+
+def _resample_to_mixer_rate(audio: np.ndarray, sample_rate: int | None) -> np.ndarray:
+    """REL-25a: normalize engine output to the 44.1 kHz playback chain.
+
+    No-op (same object) when already at the mixer rate — today's common case —
+    and for the degenerate unknown-rate batch (None).
+
+    scipy is imported lazily (rel-03 rule extended): the worker's module import
+    must stay torch-free, and scipy.signal's import-time array-API probe does
+    ``getattr(torch, 'Tensor')`` — which explodes under the fake-torch modules
+    the torch-less test harnesses install in sys.modules (test_worker_vram.py).
+    Only a non-44.1 kHz engine ever pays this import.
+
+    Usage: ``pcm = _resample_to_mixer_rate(generate_stem(...)[0], sr)``
+    """
+    if sample_rate == MIXER_SAMPLE_RATE or sample_rate is None:
+        return audio
+    from scipy.signal import resample_poly  # deferred: see docstring
+
+    return resample_poly(audio, MIXER_SAMPLE_RATE, sample_rate, axis=0).astype(np.float32)
 
 
 async def _silently_cancel(task: "asyncio.Task") -> None:
@@ -192,6 +233,12 @@ class GeneratorWorker:
         """Generate, upload, and complete a claimed job; clean up orphans on failure."""
         try:
             audio_path, duration = await self._generate_with_lease(job)
+        except LostLeaseError:
+            # REL-24: not this job's failure — it continues under its new owner.
+            # No upload happened, so there is no temp/orphan to clean; do not
+            # mark-fail (ownership-guarded no-op anyway) and do not count it.
+            logger.warning("Job %s stood down: lease lost, new owner active", job["id"])
+            return
         except Exception as e:  # noqa: BLE001 - generation/upload failed
             logger.error("Job %s failed during generation: %s", job["id"], e)
             await self._mark_job_failed(job["id"], str(e))
@@ -218,6 +265,20 @@ class GeneratorWorker:
             await self._mark_job_failed(job["id"], str(e))
             self.jobs_failed += 1
 
+    async def _read_job_ownership(self, job_id: uuid.UUID) -> dict | None:
+        """SELECT (status, worker_id) for one job row; None when the row is gone.
+
+        Raises on read failure — each caller applies its own conservative policy
+        (delete-guard: keep the object; upload-guard: skip the write).
+        """
+        assert self.db is not None
+        async with self.db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT status, worker_id FROM generator_jobs WHERE id = $1",
+                job_id,
+            )
+        return dict(row) if row is not None else None
+
     async def _still_own_job_row(self, job_id: uuid.UUID) -> bool:
         """Whether ``audio/{job_id}.aac`` is still ours to delete (review E1/Q2).
 
@@ -232,17 +293,37 @@ class GeneratorWorker:
         if self.db is None:
             return True
         try:
-            async with self.db.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT status, worker_id FROM generator_jobs WHERE id = $1",
-                    job_id,
-                )
+            row = await self._read_job_ownership(job_id)
         except Exception as e:  # noqa: BLE001 - cannot prove ownership -> keep the object
             logger.warning("Could not re-check ownership of job %s: %s", job_id, e)
             return False
         if row is None:
             return True
         return row["status"] == "processing" and row["worker_id"] == self.config.worker_id
+
+    async def _lease_still_held(self, job_id: uuid.UUID) -> bool:
+        """REL-24 upload-guard predicate: strictly "we still hold the lease".
+
+        Unlike _still_own_job_row (delete-safety: a GONE row means no competing
+        owner), a gone row here means there is no job left to complete — the
+        upload would orphan an unreferenced object (cleanup deletes objects via
+        rows, so nothing could ever find it). False on read error too:
+        unprovable ownership must never translate into a Garage write.
+
+        Usage: ``if not await self._lease_still_held(job["id"]): raise LostLeaseError(...)``
+        """
+        if self.db is None:
+            return True  # no competing owner possible (matches _still_own_job_row)
+        try:
+            row = await self._read_job_ownership(job_id)
+        except Exception as e:  # noqa: BLE001 - cannot prove ownership -> skip upload
+            logger.warning("Could not verify lease for job %s: %s", job_id, e)
+            return False
+        return (
+            row is not None
+            and row["status"] == "processing"
+            and row["worker_id"] == self.config.worker_id
+        )
 
     async def _claim_next_job(self) -> dict | None:
         """
@@ -412,6 +493,26 @@ class GeneratorWorker:
                 job_id,
             )
 
+    def _generate_stem_for_job(self, job: dict) -> tuple[np.ndarray, int]:
+        """Blocking engine call for one job (runs in the caller's private pool).
+
+        REL-25b: cfg/steps columns are NULLable — absent/None (a pre-migration
+        row) falls back to the engine defaults; cfg_scale=0.0 is a LEGAL value
+        (GenerationConfig ge=0.0) and must pass through uncoerced, so the
+        fallback is an explicit None check, never ``or``.
+        """
+        cfg_scale = job.get("cfg_scale")
+        steps = job.get("steps")
+        return self.generators.generate_stem(
+            model_id=job["model_id"],
+            prompt=job["prompt"],
+            key=job.get("key") or "",
+            bpm=job.get("bpm") or 120,
+            bars=job.get("bars", 4),
+            cfg_scale=DEFAULT_CFG_SCALE if cfg_scale is None else cfg_scale,
+            steps=DEFAULT_STEPS if steps is None else steps,
+        )
+
     async def _generate_and_upload(self, job: dict, gen_pool: ThreadPoolExecutor | None = None) -> tuple[str, float]:
         """
         Generate audio for a job and upload to Garage.
@@ -420,32 +521,41 @@ class GeneratorWorker:
         per-job pool, see _generate_with_lease); encode/upload stay on the
         shared default executor (bounded operations).
 
+        REL-24: generation is the long window (5-30 s) across which the lease
+        can lapse (heartbeat dead after an event-loop stall) and the row be
+        reclaimed. The lease is re-verified AFTER generating and BEFORE any
+        write: the Garage key is deterministic, so encoding/uploading blind
+        would clobber the new owner's object or orphan it forever.
+
+        REL-25a: engine output is normalized ONCE to MIXER_SAMPLE_RATE here,
+        so every downstream consumer (decode_aac@44100, mixer, fan-out,
+        relay) keeps its hard-coded 44.1 kHz assumption true.
+
         Returns:
-            Tuple of (garage_path, duration_seconds).
+            Tuple of (garage_path, duration_seconds) — duration from the
+            array/rate actually encoded, so it always matches the object.
         """
         assert self.garage is not None
-        # Generate using stable-audio-tools (blocking, runs in executor)
         loop = asyncio.get_running_loop()
-        audio_array = await loop.run_in_executor(
-            gen_pool,
-            lambda: self.generators.generate_stem(
-                model_id=job["model_id"],
-                prompt=job["prompt"],
-                key=job.get("key") or "",
-                bpm=job.get("bpm") or 120,
-                bars=job.get("bars", 4),
-            ),
-        )
+        audio_array, sample_rate = await loop.run_in_executor(gen_pool, lambda: self._generate_stem_for_job(job))
 
-        # Encode to AAC
-        aac_bytes = await loop.run_in_executor(None, lambda: encode_aac(audio_array, sample_rate=44100))
+        # REL-24: no encode CPU, no write on a job we no longer own.
+        if not await self._lease_still_held(job["id"]):
+            logger.warning(
+                "Job %s: lease lost during generation; skipping upload (row no longer ours)",
+                job["id"],
+            )
+            raise LostLeaseError(f"job {job['id']} reclaimed mid-generation")
+
+        pcm = await loop.run_in_executor(None, lambda: _resample_to_mixer_rate(audio_array, sample_rate))
+        aac_bytes = await loop.run_in_executor(None, lambda: encode_aac(pcm, sample_rate=MIXER_SAMPLE_RATE))
 
         # Upload to Garage
         audio_path = f"audio/{job['id']}.aac"
         await self.garage.put_object(audio_path, aac_bytes)
 
-        # Calculate duration
-        duration = get_audio_duration(audio_array, sample_rate=44100)
+        # Calculate duration (from the encoded pair, not the native rate)
+        duration = get_audio_duration(pcm, sample_rate=MIXER_SAMPLE_RATE)
 
         return audio_path, duration
 

@@ -93,6 +93,12 @@ class GeneratorJob(Base):
     timbre_tags = Column(_JSON_TYPE, default=list)
     bars = Column(Integer, default=4)
 
+    # REL-25b: diffusion params captured at submit so the config UI reaches the
+    # worker. Nullable = pre-migration rows / submitters that omit; the worker
+    # falls back to generate_stem's defaults (worker.py DEFAULT_CFG_SCALE/STEPS).
+    cfg_scale = Column(Float, nullable=True)
+    steps = Column(Integer, nullable=True)
+
     # Status tracking — timezone-aware to match TIMESTAMPTZ in the migration.
     status = Column(String(20), default=JobStatus.PENDING.value)
     priority = Column(Integer, default=0)
@@ -158,6 +164,8 @@ class GeneratorJob(Base):
             "bpm": self.bpm,
             "timbre_tags": self.timbre_tags,
             "bars": self.bars,
+            "cfg_scale": self.cfg_scale,
+            "steps": self.steps,
             "status": self.status,
             "priority": self.priority,
             "created_at": self.created_at.isoformat() if self.created_at is not None else None,

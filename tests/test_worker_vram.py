@@ -169,9 +169,13 @@ def _pool_yielding(conn) -> MagicMock:
 
 
 def _make_conn() -> MagicMock:
-    """An asyncpg-like connection with awaitable execute/fetch methods."""
+    """An asyncpg-like connection with awaitable execute/fetch methods.
+
+    fetchrow (the REL-24 ownership recheck) defaults to an owned-processing
+    row so happy-path pipelines complete; tests that pin the guard override it.
+    """
     conn = MagicMock()
-    conn.fetchrow = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"status": "processing", "worker_id": "vram-worker"})
     conn.execute = AsyncMock()
     conn.fetchval = AsyncMock()
     return conn
@@ -325,7 +329,7 @@ class TestRel03TimeoutCircuitBreaker:
         with pytest.raises(TimeoutError):
             _run(worker._generate_with_lease(job))
 
-        worker.generators.generate_stem = lambda **_kwargs: np.zeros((8, 2), dtype=np.float32)
+        worker.generators.generate_stem = lambda **_kwargs: (np.zeros((8, 2), dtype=np.float32), 44100)
         audio_path, duration = _run(worker._generate_with_lease(job))
         assert audio_path == f"audio/{job['id']}.aac"
         assert duration == 1.0
