@@ -361,6 +361,28 @@ iterates the response generator, real (unmocked) exports raise
 **Fix:** serialize rows to dicts inside the session; `yield_per`/keyset
 pagination under a fresh session per chunk; SQL `GROUP BY` for stats/timeline.
 
+**Status: fixed-in rel-13-exports** — export generators serialize every row
+through the existing shapers INSIDE each chunk's session (plain dicts cross
+session boundaries; detachment impossible by construction, pinned by
+real-session tests with zero DB mocks). Scans are keyset-paginated on
+`(loop_index, id)` via `app/lib/export_chunks.chunked_shaped_rows` — one
+fresh short session per chunk, page-bounded SELECTs (milliseconds, far under
+rel-09's engine-wide 10 s statement_timeout), connection returned to the pool
+between chunks; NOT `yield_per` (one long-held SELECT would hit the timeout
+mid-stream). Stats run as SQL aggregates (`count/avg/min/max`, `sum(case)`
+fallbacks, `avg(length(nullif(reasoning,'')))` matching the old
+`if i.reasoning:` guard); timeline = one SQL GROUP BY for per-segment
+count/avg/action tallies + one column-projected slim scan in
+`(relative_time_ms, id)` order for the detail lists (fat prompt/response
+columns never load; `instruments_used` is the one JSON-array set-union SQL
+cannot do portably — a column-projected scan instead of dialect forks).
+`/shows/{id}/export/full` streams its exact JSON document fragment-by-fragment
+instead of materializing both tables. Mid-stream chunk failures abort loudly
+(raise → Starlette terminates; every already-yielded line is complete NDJSON —
+consumers detect truncation by row count as before, no sentinel lines).
+Exports stay complete by design (no response limit — the fine-tuning
+corpus is never truncated, invariant 4).
+
 ### REL-14 [High] Deleting a live show poisons the audit flush forever
 `shows.py:334-335` tears down recording but leaves `llm_interaction_buffer`
 rows referencing the now-deleted `show_id` (cascade delete). Next flush → FK
@@ -453,6 +475,11 @@ disarm toggle, config-heal, key-never-in-logs-or-responses).
 - REL-28 Per-stem audio fetch is strictly serial (~5–15 s/batch) — `loop_steps.py:556-570` → `asyncio.gather`
 - REL-29 Per-250 ms debug print in pregen wait; tens of thousands of stdout lines/day — `loop_steps.py` → `logger.debug`
 - REL-30 List endpoints accept unbounded `limit` — `jobs.py:180`, `shows.py:246,492,513` (clamp like `reasoning_logs.py:96-98`)
+  **Status: fixed-in rel-13-exports** — `Query(ge=, le=)` clamps on
+  `/api/jobs` (50/500), `/api/shows` (50/500), and the per-show
+  `/actions` + `/llm-interactions` (default 1000 kept for the viewer,
+  clamp 5000); out-of-range values now 422 like the reasoning-logs search
+  route (client-visible contract change, intended).
 - REL-31 `/api/health` builds a fresh boto3 client per probe; `download_stem` WAV-encodes under `state.lock` — `config.py:60-80`, `stems.py:55-85`
 - REL-32 `ShowPlayback` broadcasts any WAV format as s16le (24-bit/48 kHz = noise); WS topic broadcast is sequential (one slow client head-of-line-blocks the topic) — `playback.py:84-97`, `routes/ws.py:66-71`
 

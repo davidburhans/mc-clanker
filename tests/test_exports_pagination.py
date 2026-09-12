@@ -327,10 +327,15 @@ def test_export_roundtrips_every_captured_field(isolated_export_db, monkeypatch,
     assert response.status_code == 200
     rows = [json.loads(line) for line in response.text.splitlines() if line]
     assert len(rows) == 2
-    expected_chat = _request_messages() + [{"role": "assistant", "content": json.dumps(_valid_parsed_response())}]
     for row, loop_idx in zip(rows, (0, 1)):
+        # The stored parsed_response IS the captured conductor response minus
+        # underscore transport keys (see _audit_interaction_row) — including
+        # the loop-specific reasoning override above.
+        expected_parsed = dict(_valid_parsed_response())
+        expected_parsed["reasoning"] = f"loop {loop_idx} keep the groove"
+        expected_chat = _request_messages() + [{"role": "assistant", "content": json.dumps(expected_parsed)}]
         assert row["messages"] == expected_chat
-        assert row["response"] == _valid_parsed_response()
+        assert row["response"] == expected_parsed
         meta = row["meta"]
         assert meta["loop_index"] == loop_idx
         assert meta["bpm"] == 128

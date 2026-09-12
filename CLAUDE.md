@@ -185,6 +185,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/stream_fanout.py` | `StreamFanout`, `get_stream_fanout`, `mp3_client_stream` — process-wide MP3 transcode fan-out for `/stream.mp3` (REL-10): ONE shared ffmpeg, per-client bounded queues (drop-oldest; clients own no subprocess); the pump thread evicts clients whose queue stayed full > `stale_client_s`, so abrupt disconnects leak zero ffmpeg/threads; singleton torn down on last client, deliberately NOT cleared by `reset()` |
 | `app/stream_fanout_args.py` | ffmpeg launch contract for the fan-out: binary discovery, byte-identical-to-legacy argv (`build_mp3_args`), immutable `FanoutConfig`, `FanoutStatus` telemetry shape |
 | `app/stream_fanout_proc.py` | `TranscoderSupervisor` — owns the ONE shared transcoder subprocess: spawn + stderr drain + kill-list registration, respawn with capped linear backoff (no permanent give-up, REL-15's lesson), terminate-with-escalation (stdin EOF → wait → kill → reap) |
+| `app/lib/export_chunks.py` | `chunked_shaped_rows`, `ndjson_lines` — REL-13 chunked keyset export scans: page-bounded SELECTs, one fresh session per chunk, rows serialized via the existing shapers INSIDE the session (no DetachedInstanceError, no unbounded query under rel-09's statement_timeout, connection released between chunks); `EXPORT_CHUNK_ROWS` bounds server memory only — exports stay complete |
 
 ---
 

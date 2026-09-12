@@ -7,21 +7,22 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.auth import get_current_user_from_request, hash_password
 from app.db import DatabaseManager
 from app.framework.audit_recording import drop_buffered_rows_for_show, flush_recording_buffers
 from app.framework.framework_state import state
 from app.framework.recording_sink import RecordingSink
+from app.lib.export_chunks import chunked_shaped_rows, ndjson_lines
 from app.lib.paths import exports_dir, recordings_dir
 from app.lib.wav import write_wav_header as _write_wav_header
 from app.models import LLMInteraction, Show, ShowAction
 from app.playback import ShowPlayback
 
 from .schemas import ExportStartRequest, ShowCreate, ShowUpdate
-from .utils import generate_audience_password, require_show_owner
+from .utils import fetch_owned_show, generate_audience_password, require_show_owner
 
 router = APIRouter()
 
@@ -235,7 +236,13 @@ async def _teardown_live_recording(show_id: int) -> bool:
 
 
 @router.get("/shows")
-async def list_shows(request: Request, limit: int = 50, offset: int = 0):
+async def list_shows(
+    request: Request,
+    # REL-30: same clamp contract as the reasoning-logs search route —
+    # out-of-range values 422 instead of silently querying limit=10⁹.
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
     """List current user's shows (paginated)."""
     user = get_current_user_from_request(request)
     if user is None:
@@ -518,7 +525,13 @@ async def regenerate_audience_password_route(show_id: int, request: Request):
 
 
 @router.get("/shows/{show_id}/actions")
-async def get_show_actions(show_id: int, request: Request, limit: int = 1000, offset: int = 0):
+async def get_show_actions(
+    show_id: int,
+    request: Request,
+    # REL-30: viewer default 1000 preserved; clamp bounds the worst case.
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+):
     """List all actions for a show."""
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
@@ -539,7 +552,13 @@ async def get_show_actions(show_id: int, request: Request, limit: int = 1000, of
 
 
 @router.get("/shows/{show_id}/llm-interactions")
-async def get_show_llm_interactions(show_id: int, request: Request, limit: int = 1000, offset: int = 0):
+async def get_show_llm_interactions(
+    show_id: int,
+    request: Request,
+    # REL-30: viewer default 1000 preserved; clamp bounds the worst case.
+    limit: int = Query(1000, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+):
     """List all LLM interactions for a show."""
     db_manager = DatabaseManager.get_instance()
     with db_manager.session() as session:
@@ -676,50 +695,80 @@ async def stop_export():
     return {"file_path": file_path, "duration": duration}
 
 
+def _chunked_show_rows(db_manager, model, show_id: int, shaper):
+    """Page-bounded keyset scan of one show's rows, ``shaper``-shaped in-session (REL-13).
+
+    (loop_index, id) order keeps loop order while making the previously
+    arbitrary within-loop tie order deterministic; every chunk re-applies the
+    show_id scope (test T3). The shaper is the row's single source of truth
+    (to_dict for API rows, to_llm_dump_dict for the training corpus).
+    """
+    return chunked_shaped_rows(
+        db_manager,
+        lambda session: session.query(model).filter(model.show_id == show_id),
+        (model.loop_index, model.id),
+        (model.loop_index, model.id),
+        shaper,
+        lambda row: (row.loop_index, row.id),
+    )
+
+
+def _json_array_fragments(row_dicts):
+    """Yield a JSON array body piecewise (comma-joined items, no full materialize)."""
+    separator = ""
+    for row in row_dicts:
+        yield f"{separator}{json.dumps(row)}"
+        separator = ","
+
+
+def _full_show_json_fragments(db_manager, show_id: int, show_dict: dict):
+    """Stream the /export/full JSON document chunk-by-chunk (REL-13b).
+
+    Same document contract as the old materialized JSONResponse —
+    {"show", "actions", "llm_interactions"} — only the loading strategy
+    changed: each table streams through page-bounded scans instead of two
+    corpus-sized .all() calls.
+    """
+    yield '{"show": ' + json.dumps(show_dict) + ', "actions": ['
+    yield from _json_array_fragments(_chunked_show_rows(db_manager, ShowAction, show_id, ShowAction.to_dict))
+    yield '], "llm_interactions": ['
+    yield from _json_array_fragments(_chunked_show_rows(db_manager, LLMInteraction, show_id, LLMInteraction.to_dict))
+    yield "]}"
+
+
 @router.get("/shows/{show_id}/export/llm-dump")
 async def export_llm_dump(show_id: int, request: Request):
     """Stream JSONL of prompt+response pairs."""
     db_manager = DatabaseManager.get_instance()
-    with db_manager.session() as session:
-        require_show_owner(show_id, request, session)
+    # REL-13: sequenced auth — the ownership gate closes its session before
+    # the chunks below each open their own (never two open at once).
+    fetch_owned_show(db_manager, show_id, request)
 
-        interactions = (
-            session.query(LLMInteraction)
-            .filter(LLMInteraction.show_id == show_id)
-            .order_by(LLMInteraction.loop_index)
-            .all()
-        )
-
-        async def generate():
-            for interaction in interactions:
-                dump = interaction.to_llm_dump_dict()
-                yield json.dumps(dump) + "\n"
-
-        return StreamingResponse(
-            generate(),
-            media_type="application/x-ndjson",
-            headers={"Content-Disposition": f"attachment; filename=show_{show_id}_llm_dump.jsonl"},
-        )
+    # REL-13: rows are shaped to plain dicts inside each chunk's session (the
+    # old code iterated ORM instances after the session committed+expired them
+    # → DetachedInstanceError mid-stream, truncating the training corpus).
+    rows = _chunked_show_rows(db_manager, LLMInteraction, show_id, LLMInteraction.to_llm_dump_dict)
+    return StreamingResponse(
+        ndjson_lines(rows),
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": f"attachment; filename=show_{show_id}_llm_dump.jsonl"},
+    )
 
 
 @router.get("/shows/{show_id}/export/full")
 async def export_full_show(show_id: int, request: Request):
     """Download full show (audio + JSON of actions/interactions)."""
     db_manager = DatabaseManager.get_instance()
-    with db_manager.session() as session:
-        show = require_show_owner(show_id, request, session)
-        actions = session.query(ShowAction).filter(ShowAction.show_id == show_id).all()
-        interactions = session.query(LLMInteraction).filter(LLMInteraction.show_id == show_id).all()
+    # REL-13: sequenced auth; the show row is expunged with all columns
+    # loaded, so this detached read is safe (SEC-5 precedent).
+    show = fetch_owned_show(db_manager, show_id, request)
+    show_dict = show.to_dict()
 
-        export_data = {
-            "show": show.to_dict(),
-            "actions": [a.to_dict() for a in actions],
-            "llm_interactions": [i.to_dict() for i in interactions],
-        }
-
-        return JSONResponse(
-            export_data, headers={"Content-Disposition": f"attachment; filename=show_{show_id}_full.json"}
-        )
+    return StreamingResponse(
+        _full_show_json_fragments(db_manager, show_id, show_dict),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename=show_{show_id}_full.json"},
+    )
 
 
 @router.post("/shows/{show_id}/playback/start")

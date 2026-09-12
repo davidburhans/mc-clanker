@@ -248,7 +248,7 @@ against fakes; documented how to run it.
 | 8 rel-stream-fanout | **landed** (1072p/16s green after review fix; reviewer OK-no-blockers) | eb060fa |
 | 9 rel-recording-writer | **landed** (1091p/16s green after round-1 fixes) | 3fffc2b |
 | 10 rel-youtube-247 | **landed** (1116p/16s green after round-1 fixes) | 690f8c2 |
-| 11 rel-exports | pending | — |
+| 11 rel-exports | **landed** (1129p/16s green; serialize-in-session chunked keyset exports — DetachedInstanceError impossible by construction; SQL GROUP BY stats/timeline + column-projected instruments scan; export/full streams its JSON document; Query(ge=,le=) clamps on jobs/shows; T4 expected-side corrected to the documented capture→export round-trip) | this commit |
 | 12 rel-loop-robustness | pending | — |
 | 13 rel-worker-correctness | pending | — |
 | 14 rel-p3-hygiene | pending | — |

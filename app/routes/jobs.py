@@ -4,7 +4,7 @@ import socket
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
 
 from app.auth import get_current_user_from_request
@@ -187,8 +187,10 @@ async def list_jobs(
     request: Request,
     session_id: uuid.UUID | None = None,
     status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    # REL-30: same clamp contract as the reasoning-logs search route —
+    # out-of-range values 422 instead of silently querying limit=10⁹.
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     """List jobs with filtering.
 
