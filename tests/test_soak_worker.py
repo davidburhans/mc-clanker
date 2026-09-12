@@ -79,6 +79,12 @@ def _soak_gpu_stack():
         import torch  # noqa: F401  (real stack available -> no fakes needed)
     except Exception:
         _install_fake_gpu_modules()
+    # Review P1: on torch-equipped envs the two cuda memory attrs are rebound
+    # on the REAL module object — sys.modules restore alone leaves them
+    # patched for every later suite module. Capture + restore both.
+    _cuda = sys.modules["torch"].cuda
+    _orig_allocated = getattr(_cuda, "memory_allocated", None)
+    _orig_reserved = getattr(_cuda, "memory_reserved", None)
     try:
         import app.worker as worker_import
         from app.framework import framework_generator as generator_module
@@ -95,6 +101,10 @@ def _soak_gpu_stack():
         torch_fake.cuda.memory_reserved = lambda: _COUNTERS.reserved  # type: ignore[attr-defined]
         yield
     finally:
+        if _orig_allocated is not None:
+            _cuda.memory_allocated = _orig_allocated
+        if _orig_reserved is not None:
+            _cuda.memory_reserved = _orig_reserved
         for name, original in restore.items():
             if original is None:
                 sys.modules.pop(name, None)

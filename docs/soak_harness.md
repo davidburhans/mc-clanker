@@ -26,7 +26,7 @@ is expected GREEN on `main`; that green-on-main is the TDD red-phase inversion
 ## How to run
 
 ```bash
-# Soak suite, fast profile (CI/nightly friendly, ~15 s)
+# Soak suite, fast profile (CI/nightly friendly, ~3 s; full profile ~10 s)
 SOAK=1 .venv/bin/python -m pytest -m soak -q
 
 # Soak suite, full 24h-equivalent profile (audit-literal windows, < 60 s)
