@@ -249,7 +249,7 @@ against fakes; documented how to run it.
 | 9 rel-recording-writer | **landed** (1091p/16s green after round-1 fixes) | 3fffc2b |
 | 10 rel-youtube-247 | **landed** (1116p/16s green after round-1 fixes) | 690f8c2 |
 | 11 rel-exports | **landed** (1129p/16s green after round-1 fix) | 67effaa |
-| 12 rel-loop-robustness | **landed** (1146p/16s green; sliced waiter dead-conn detection with missed-notify coverage intact; escalated ±25 %-jitter 30 s-capped backoff + conductor skip after 3 consecutive submit failures with a once-per-loop recovery probe (pregen gated too); startup failure scoped to is_running under sync_lock — kill switch reserved for process death) | rel-17-19-loop |
+| 12 rel-loop-robustness | **landed** (1147p/16s green after round-1 fix) | 6da999e |
 | 13 rel-worker-correctness | pending | — |
 | 14 rel-p3-hygiene | pending | — |
 | 15 rel-soak-harness | pending | — |
@@ -303,6 +303,12 @@ against fakes; documented how to run it.
   follow-up: asyncio.to_thread wrap or an (show_id, relative_time_ms) index.
   reasoning_logs.py at 497/500 lines — split timeline/stats helpers on next
   touch. export_chunks.py params want TYPE_CHECKING hints.
+
+- rel-12 (from rel-17 review, report-only): read-only PG (hot standby) makes
+  the recovery probe reset the streak while submits still fail — conductor
+  call repeats every cycle in that mode (inherent to a read probe); asyncpg
+  connection-loss callback / TCP keepalives remain the half-open-conn
+  follow-up; loop_orchestrator.py 508/500 lines — split on next touch.
 
 ## Decisions log
 
