@@ -166,7 +166,7 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/routes/stems.py` | Stem volume/mute/solo control |
 | `app/routes/models.py` | Model loading/unloading |
 | `app/routes/config.py` | LLM config, generation params, instruments |
-| `app/routes/reasoning_logs.py` | Conductor reasoning NDJSON export |
+| `app/routes/reasoning_logs.py` | Conductor reasoning search, NDJSON export, timeline, stats (REL-13: exports stream via chunked keyset scans from `app/lib/export_chunks.py`; timeline/stats run as SQL aggregates — no unbounded `.all()`) |
 | `app/routes/youtube.py` | YouTube Live RTMP stream start/stop/status/config |
 | `app/auth.py` | JWT tokens, bcrypt password hashing |
 | `app/db.py` | SQLAlchemy DatabaseManager singleton (thread-safe); REL-09: PG engines get pool_pre_ping/pool_recycle + connect/statement timeouts (dialect-gated; SQLite paths unchanged) |
@@ -426,6 +426,13 @@ The async framework uses PostgreSQL as a job queue:
   actually enacted with per-stem outcome (`"generated" | "cached" |
   "failed"`) in `applied_actions` — distinct from `parsed_response.actions`,
   which is what the conductor *requested*.
+- **Exports (rel-13)**: the captured corpus leaves the DB via chunked keyset
+  scans (`chunked_shaped_rows`, `app/lib/export_chunks.py`) — one fresh
+  session per 500-row chunk, rows shaped inside the session, connection
+  released between chunks. Exports are complete by design (no response
+  limit — invariant 4); a mid-stream chunk failure aborts loudly and every
+  already-yielded line is complete NDJSON (consumers detect truncation by
+  row count).
 
 ### Crossfade Timing
 
