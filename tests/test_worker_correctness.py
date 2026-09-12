@@ -382,10 +382,19 @@ async def test_44100_output_passes_through_unresampled(worker_module, monkeypatc
     worker = _make_worker(worker_module)
     audio = np.zeros((8, 2), dtype=np.float32)
     _record_generate(worker, audio, 44100)
+    # Review P2: patch the REAL scipy path (raising=True) so the zero-call pin
+    # is live — the worker's lazy `from scipy.signal import resample_poly`
+    # resolves through the module at call time, so the spy catches any call.
+    import scipy.signal as _scipy_signal
+
     resample_calls: list[tuple] = []
-    monkeypatch.setattr(
-        worker_module, "resample_poly", lambda *args, **kwargs: resample_calls.append(args), raising=False
-    )
+    _real_resample = _scipy_signal.resample_poly
+
+    def _spy_resample(*args, **kwargs):
+        resample_calls.append(args)
+        return _real_resample(*args, **kwargs)
+
+    monkeypatch.setattr(_scipy_signal, "resample_poly", _spy_resample, raising=True)
     encode_calls: list[dict] = []
     monkeypatch.setattr(worker_module, "encode_aac", _recording_encode(encode_calls))
     monkeypatch.setattr(worker_module, "get_audio_duration", _recording_duration([], fixed=1.0))
@@ -393,7 +402,7 @@ async def test_44100_output_passes_through_unresampled(worker_module, monkeypatc
     await worker._generate_and_upload(_job(), None)
 
     assert encode_calls[0]["audio"] is audio, "44.1 kHz output must not be copied or resampled"
-    assert resample_calls == []
+    assert resample_calls == [], "identity path must not touch resample_poly"
 
 
 def test_resample_to_mixer_rate_pure_function(worker_module):
