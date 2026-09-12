@@ -5,6 +5,8 @@ by constructing a minimal FastAPI app with just the ws_router mounted.
 """
 
 import asyncio
+import json
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -185,6 +187,53 @@ class TestWebSocketConductor:
             assert data["loop_index"] == -1
 
 
+# ---------------------------------------------------------------------------
+# Named fake subscribers for the ConnectionManager broadcast contracts (REL-32b)
+# ---------------------------------------------------------------------------
+
+
+class FastFakeWS:
+    """Named fake subscriber: records payloads + arrival times, returns immediately."""
+
+    def __init__(self) -> None:
+        self.payloads: list[str] = []
+        self.sent_at: list[float] = []
+
+    async def send_text(self, payload: str) -> None:
+        self.sent_at.append(time.monotonic())
+        self.payloads.append(payload)
+
+
+class SlowFakeWS:
+    """Named fake subscriber: send_text stalls longer than the REL-32b send timeout."""
+
+    def __init__(self, delay: float = 1.0) -> None:
+        self.delay = delay
+        self.sent = 0
+
+    async def send_text(self, payload: str) -> None:
+        await asyncio.sleep(self.delay)
+        self.sent += 1
+
+
+class BrokenFakeWS:
+    """Named fake subscriber: send_text always raises (broken pipe)."""
+
+    async def send_text(self, payload: str) -> None:
+        raise RuntimeError("broken pipe")
+
+
+class SelfDisconnectingWS:
+    """Named fake subscriber: disconnects itself via the manager mid-send."""
+
+    def __init__(self, manager, topic: str) -> None:
+        self._manager = manager
+        self._topic = topic
+
+    async def send_text(self, payload: str) -> None:
+        await self._manager.disconnect(self, self._topic)
+
+
 class TestConnectionManager:
     """Tests for the ConnectionManager class."""
 
@@ -212,6 +261,64 @@ class TestConnectionManager:
                 data_stems = ws_stems.receive_json()
                 assert data_state["type"] == "state"
                 assert data_stems["type"] == "stems"
+
+    def test_slow_subscriber_does_not_block_topic(self, monkeypatch):
+        """REL-32b: a slow subscriber must not head-of-line-block the topic.
+
+        Sends must run concurrently, each bounded by WS_SEND_TIMEOUT_SECONDS;
+        a timed-out subscriber is dropped, a healthy one is retained.
+        """
+        monkeypatch.setattr("app.routes.ws.WS_SEND_TIMEOUT_SECONDS", 0.1)
+        fast = FastFakeWS()
+        slow = SlowFakeWS(delay=1.0)
+        ws_manager._connections["state"].update({fast, slow})
+        expected_payload = json.dumps({"type": "ping"}, default=str)
+
+        async def run() -> float:
+            started = time.monotonic()
+            await ws_manager.broadcast("state", {"type": "ping"})
+            return time.monotonic() - started
+
+        elapsed = asyncio.run(run())
+
+        assert fast.payloads == [expected_payload], "healthy subscriber must receive the payload"
+        assert elapsed < 0.6, (
+            f"REL-32b: broadcast must not wait out the slow send; took {elapsed:.2f}s"
+        )
+        assert fast in ws_manager._connections["state"], "healthy subscriber must be retained"
+        assert slow not in ws_manager._connections["state"], (
+            "REL-32b: timed-out subscriber must be dropped from the topic"
+        )
+
+    def test_broadcast_drops_failing_subscriber(self):
+        """A raising send drops only the broken subscriber (today's semantics via
+        the same bounded-send helper the REL-32b fix routes through)."""
+        healthy = FastFakeWS()
+        broken = BrokenFakeWS()
+        ws_manager._connections["state"].update({healthy, broken})
+
+        asyncio.run(ws_manager.broadcast("state", {"type": "ping"}))
+
+        assert broken not in ws_manager._connections["state"]
+        assert healthy in ws_manager._connections["state"]
+        assert healthy.payloads, "healthy subscriber must still receive when a peer fails"
+
+    def test_broadcast_survives_disconnect_via_manager_mid_send(self):
+        """A subscriber disconnecting through the manager mid-send must not raise
+        'Set changed size during iteration' (snapshot-before-schedule pin; the
+        existing A8 test covers direct set mutation, this the real disconnect())."""
+        from app.routes.ws import ConnectionManager
+
+        mgr = ConnectionManager()
+        stayer = FastFakeWS()
+        leaver = SelfDisconnectingWS(mgr, "state")
+        mgr._connections["state"].update({leaver, stayer})
+
+        asyncio.run(mgr.broadcast("state", {"type": "ping"}))  # must not raise RuntimeError
+
+        assert leaver not in mgr._connections["state"]
+        assert stayer in mgr._connections["state"]
+        assert stayer.payloads, "surviving subscriber must still receive the payload"
 
 
 class TestBroadcastFunctions:

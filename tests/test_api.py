@@ -156,6 +156,56 @@ def test_download_stem_success(client):
     assert len(response.content) > 0
 
 
+def test_download_stem_encodes_outside_state_lock(client, monkeypatch):
+    """REL-31b: WAV encoding must run OUTSIDE state.lock (snapshot under it)."""
+    from app.routes import stems as stems_module
+
+    prompt = "rel31b-lock"
+    state.active_stems = [{"prompt": prompt}]
+    state.last_generated_stems[prompt] = np.full((441, 2), 0.25, dtype=np.float32)
+
+    original_encode = stems_module._encode_wav_response
+    captured = {}
+
+    def recording_encode_outside_lock(audio_data, index):
+        captured["locked"] = state.lock.locked()
+        return original_encode(audio_data, index)
+
+    monkeypatch.setattr(stems_module, "_encode_wav_response", recording_encode_outside_lock)
+
+    response = client.get("/api/stems/0/download")
+
+    assert response.status_code == 200
+    assert captured["locked"] is False, "REL-31b: WAV encoding must not run under state.lock"
+
+
+def test_download_stem_copies_audio_before_leaving_lock(client, monkeypatch):
+    """REL-31b: the route must pass a copy, never the LRU-shared buffer."""
+    from app.routes import stems as stems_module
+
+    prompt = "rel31b-copy"
+    cached_audio = np.full((441, 2), 0.5, dtype=np.float32)
+    state.active_stems = [{"prompt": prompt}]
+    state.last_generated_stems[prompt] = cached_audio
+
+    original_encode = stems_module._encode_wav_response
+    captured = {}
+
+    def recording_encode(audio_data, index):
+        captured["audio"] = audio_data
+        return original_encode(audio_data, index)
+
+    monkeypatch.setattr(stems_module, "_encode_wav_response", recording_encode)
+
+    response = client.get("/api/stems/0/download")
+
+    assert response.status_code == 200
+    assert captured["audio"] is not cached_audio, (
+        "REL-31b: encoding must receive a copy taken under the lock, "
+        "not the LRU-shared array"
+    )
+
+
 def test_get_models(client):
     response = client.get("/api/models")
     assert response.status_code == 200
