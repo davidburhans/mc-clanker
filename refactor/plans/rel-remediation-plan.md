@@ -1,5 +1,10 @@
 # REL Remediation Plan — executing docs/reliability_audit.md
 
+> **COMPLETE (2026-09-12):** all 15 units landed on main; all 32 audit
+> findings remediated; the 8-point soak acceptance gate implemented and green
+> (`SOAK=1 pytest -m soak`). Residual report-only notes live in the
+> Follow-ups section below.
+
 Drives all 32 findings from `docs/reliability_audit.md` through test-first
 subagent pipelines (scout → plan → TDD red → implement → docs → review↔fix),
 one unit per branch, parent-landed on `main` (Conventional Commits).
@@ -252,7 +257,7 @@ against fakes; documented how to run it.
 | 12 rel-loop-robustness | **landed** (1147p/16s green after round-1 fix) | 6da999e |
 | 13 rel-worker-correctness | **landed** (1165p/18s green after round-1 fix) | cf60523 |
 | 14 rel-p3-hygiene | **landed** (1178p/17s green after round-1 fixes; icecast deleted) | 1f1abb4 |
-| 15 rel-soak-harness | **landed** (1178p/26s green — 9 soak tests SKIPPED by default; SOAK=1 9-pass 3.1 s, SOAK_PROFILE=full 24 h-equivalent 9.3 s ×3 stable; green-on-main = red-phase inversion, documented; no production edits; hardening: test_job_queue_params pending-row leak swept — 69 leaked rows had crossed the REL-12c 64-depth throttle and red six default-adapter pregen tests; autouse ledger+sweep keeps the shared dev DB clean) | dff18d9 |
+| 15 rel-soak-harness | **landed** (SOAK=1: 9p/1s fast 3.1s + full 9.3s; normal 1178p/26s) | 33f3a1f |
 
 ## Follow-ups (from unit reviews)
 
