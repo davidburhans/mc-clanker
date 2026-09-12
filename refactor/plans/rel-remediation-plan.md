@@ -247,7 +247,7 @@ against fakes; documented how to run it.
 | 7 rel-db-offloop | **landed** (1047p/16s green; dialect-gated PG engine resilience; middleware + audio-route DB off-loop via to_thread; SQLite fallback byte-identical; T6 fast-subcase test corrected to its documented Basic-auth intent) | 0b2ee6a |
 | 8 rel-stream-fanout | **landed** (1072p/16s green after review fix; reviewer OK-no-blockers) | eb060fa |
 | 9 rel-recording-writer | **landed** (1091p/16s green after round-1 fixes) | 3fffc2b |
-| 10 rel-youtube-247 | **landed** (1114p/16s green; stability-window rate limit + lifespan watchdog w/ storm guard + boot auto-arm + operator disarm + None-poison guard; 3 committed red-state test gaps fixed to documented intent: T11 missing kill of proc 0, T19 alert-poll race) |
+| 10 rel-youtube-247 | **landed** (1116p/16s green after round-1 fixes) | 690f8c2 |
 | 11 rel-exports | pending | — |
 | 12 rel-loop-robustness | pending | — |
 | 13 rel-worker-correctness | pending | — |
