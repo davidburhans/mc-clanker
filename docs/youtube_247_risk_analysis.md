@@ -180,7 +180,7 @@ estimates:
 
 | Behavior | Consequence for 24/7 |
 |---|---|
-| `max_restarts=3` per session, then `_give_up()` permanently deactivates | One bad night (network flap ×4) kills the stream until a human restarts. **Watchdog is mandatory** (`reset_restart_budget()` exists for exactly this). |
+| `max_restarts=3` per session, then `_give_up()` permanently deactivates — **fixed-in rel-15-youtube**: a proc alive ≥ `stability_window_s` (300 s) earns a fresh budget (rate limit, not lifetime count), and the `youtube_lifecycle` watchdog re-arms a fully gave-up relay | Brief network blips self-heal twice over (relay-internal restart + watchdog re-arm). Only a sustained fast-crash loop (rejected key) stays down-ish: ~3 arms per 15 min with one ERROR alert, auto-healing once the key is fixed. `dropped_blocks` delta still worth alerting on. |
 | No auto-arm on app boot — relay starts only via `POST /api/youtube/stream/start` | Host reboot / app crash / deploy = stream stays dead. Need a boot-time hook when `YOUTUBE_STREAM_KEY` is set. |
 | Writer queue = 512 blocks (~24 s), overflow drops, never blocks | Every restart cycle drops the blocks drained while FFmpeg is down (backoff 2 s × restart #, plus spawn time) — seconds of dead air per blip. Acceptable occasionally; alert on `dropped_blocks` delta. |
 | Restart backoff is linear, 2 s × restart # | Fine. But a watchdog that restarts the *relay* (not FFmpeg) needs its own storm guard (cooldown ≥ 60 s). |
@@ -208,9 +208,13 @@ repeat audibly — which is simultaneously a UX bug and **policy evidence**
 
 ### 24/7 engineering go-live checklist
 
-- [ ] Watchdog service: every 60 s — if relay inactive →
-      `reset_restart_budget()` + `start()`, with storm guard + alert
-- [ ] Auto-arm relay on app lifespan startup when `YOUTUBE_STREAM_KEY` is set
+- [x] Watchdog service: every 60 s — if relay inactive → re-arm via a fresh
+      relay built from current state (`youtube_lifecycle.youtube_watchdog_loop`),
+      with storm guard (3 consecutive fast-failure arms → alert + 15 min
+      backoff) and operator-disarm respect
+- [x] Auto-arm relay on app lifespan startup when `YOUTUBE_STREAM_KEY` is set
+      (`youtube_lifecycle.auto_arm_youtube_relay`; failure is never fatal,
+      no key = silent no-op)
 - [ ] systemd `Restart=always` (or docker `restart: unless-stopped`) for app,
       worker, Postgres, Garage
 - [ ] Backlog/stall alerts (job queue depth, loop repeat counter,

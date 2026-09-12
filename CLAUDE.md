@@ -180,7 +180,8 @@ Task(description="Explore error handling patterns", subagent_type="Explore", ...
 | `app/cleanup.py` | Periodic expired job/audio cleanup + storage retention (REL-05/REL-16): show-recording/export sweeps, stale session-routing reaper, opt-in LLM corpus retention (NDJSON archive-before-delete; default keep-forever). Passes live in `app/retention.py`; runs as a dedicated compose `cleanup` service and in the worker's cleanup loop |
 | `app/onboarding.py` | Pre-flight configuration health checks |
 | `app/aac_encoder.py` | FFmpeg-based AAC encoding for audio storage |
-| `app/youtube_relay.py` | `YouTubeRelay` — PCM→FFmpeg RTMP relay for YouTube Live (audio-client queue, bounded auto-restart); see `docs/youtube_live.md` |
+| `app/youtube_relay.py` | `YouTubeRelay` — PCM→FFmpeg RTMP relay for YouTube Live (audio-client queue, rate-limited auto-restart: a proc alive ≥ `stability_window_s` earns a fresh restart budget; `_write_block` drops `None` poison); see `docs/youtube_live.md` |
+| `app/youtube_lifecycle.py` | REL-15 24/7 supervision: boot auto-arm (`auto_arm_youtube_relay`, never fatal), watchdog asyncio task (`youtube_watchdog_loop`, storm-guarded re-arm of an inactive non-disarmed relay), lifespan wiring (`start_relay_services`/`stop_relay_services`); operator kill switch `state.youtube_relay_disarmed` |
 | `app/stream_fanout.py` | `StreamFanout`, `get_stream_fanout`, `mp3_client_stream` — process-wide MP3 transcode fan-out for `/stream.mp3` (REL-10): ONE shared ffmpeg, per-client bounded queues (drop-oldest; clients own no subprocess); the pump thread evicts clients whose queue stayed full > `stale_client_s`, so abrupt disconnects leak zero ffmpeg/threads; singleton torn down on last client, deliberately NOT cleared by `reset()` |
 | `app/stream_fanout_args.py` | ffmpeg launch contract for the fan-out: binary discovery, byte-identical-to-legacy argv (`build_mp3_args`), immutable `FanoutConfig`, `FanoutStatus` telemetry shape |
 | `app/stream_fanout_proc.py` | `TranscoderSupervisor` — owns the ONE shared transcoder subprocess: spawn + stderr drain + kill-list registration, respawn with capped linear backoff (no permanent give-up, REL-15's lesson), terminate-with-escalation (stdin EOF → wait → kill → reap) |
@@ -224,6 +225,7 @@ state.stem_ages  # dict[int, int] — index → loop count
 state.youtube_stream_key  # str — from YOUTUBE_STREAM_KEY or PUT /api/youtube/config
 state.youtube_ingest_url  # str — default rtmp://a.rtmp.youtube.com/live2
 state.youtube_relay  # YouTubeRelay|None — active relay (NOT cleared by reset(); a musical reset must not kill a live broadcast)
+state.youtube_relay_disarmed  # bool — operator kill switch: set by POST /stream/stop, cleared by /stream/start and any successful arm; NOT cleared by reset() — a musical reset must not re-arm against an operator stop
 state.stream_fanout  # StreamFanout|None — /stream.mp3 fan-out singleton (REL-10: one shared ffmpeg, per-client bounded queues; NOT cleared by reset())
 
 # Loop coordination
@@ -580,6 +582,7 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 | `test_worker.py` | Job queue worker and job claiming |
 | `test_worker_fetch_audio.py` | Worker audio fetching from storage |
 | `test_youtube_relay.py` | RTMP relay argv/lifecycle/restarts + /api/youtube routes |
+| `test_youtube_lifecycle.py` | REL-15: stability-window restart budget, watchdog (re-arm/storm guard/disarm/shutdown), boot auto-arm, None-poison guard, key masking |
 
 ### Mocking Patterns
 

@@ -398,6 +398,36 @@ intervenes.
 `reset_restart_budget()` + restart when inactive (with storm guard); auto-arm
 on lifespan startup when the env key is present. (Already an item in
 `youtube_247_risk_analysis.md` §3.)
+**Status: fixed-in rel-15-youtube** — all three legs landed plus the rel-10
+follow-up None-poison guard. (a) Rate limit: `RelayConfig.stability_window_s`
+(default 300 s; `>= 0` validated) — `_spawn_ffmpeg` stamps
+`_spawned_at = time.monotonic()`, and the death branch of `_ensure_process`
+calls `reset_restart_budget()` (its first production caller) when the dead
+proc lived ≥ the window, so `max_restarts` now means "3 rapid deaths", never
+"3 deaths ever" (a fresh-budget death still counts itself). (b) 24/7
+supervision: new `app/youtube_lifecycle.py` — lifespan asyncio task
+`youtube_watchdog_loop` (60 s cadence, exit on `shutdown_event` in ≤0.5 s
+slices) re-arms an inactive, non-disarmed relay via `arm_relay_from_state`
+(a FRESH relay built from *current* state: fresh counters + a key fixed via
+PUT /config heals on the next arm). Storm guard: a give-up before the relay
+earned trust (survived `storm_window_s` alive) is a fast failure; 3
+consecutive → one `log.error` alert + 15 min idle backoff, then retry — a
+bad key yields ~3 arms/15 min with an alert, never a spawn storm. (c)
+Auto-arm: `start_relay_services` in the lifespan arms the relay when
+`YOUTUBE_STREAM_KEY` is set; every failure path is caught (optional infra
+must never kill startup — even a coding bug in auto-arm is logged, and the
+watchdog retries). (d) Operator kill switch: `state.youtube_relay_disarmed`
+set by POST /stream/stop, cleared by /stream/start and any successful arm;
+the watchdog checks it under `state.lock` (stop-vs-arm race closed) and
+`reset()` deliberately does not clear it. (e) Shutdown: `stop_relay_services`
+cancels the watchdog, detaches the slot under `state.lock` and stops the
+relay outside it (graceful stdin EOF → ffmpeg flush beats docker SIGKILL).
+(f) `_write_block` returns early on a `None` poison (rel-10 follow-up:
+`trigger_shutdown` used to kill the writer thread with a `TypeError` outside
+its except tuple). Pinned by `tests/test_youtube_lifecycle.py` (T1–T21:
+spaced-blip survival, budget renewal, watchdog re-arm of both inactive
+shapes, storm backoff + recovery, auto-arm/no-key/failure-safe, None poison,
+disarm toggle, config-heal, key-never-in-logs-or-responses).
 
 ---
 

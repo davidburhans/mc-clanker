@@ -6,9 +6,11 @@ pipes s16le PCM into an FFmpeg subprocess. FFmpeg encodes AAC audio plus an
 audio-reactive visualizer (showcqt / showwaves / showspectrum) as H.264 and
 pushes RTMP to YouTube Live.
 
-Built for scheduled live sets; bounded auto-restart survives brief network
-blips, and a future 24/7 watchdog can extend the restart budget via
-``reset_restart_budget()``.
+Built for unattended operation: a process that stays up for
+``stability_window_s`` earns a fresh restart budget (REL-15 — the restart
+limit is a rate limit, not a lifetime count), and the 24/7 watchdog in
+``app/youtube_lifecycle.py`` re-arms the relay entirely once a give-up still
+happens (rapid-death storm).
 
 Usage:
     relay = YouTubeRelay(cfg, state)
@@ -70,6 +72,7 @@ class RelayConfig:
     channels: int = 2
     max_restarts: int = 3
     restart_backoff_s: float = 2.0
+    stability_window_s: float = 300.0  # REL-15: alive >= this earns a fresh restart budget
     queue_blocks: int = 512  # ~24s of mixer blocks; overflow drops, never blocks
     queue_poll_s: float = 0.25
 
@@ -92,6 +95,8 @@ class RelayConfig:
             raise RelayError(f"ingest_url {self.ingest_url!r} must start with rtmp://")
         if self.sample_rate <= 0 or self.channels <= 0:
             raise RelayError("sample_rate and channels must be positive")
+        if self.stability_window_s < 0:
+            raise RelayError(f"stability_window_s {self.stability_window_s!r} must be >= 0")
 
 
 @dataclass
@@ -207,6 +212,7 @@ class YouTubeRelay:
         self._stop_event = threading.Event()
         self._writer: threading.Thread | None = None
         self._started_at = 0.0
+        self._spawned_at = 0.0  # monotonic spawn time of the current proc; never read before first spawn
         self._active = False
 
     # ------------------------------------------------------------------
@@ -255,7 +261,11 @@ class YouTubeRelay:
         return self.status()
 
     def reset_restart_budget(self) -> None:
-        """Future 24/7 watchdog hook: grant a fresh restart budget."""
+        """Grant a fresh restart budget (rate-limit semantics, REL-15).
+
+        Called by the restart path after a stability window; also usable by
+        external watchdogs.
+        """
         self._counters.restarts = 0
 
     # ------------------------------------------------------------------
@@ -292,6 +302,9 @@ class YouTubeRelay:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+        # REL-15: one site covers initial start + every respawn; a failed spawn
+        # must NOT refresh it — no new life started.
+        self._spawned_at = time.monotonic()
         threading.Thread(
             target=self._drain_stderr, args=(self._proc,), daemon=True, name="YouTubeRelayStderr"
         ).start()
@@ -327,6 +340,13 @@ class YouTubeRelay:
             return False  # stopped concurrently
         if proc.poll() is None:
             return True  # alive
+        # REL-15 (U10): restarts is a rate limit, not a lifetime count — a
+        # process that stayed up >= stability_window_s earns a fresh budget.
+        # The restarts==0 short-circuit keeps the very first death counted.
+        if self._counters.restarts and (
+            time.monotonic() - self._spawned_at >= self._cfg.stability_window_s
+        ):
+            self.reset_restart_budget()
         self._counters.restarts += 1
         self._record_death(proc)
         if self._counters.restarts > self._cfg.max_restarts:
@@ -340,7 +360,12 @@ class YouTubeRelay:
             self._spawn_ffmpeg()
             return self._proc is not None
 
-    def _write_block(self, block: bytes) -> None:
+    def _write_block(self, block: bytes | None) -> None:
+        if block is None:
+            # trigger_shutdown poisons client queues with None (REL-10
+            # follow-up): drop it, never stdin.write(None). Poison is not
+            # audio — counters stay still — and the writer keeps serving.
+            return
         with self._proc_lock:
             proc = self._proc
         if proc is None or proc.poll() is not None:

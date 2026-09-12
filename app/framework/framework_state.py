@@ -135,6 +135,10 @@ class GlobalState:
             "YOUTUBE_INGEST_URL", "rtmp://a.rtmp.youtube.com/live2"
         )
         self.youtube_relay = None
+        # REL-15: operator kill switch — set by POST /stream/stop, cleared by
+        # /stream/start; auto-arm/watchdog must not fight an explicit stop.
+        # Deliberately NOT cleared by reset() (same rationale as youtube_relay).
+        self.youtube_relay_disarmed = False
 
         # MP3 stream fan-out singleton (route-managed, REL-10); deliberately NOT
         # cleared by reset() — a musical reset must not kill the audience stream.

@@ -19,6 +19,7 @@ from app.framework.framework_state import state
 from app.middleware_db import fetch_bearer_user, fetch_show_gate_fields, lookup_session_server
 from app.routes import api_router
 from app.stream_fanout import mp3_client_stream
+from app.youtube_lifecycle import start_relay_services, stop_relay_services
 
 log = logging.getLogger(__name__)
 
@@ -115,10 +116,20 @@ async def lifespan(app: FastAPI):
     state.framework_task = framework_task
     framework_task.add_done_callback(_on_framework_task_done)
 
+    # REL-15 (U10): auto-arm the YouTube relay when YOUTUBE_STREAM_KEY is set
+    # (an app restart must not leave the stream dead until a human POSTs
+    # /stream/start) and start the 24/7 watchdog. Optional infra: never fatal
+    # to startup (a framework-start failure above raised before this point).
+    youtube_watchdog_task = await start_relay_services(state)
+
     yield
     # Shutdown logic
     print("FASTAPI LIFESPAN: Shutting down resources...")
     state.trigger_shutdown()
+
+    # REL-15: poison first (above), then graceful relay stop (stdin EOF lets
+    # ffmpeg flush) + watchdog cancel — before the framework cancel.
+    await stop_relay_services(state, youtube_watchdog_task)
 
     # Cancel the async framework task
     framework_task.cancel()

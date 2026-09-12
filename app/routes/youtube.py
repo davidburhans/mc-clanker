@@ -109,6 +109,7 @@ async def start_stream(req: StreamStartRequest, request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
             ) from exc
         state.youtube_relay = relay
+        state.youtube_relay_disarmed = False  # explicit start is intent to stream
     log.info("YouTube stream started by API request")
     return {"status": "started", **summary.__dict__, "stream_key": _mask_key(stream_key)}
 
@@ -120,6 +121,9 @@ async def stop_stream(request: Request):
     async with state.lock:
         relay = state.youtube_relay
         state.youtube_relay = None
+        # REL-15: an operator stop is intent to stay off — the boot auto-arm
+        # and the watchdog must not re-arm behind the operator's back.
+        state.youtube_relay_disarmed = True
     if relay is None:
         return {"status": "already_stopped"}
     summary = relay.stop()

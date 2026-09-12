@@ -383,6 +383,7 @@ class TestWatchdog:
         state.youtube_stream_key = STREAM_KEY
         relay = make_relay()  # kill proc 0 → born-dead chain procs 1-3 → give-up
         relay.start()
+        procs[0].die(code=1)  # the healthy initial proc must die to start the chain
         assert await wait_for_async(lambda: len(procs) == 4 and not relay.active)
         assert "gave up" in relay.status().last_error
 
@@ -613,9 +614,14 @@ class TestKeyMasking:
             await _fast_give_up(procs, current, first=r1_first)
             # 4 (first relay) + 4 (re-armed, killed) + 4 + 4 (two storm arms) = 16.
             assert await wait_for_async(lambda: len(procs) >= 16, timeout=5), "storm incomplete"
-            assert any(
-                record.levelno == logging.ERROR and "backoff" in record.getMessage().lower()
-                for record in caplog.records
+            # The alert lags proc #15's spawn by one give-up detection (give-up
+            # spawns nothing more) — poll for it instead of asserting cold.
+            assert await wait_for_async(
+                lambda: any(
+                    record.levelno == logging.ERROR and "backoff" in record.getMessage().lower()
+                    for record in caplog.records
+                ),
+                timeout=3,
             ), "storm alert missing"
             await cancel_watchdog(task)
             state.youtube_relay = None  # API checks start from a clean slot
