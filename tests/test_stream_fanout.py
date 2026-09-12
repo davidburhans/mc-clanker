@@ -342,8 +342,13 @@ def push_first_block_later(recorder: PopenRecorder, block: bytes) -> threading.T
 
 
 class TestMp3ArgsParity:
-    def test_mp3_args_match_legacy_argv(self):
-        """T1: default cfg reproduces today's per-client ffmpeg argv exactly."""
+    def test_mp3_args_match_legacy_argv(self, monkeypatch):
+        """T1: default cfg reproduces today's per-client ffmpeg argv exactly.
+
+        argv[0] is the RESOLVED exe (review P2): the fake_ffmpeg_exe fixture
+        pins discovery to the bare PATH name so the list below is exact.
+        """
+        monkeypatch.setattr("app.stream_fanout_args.resolve_ffmpeg_exe", lambda: "ffmpeg")
         assert build_mp3_args(FanoutConfig()) == [
             "ffmpeg",
             "-y",
@@ -370,6 +375,12 @@ class TestMp3ArgsParity:
         assert args[args.index("-ar") + 1] == "22050"
         assert args[args.index("-ac") + 1] == "1"
         assert args[args.index("-b:a") + 1] == "128k"
+
+    def test_mp3_args_use_resolved_exe_not_hardcoded(self, monkeypatch):
+        """Review P2 pin: argv[0] follows resolve_ffmpeg_exe (PATH-less hosts
+        with ffmpeg only at /usr/bin must not get a silent empty stream)."""
+        monkeypatch.setattr("app.stream_fanout_args.resolve_ffmpeg_exe", lambda: "/usr/bin/ffmpeg")
+        assert build_mp3_args(FanoutConfig())[0] == "/usr/bin/ffmpeg"
 
     def test_resolve_ffmpeg_exe_fallback(self, monkeypatch):
         """T2: legacy discovery — /usr/bin/ffmpeg when present, PATH name else."""

@@ -82,10 +82,13 @@ def build_mp3_args(cfg: FanoutConfig) -> list[str]:
         cfg: fan-out configuration (rate/channels/bitrate).
 
     Returns:
-        argv list ending in "pipe:1" (MP3 on stdout).
+        argv list ending in "pipe:1" (MP3 on stdout). argv[0] is the
+        RESOLVED exe (review P2: a hardcoded "ffmpeg" breaks PATH-less
+        hosts while the -codecs probe still succeeds → silent empty
+        stream; resolve_ffmpeg_exe prefers /usr/bin/ffmpeg).
     """
     return [
-        "ffmpeg",
+        resolve_ffmpeg_exe(),
         "-y",
         "-f",
         "s16le",
