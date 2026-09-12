@@ -1,5 +1,4 @@
 import base64
-import queue
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -145,60 +144,16 @@ class TestAuthMiddleware:
             assert result.status_code == 200
 
 
-class TestAudioStreamGenerator:
-    """Test audio stream generator edge cases."""
+class TestAudioStreamGeneratorLegacyContracts:
+    """Legacy first-chunk contracts moved to the fan-out architecture (REL-10).
 
-    def test_poison_pill_before_first_chunk(self):
-        """Generator should handle None poison pill before first chunk."""
-        with (
-            patch("app.app_ui.queue.Queue") as mock_queue_class,
-            patch("app.app_ui.state") as mock_state,
-            patch("app.app_ui.subprocess"),
-        ):
-            mock_queue = MagicMock()
-            mock_queue_class.return_value = mock_queue
-            mock_queue.get.side_effect = [None]  # Poison pill immediately
-            mock_state.add_audio_client = MagicMock()
-            mock_state.remove_audio_client = MagicMock()
-            mock_state.is_running = True
-
-            from app.app_ui import audio_stream_generator
-
-            gen = audio_stream_generator()
-
-            # Should not raise and should return immediately
-            try:
-                next(gen)
-            except StopIteration:
-                pass
-
-            mock_state.remove_audio_client.assert_called_once()
-
-    def test_timeout_waiting_for_first_chunk(self):
-        """Generator should handle timeout waiting for first chunk."""
-        with (
-            patch("app.app_ui.queue.Queue") as mock_queue_class,
-            patch("app.app_ui.state") as mock_state,
-            patch("app.app_ui.subprocess"),
-        ):
-            mock_queue = MagicMock()
-            mock_queue_class.return_value = mock_queue
-            mock_queue.get.side_effect = queue.Empty()
-            mock_state.add_audio_client = MagicMock()
-            mock_state.remove_audio_client = MagicMock()
-            mock_state.is_running = True
-
-            from app.app_ui import audio_stream_generator
-
-            gen = audio_stream_generator()
-
-            # Should not raise and should return on timeout
-            try:
-                next(gen)
-            except StopIteration:
-                pass
-
-            mock_state.remove_audio_client.assert_called()
+    The old per-client ``audio_stream_generator`` (client-owned ffmpeg, queue
+    patching, first-chunk wait) was replaced by the process-wide fan-out. Its
+    sentinel/poll-timeout/teardown semantics are pinned in
+    tests/test_stream_fanout.py (spawn-failure retire, sentinel residual
+    flush, is_running teardown) and the route contract lives in
+    TestStreamRoute there. Nothing left to pin here directly.
+    """
 
 
 class TestRedirects:
@@ -236,7 +191,12 @@ class TestStreamMp3:
     """Test MP3 streaming endpoint."""
 
     def test_stream_response_headers(self):
-        """Test streaming response has correct headers."""
+        """Route contract: content-type + no-cache headers on the REAL seam.
+
+        REL-10: the route now streams from the process-wide fan-out via
+        mp3_client_stream; a finite stand-in generator keeps this test
+        deterministic while the header contract stays pinned at route level.
+        """
         from fastapi import FastAPI
 
         from app.app_ui import stream_mp3
@@ -244,25 +204,21 @@ class TestStreamMp3:
         app = FastAPI()
         app.add_api_route("/stream.mp3", stream_mp3, methods=["GET"])
 
-        with patch("app.app_ui.state") as mock_state, patch("app.app_ui.audio_stream_generator") as mock_gen:
-            mock_state.is_running = True
-            mock_state.add_audio_client = MagicMock()
-            mock_state.remove_audio_client = MagicMock()
-            mock_state.audio_clients = []
+        def finite_stand_in(_state):
+            yield b"fake mp3 data"
 
-            # Mock generator to yield some data then stop
-            def mock_generator():
-                yield b"fake mp3 data"
-                return
-
-            mock_gen.return_value = mock_generator()
-
+        with patch("app.app_ui.mp3_client_stream", finite_stand_in):
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/stream.mp3")
 
-            # Should be a streaming response
-            assert response.status_code == 200
-            assert "audio/mpeg" in response.headers.get("content-type", "")
+        assert response.status_code == 200
+        assert "audio/mpeg" in response.headers.get("content-type", "")
+        assert response.headers.get("cache-control") == "no-cache, no-store, must-revalidate"
+        assert response.headers.get("pragma") == "no-cache"
+        assert response.headers.get("expires") == "0"
+        assert response.headers.get("accept-ranges") == "bytes"
+        assert b"fake mp3 data" in response.content
+
 
 
 class TestAppUIModule:

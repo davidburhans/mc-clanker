@@ -589,50 +589,49 @@ class _ReplayQueue:
 
 @pytest.fixture
 def stream_harness(monkeypatch):
-    """Named fakes for the /stream.mp3 plumbing: queue, subprocess, client registry."""
+    """Named fakes for the fan-out /stream.mp3 plumbing (REL-10 port of D10).
+
+    The D10 contract survives the architecture change: a stream-setup failure
+    must never leak a subprocess nor leave a client registered. Under the
+    fan-out, "setup" is the singleton transcoder spawn inside
+    acquire_stream_client.
+    """
+
+    import app.stream_fanout as sf
 
     class StreamHarness:
         def __init__(self) -> None:
-            self.removed = []
-            self.registered_subprocesses = []
+            self.spawn_calls = 0
+            self.retired = []
 
     harness = StreamHarness()
-    monkeypatch.setattr(app_ui.queue, "Queue", lambda maxsize=0: _ReplayQueue([b"\0" * 1024]))
+    monkeypatch.setattr(state, "stream_fanout", None, raising=False)
+    monkeypatch.setattr(state, "audio_clients", [])
+    monkeypatch.setattr(sf, "resolve_ffmpeg_exe", lambda: "ffmpeg")
+    probe = SimpleNamespace(stdout="libmp3lame", returncode=0)
+    monkeypatch.setattr(sf.subprocess, "run", lambda *a, **k: probe)
     monkeypatch.setattr(state, "add_audio_client", lambda q: None)
-    monkeypatch.setattr(state, "remove_audio_client", lambda q: harness.removed.append(q))
-    monkeypatch.setattr(state, "register_subprocess", lambda p: harness.registered_subprocesses.append(p))
-    monkeypatch.setattr(state, "unregister_subprocess", lambda p: None)
-    subprocess_mock = MagicMock()
-    subprocess_mock.run.return_value = SimpleNamespace(stdout="libmp3lame")
-    monkeypatch.setattr(app_ui, "subprocess", subprocess_mock)
-    harness.subprocess = subprocess_mock
+    monkeypatch.setattr(state, "remove_audio_client", lambda q: None)
     return harness
 
 
 class TestD10StreamSetupFailure:
-    def test_prefeed_failure_kills_process_and_unregisters_client(self, stream_harness):
-        process = _FakeFFmpegProcess(fail_write=True)
-        stream_harness.subprocess.Popen.return_value = process
+    def test_popen_failure_retires_fanout_and_leaks_no_client(self, stream_harness):
+        """D10 (REL-10 port): spawn failure → empty stream, no client, no zombie."""
+        import app.stream_fanout as sf
+        from app.stream_fanout import mp3_client_stream
 
-        generator = app_ui.audio_stream_generator()
-        with pytest.raises(StopIteration):
-            next(generator)
+        def _boom(*_args, **_kwargs):
+            raise OSError("no ffmpeg")
 
-        assert process.killed is True, "ffmpeg child was never killed"
-        assert process.waited is True, "ffmpeg child was never reaped"
-        assert process.stdin.closed and process.stdout.closed
-        assert len(stream_harness.removed) == 1, "client queue left registered"
-        assert stream_harness.registered_subprocesses == []
+        with patch.object(sf.subprocess, "Popen", side_effect=OSError("no ffmpeg")):
+            chunks = list(mp3_client_stream(state))
 
-    def test_popen_failure_unregisters_client(self, stream_harness):
-        stream_harness.subprocess.Popen.side_effect = OSError("no ffmpeg")
-
-        generator = app_ui.audio_stream_generator()
-        with pytest.raises(StopIteration):
-            next(generator)
-
-        assert len(stream_harness.removed) == 1, "client queue left registered forever"
-        assert stream_harness.registered_subprocesses == []
+        assert chunks == [], "spawn failure must serve an empty stream, never hang"
+        fanout = getattr(state, "stream_fanout", None)
+        alive_clients = getattr(fanout, "_clients", None) if fanout else []
+        assert not alive_clients, "a client session survived a failed spawn"
+        assert state.audio_clients == []
 
 
 # --------------------------------------------------------------------------- #

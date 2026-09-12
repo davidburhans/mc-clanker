@@ -46,6 +46,8 @@ import time
 from types import SimpleNamespace
 
 import pytest
+
+from app.framework.framework_state import state
 from app.stream_fanout import (
     _STOP_SENTINEL,
     FanoutConfig,
@@ -58,9 +60,6 @@ from app.stream_fanout import (
     mp3_client_stream,
     resolve_ffmpeg_exe,
 )
-from fastapi.testclient import TestClient
-
-from app.framework.framework_state import state
 
 # ---------------------------------------------------------------------------
 # Fakes (relay-shaped: FakeProc/FakeStdin from tests/test_youtube_relay.py,
@@ -817,21 +816,94 @@ class TestSpawnFailureAndConcurrency:
 
 class TestStreamRoute:
     def test_stream_route_serves_bytes_and_headers(self, fake_popen, fake_ffmpeg_exe):
-        """T25 (acceptance): /stream.mp3 keeps its headers and body contract."""
+        """T25 (acceptance): /stream.mp3 keeps its headers and body contract.
+
+        Drives the ASGI app DIRECTLY instead of TestClient: Starlette 1.0's
+        TestClient buffers the whole response (io.BytesIO + portal.call waits
+        for app completion), which can never finish against an infinite
+        stream — under it this test hung forever (the wedge that stalled two
+        implementer runs). A raw scope/receive/send drive observes headers,
+        the first streamed chunk, and the shutdown teardown incrementally.
+        """
+        import asyncio
+        from contextlib import suppress
+
         from app.app_ui import app as ui_app
 
-        client = TestClient(ui_app)
-        with client.stream("GET", "/stream.mp3") as response:
-            assert response.status_code == 200
-            assert response.headers["content-type"] == "audio/mpeg"
-            assert response.headers["cache-control"] == "no-cache, no-store, must-revalidate"
-            assert response.headers["pragma"] == "no-cache"
-            assert response.headers["expires"] == "0"
-            assert response.headers["accept-ranges"] == "bytes"
-            assert wait_until(lambda: len(fake_popen) == 1, timeout=5), "route did not start the fanout"
-            fake_popen[0].stdout.push(b"ROUTE-MP3-BYTES")
-            state.trigger_shutdown()  # deterministic end: poison → generator break
-            body = b"".join(response.iter_bytes())
+        async def cond_async(cond, timeout: float) -> bool:
+            """wait_until, but awaitable — a sync busy-wait here starves the loop."""
+            deadline = time.monotonic() + timeout
+            while not cond():
+                if time.monotonic() > deadline:
+                    return False
+                await asyncio.sleep(0.05)
+            return True
+
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "path": "/stream.mp3",
+            "raw_path": b"/stream.mp3",
+            "query_string": b"",
+            "headers": [(b"host", b"testserver")],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+        messages: list[dict] = []
+
+        request_delivered = False
+        client_disconnected = asyncio.Event()
+
+        async def receive() -> dict:
+            """Stateful like a real server: one http.request, then park until
+            the client goes away. (A receive that repeats http.request makes
+            Starlette 1.0's listen_for_disconnect raise 'Unexpected message
+            received: http.request' and kills the stream task.)"""
+            nonlocal request_delivered
+            if not request_delivered:
+                request_delivered = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await client_disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            messages.append(message)
+
+        async def drive() -> None:
+            first_chunk = asyncio.Event()
+
+            async def send_tracking(message: dict) -> None:
+                await send(message)
+                if message["type"] == "http.response.body" and message.get("body"):
+                    first_chunk.set()
+
+            task = asyncio.create_task(ui_app(scope, receive, send_tracking))
+            try:
+                assert await cond_async(lambda: len(fake_popen) == 1, timeout=5), "route did not start the fanout"
+                fake_popen[0].stdout.push(b"ROUTE-MP3-BYTES")
+                await asyncio.wait_for(first_chunk.wait(), timeout=10)
+                state.trigger_shutdown()  # deterministic end: poison → generator break
+                client_disconnected.set()  # release listen_for_disconnect → TaskGroup joins
+                await asyncio.wait_for(task, timeout=15)
+            finally:
+                if not task.done():
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+
+        asyncio.run(drive())
+
+        start = next(m for m in messages if m["type"] == "http.response.start")
+        headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+        assert start["status"] == 200
+        assert headers["content-type"] == "audio/mpeg"
+        assert headers["cache-control"] == "no-cache, no-store, must-revalidate"
+        assert headers["pragma"] == "no-cache"
+        assert headers["expires"] == "0"
+        assert headers["accept-ranges"] == "bytes"
+        body = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
         assert b"ROUTE-MP3-BYTES" in body
         assert wait_until(lambda: state.audio_clients == [], timeout=8)
         assert wait_until(lambda: state.stream_fanout is None, timeout=8)
