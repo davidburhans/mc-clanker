@@ -373,3 +373,31 @@ class TestYouTubeRoutes:
     def test_config_rejects_empty_update(self, client, auth_headers):
         response = client.put("/api/youtube/config", json={}, headers=auth_headers)
         assert response.status_code == 422
+
+
+class TestRespawnSpawnFailureGivesUp:
+    def test_respawn_popen_failure_gives_up_not_silent_writer_death(self, fake_popen):
+        """Review P2 pin (REL-15): a Popen failure during respawn must route to
+        _give_up() — active goes False so the watchdog can heal it, instead of
+        the writer thread dying silently while active stays True."""
+        relay = make_relay()
+        relay.start()  # first spawn OK (fake)
+        assert relay.status().active
+
+        # Kill the proc, poison the next spawn, then drive one respawn cycle.
+        fake_popen[0].die(code=1)  # kill the live spawned FakeProc
+        original_spawn = relay._spawn_ffmpeg
+
+        def _boom():
+            raise OSError("no ffmpeg left")
+
+        relay._spawn_ffmpeg = _boom
+        try:
+            resumed = relay._ensure_process()
+        finally:
+            relay._spawn_ffmpeg = original_spawn
+            relay.stop()
+
+        assert resumed is False
+        assert relay.status().active is False, "spawn failure must deactivate for the watchdog"
+        assert "gave up" in relay.status().last_error

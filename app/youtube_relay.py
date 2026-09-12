@@ -357,7 +357,16 @@ class YouTubeRelay:
         with self._proc_lock:
             if self._stop_event.is_set() or not self._active:
                 return False  # stop() raced us — never spawn after shutdown
-            self._spawn_ffmpeg()
+            try:
+                self._spawn_ffmpeg()
+            except Exception:
+                # Review P2: a Popen failure here used to kill the writer
+                # thread while `active` stayed True — invisible to the
+                # watchdog (it only heals inactive relays). Give up loudly
+                # so the watchdog sees an inactive relay and re-arms.
+                log.exception("YouTube relay respawn failed")
+                self._give_up()
+                return False
             return self._proc is not None
 
     def _write_block(self, block: bytes | None) -> None:

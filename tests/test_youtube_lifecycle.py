@@ -638,3 +638,17 @@ class TestKeyMasking:
         config_body = client.get("/api/youtube/config", headers=auth_headers).json()
         for name, body in (("status", status_body), ("start", start_body), ("config", config_body)):
             assert STREAM_KEY not in json.dumps(body), f"stream key leaked into /{name} response"
+
+
+class TestStormBackoffAccountingReset:
+    def test_enter_storm_backoff_clears_last_arm_ok(self):
+        """Review P2 pin: the pre-backoff arm must not be re-counted by the
+        first post-backoff tick (stale last_arm_ok spent the arm budget of
+        every cycle after the first)."""
+        lifecycle = _lifecycle()
+        storm = lifecycle._WatchdogState()
+        storm.last_arm_ok = True  # a (failed) arm landed right before backoff
+        lifecycle._enter_storm_backoff(_tiny_watchdog_cfg(), storm)
+        assert storm.last_arm_ok is False
+        assert storm.fast_failures == 0
+        assert storm.backoff_until > 0.0

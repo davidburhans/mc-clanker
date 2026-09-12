@@ -186,6 +186,10 @@ def _enter_storm_backoff(cfg: WatchdogConfig, storm: _WatchdogState) -> None:
     """Alert + idle: a fast-crash loop must not be fought with unbounded arms."""
     storm.backoff_until = time.monotonic() + cfg.storm_backoff_s
     storm.fast_failures = 0
+    # Review P2: the pre-backoff arm must not be re-counted by the first
+    # post-backoff tick (stale last_arm_ok spent the budget of every cycle
+    # after the first — 2 arms/cycle instead of the documented ~3).
+    storm.last_arm_ok = False
     log.error(
         "YouTube watchdog storm guard: %d consecutive fast-failure arms; "
         "storm backoff engaged for %.0fs before retrying",
